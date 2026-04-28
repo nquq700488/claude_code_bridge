@@ -31,7 +31,7 @@ def _default_install_dir() -> Path:
         return env_prefix
     if platform.system() == "Windows":
         return _windows_install_dir_candidates()[0]
-    return Path.home() / ".local/share/codex-dual"
+    return Path.home() / ".local/share/ccb"
 
 
 def _install_dir_candidates() -> list[Path]:
@@ -45,9 +45,9 @@ def _windows_install_dir_candidates() -> list[Path]:
     candidates: list[Path] = []
     localappdata = os.environ.get("LOCALAPPDATA", "")
     if localappdata:
-        candidates.append(Path(localappdata) / "codex-dual")
+        candidates.append(Path(localappdata) / "ccb")
         candidates.append(Path(localappdata) / "claude-code-bridge")
-    candidates.append(Path.home() / "AppData/Local/codex-dual")
+    candidates.append(Path.home() / "AppData/Local/ccb")
     return candidates
 
 

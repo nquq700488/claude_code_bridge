@@ -2,7 +2,7 @@
   [Parameter(Position = 0)]
   [ValidateSet("install", "uninstall", "help")]
   [string]$Command = "help",
-  [string]$InstallPrefix = "$env:LOCALAPPDATA\codex-dual",
+  [string]$InstallPrefix = "$env:LOCALAPPDATA\ccb",
   [switch]$Yes
 )
 
@@ -36,7 +36,7 @@ $script:CLAUDE_MARKDOWN = @(
 
 $script:LEGACY_SCRIPTS = @(
   "cast", "cast-w", "codex-ask", "codex-pending", "codex-ping",
-  "claude-codex-dual", "claude_codex", "claude_ai", "claude_bridge"
+  "claude-ccb", "claude_codex", "claude_ai", "claude_bridge"
 )
 
 # i18n support
@@ -78,7 +78,7 @@ function Show-Usage {
   Write-Host "  .\install.ps1 uninstall  # Uninstall"
   Write-Host ""
   Write-Host "Options:"
-  Write-Host "  -InstallPrefix <path>    # Custom install location (default: $env:LOCALAPPDATA\codex-dual)"
+  Write-Host "  -InstallPrefix <path>    # Custom install location (default: $env:LOCALAPPDATA\ccb)"
   Write-Host ""
   Write-Host "Requirements:"
   Write-Host "  - Python 3.10+"

@@ -11,6 +11,8 @@ PROVIDER_SESSION_FILENAMES = {
     'gemini': '.gemini-session',
     'opencode': '.opencode-session',
     'droid': '.droid-session',
+    'mmx': '.mmx-session',
+    'kimi': '.kimi-session',
 }
 
 

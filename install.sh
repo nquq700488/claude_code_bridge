@@ -2,7 +2,7 @@
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-INSTALL_PREFIX="${CODEX_INSTALL_PREFIX:-$HOME/.local/share/codex-dual}"
+INSTALL_PREFIX="${CODEX_INSTALL_PREFIX:-$HOME/.local/share/ccb}"
 BIN_DIR="${CODEX_BIN_DIR:-$HOME/.local/bin}"
 readonly REPO_ROOT INSTALL_PREFIX BIN_DIR
 
@@ -116,6 +116,7 @@ SCRIPTS_TO_LINK=(
   bin/ask
   bin/autonew
   bin/ctx-transfer
+  bin/mmx-daemon
   ccb
 )
 
@@ -157,7 +158,7 @@ LEGACY_SCRIPTS=(
   codex-ask
   codex-pending
   codex-ping
-  claude-codex-dual
+  claude-ccb
   claude_codex
   claude_ai
   claude_bridge
@@ -175,7 +176,7 @@ Usage:
   ./install.sh uninstall  # Uninstall installed content
 
 Optional environment variables:
-  CODEX_INSTALL_PREFIX     Install directory (default: ~/.local/share/codex-dual)
+  CODEX_INSTALL_PREFIX     Install directory (default: ~/.local/share/ccb)
   CODEX_BIN_DIR            Executable directory (default: ~/.local/bin)
   CODEX_CLAUDE_COMMAND_DIR Custom Claude commands directory (default: auto-detect)
   CCB_DROID_AUTOINSTALL    Auto-register Droid MCP tools if droid exists (default: 1)
@@ -1219,6 +1220,52 @@ install_droid_skills() {
   echo "Updated Factory skills directory: $skills_dst"
 }
 
+install_kimi_skills() {
+  local skills_src="$REPO_ROOT/kimi_skills"
+  local skills_dst="$HOME/.kimi/skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  if ! command -v kimi >/dev/null 2>&1; then
+    return
+  fi
+
+  mkdir -p "$skills_dst"
+
+  echo "Installing Kimi skills..."
+  for skill_dir in "$skills_src"/*/; do
+    [[ -d "$skill_dir" ]] || continue
+    local skill_name
+    skill_name=$(basename "$skill_dir")
+
+    local src_skill_md=""
+    if [[ -f "$skill_dir/SKILL.md" ]]; then
+      src_skill_md="$skill_dir/SKILL.md"
+    else
+      continue
+    fi
+
+    local dst_dir="$skills_dst/$skill_name"
+    local dst_skill_md="$dst_dir/SKILL.md"
+    mkdir -p "$dst_dir"
+    cp -f "$src_skill_md" "$dst_skill_md"
+
+    # Copy additional subdirectories (e.g., references/) if they exist
+    for subdir in "$skill_dir"*/; do
+      if [[ -d "$subdir" ]]; then
+        local subdir_name
+        subdir_name=$(basename "$subdir")
+        cp -rf "$subdir" "$dst_dir/$subdir_name"
+      fi
+    done
+
+    echo "  Updated Kimi skill: $skill_name"
+  done
+  echo "Updated Kimi skills directory: $skills_dst"
+}
+
 install_droid_delegation() {
   if [[ "${CCB_DROID_AUTOINSTALL:-1}" == "0" ]]; then
     return
@@ -1881,6 +1928,7 @@ install_all() {
   install_claude_skills
   install_codex_skills
   install_droid_skills
+  install_kimi_skills
   install_droid_delegation
   install_claude_md_config
   install_agents_md_config
@@ -2143,6 +2191,22 @@ uninstall_droid_skills() {
   done
 }
 
+uninstall_kimi_skills() {
+  local skills_dst="$HOME/.kimi/skills"
+  local ccb_skills="ask ping pend all-plan"
+
+  if [[ ! -d "$skills_dst" ]]; then
+    return
+  fi
+
+  for skill in $ccb_skills; do
+    if [[ -d "$skills_dst/$skill" ]]; then
+      rm -rf "$skills_dst/$skill"
+      echo "  Removed Kimi skill: $skill"
+    fi
+  done
+}
+
 uninstall_droid_delegation() {
   if ! command -v droid >/dev/null 2>&1; then
     return
@@ -2225,6 +2289,9 @@ uninstall_all() {
 
   # 9. Remove Droid skills
   uninstall_droid_skills
+
+  # 9.5 Remove Kimi skills
+  uninstall_kimi_skills
 
   # 10. Remove Droid MCP delegation
   uninstall_droid_delegation

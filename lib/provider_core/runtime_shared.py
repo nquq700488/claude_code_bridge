@@ -10,6 +10,7 @@ _PROVIDER_START_ENV_VARS = {
     'gemini': 'GEMINI_START_CMD',
     'opencode': 'OPENCODE_START_CMD',
     'droid': 'DROID_START_CMD',
+    'kimi': 'KIMI_START_CMD',
 }
 
 _PROVIDER_DEFAULT_EXECUTABLES = {
@@ -18,6 +19,7 @@ _PROVIDER_DEFAULT_EXECUTABLES = {
     'gemini': 'gemini',
     'opencode': 'opencode',
     'droid': 'droid',
+    'kimi': 'kimi',
 }
 
 

@@ -28,7 +28,7 @@
 - Windows 安装入口是 `install.ps1`
 - `ccb update` 目前优先尝试对安装目录做 `git pull` 或 `git checkout tag`
 - 如果安装目录不是 git 仓，`ccb update` 会退回到下载 tarball 再安装
-- 当前默认安装目录是用户目录下的 `~/.local/share/codex-dual`
+- 当前默认安装目录是用户目录下的 `~/.local/share/ccb`
 - 当前默认可执行链接目录是 `~/.local/bin`
 - 当前 README 仍以“clone 仓库后运行 `install.sh`”作为主要安装说明
 - 当前分发已经有 release/tarball 更新能力雏形，但它还不是唯一主路径
@@ -270,7 +270,7 @@ Windows Native 不应与当前 `tmux` 路线硬混在一起。
 
 继续保持用户级安装，而不是系统级安装：
 
-- 安装目录默认：`~/.local/share/codex-dual`
+- 安装目录默认：`~/.local/share/ccb`
 - 命令链接目录默认：`~/.local/bin`
 
 这样做的原因：
@@ -284,7 +284,7 @@ Windows Native 不应与当前 `tmux` 路线硬混在一起。
 建议从“单安装目录覆盖”逐步演进为“版本目录 + current 链接”：
 
 ```text
-~/.local/share/codex-dual/
+~/.local/share/ccb/
   releases/
     vX.Y.Z/
     vX.Y.Z+1/
@@ -475,7 +475,7 @@ Linux 第一轮建议采用“release 包 + 用户级安装器”的最小稳定
 
 第一轮可以继续沿用现有默认安装位置：
 
-- 安装目录：`~/.local/share/codex-dual`
+- 安装目录：`~/.local/share/ccb`
 - 可执行目录：`~/.local/bin`
 
 但安装器语义要收紧为：

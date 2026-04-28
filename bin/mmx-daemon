@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""
+mmx-daemon: Wraps MiniMax CLI (mmx) as a persistent interactive process for CCB.
+
+Runs inside a tmux pane, reads stdin lines as chat messages,
+calls `mmx text chat`, and outputs replies with CCB_DONE markers.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+
+
+def call_mmx(message: str, timeout: int = 120) -> str:
+    """Call mmx text chat and return the reply."""
+    try:
+        result = subprocess.run(
+            ["mmx", "text", "chat", "--message", message, "--output", "json"],
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=os.getcwd(),
+        )
+        if result.returncode == 0:
+            try:
+                data = json.loads(result.stdout)
+                # Try common output fields in mmx JSON response
+                for key in ("output", "text", "content", "response", "result", "message", "reply"):
+                    if key in data:
+                        val = data[key]
+                        if isinstance(val, str):
+                            return val
+                        return json.dumps(val, ensure_ascii=False)
+                # If no known key, return pretty-printed JSON
+                return json.dumps(data, ensure_ascii=False, indent=2)
+            except json.JSONDecodeError:
+                return result.stdout.strip()
+        else:
+            stderr = result.stderr.strip()
+            return f"mmx error (exit {result.returncode}): {stderr or 'unknown error'}"
+    except subprocess.TimeoutExpired:
+        return "mmx timeout: the request took too long"
+    except FileNotFoundError:
+        return (
+            "mmx CLI not found. Please install:\n"
+            "  npm install -g mmx-cli\n"
+            "Then authenticate:\n"
+            "  mmx auth login --api-key sk-xxxxx"
+        )
+    except Exception as e:
+        return f"mmx exception: {e}"
+
+
+def main() -> int:
+    # Print startup markers for CCB detection
+    print("[mmx-daemon] started", flush=True)
+    print("CCB_READY", flush=True)
+
+    while True:
+        try:
+            line = input().strip()
+        except EOFError:
+            break
+        except KeyboardInterrupt:
+            break
+
+        if not line:
+            continue
+
+        # Handle shutdown signals
+        if line.lower() in ("exit", "quit", "shutdown"):
+            print("[mmx-daemon] shutting down", flush=True)
+            break
+
+        # Call mmx and output result
+        reply = call_mmx(line)
+        print(reply, flush=True)
+        print("CCB_DONE", flush=True)
+
+    print("[mmx-daemon] exited", flush=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

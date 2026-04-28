@@ -3,7 +3,7 @@
 # CCB v6(Linux) - Infinite Parallel Agents Edition
 
 **Native multi-agent runtime for terminal split panes**
-**Claude · Codex · Gemini · OpenCode · Droid**
+**Claude · Codex · Gemini · OpenCode · Droid · Kimi**
 **Visible concurrency, native communication, project-scoped runtime**
 
 <p>

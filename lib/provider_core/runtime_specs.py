@@ -69,6 +69,8 @@ DROID_RUNTIME_SPEC = _provider_runtime_spec("droid")
 COPILOT_RUNTIME_SPEC = _provider_runtime_spec("copilot")
 CODEBUDDY_RUNTIME_SPEC = _provider_runtime_spec("codebuddy")
 QWEN_RUNTIME_SPEC = _provider_runtime_spec("qwen")
+MMX_RUNTIME_SPEC = _provider_runtime_spec("mmx")
+KIMI_RUNTIME_SPEC = _provider_runtime_spec("kimi")
 
 CODEX_CLIENT_SPEC = _client_spec(
     provider_key="codex",
@@ -102,6 +104,14 @@ QWEN_CLIENT_SPEC = _client_spec(
     provider_key="qwen",
     session_filename=".qwen-session",
 )
+MMX_CLIENT_SPEC = _client_spec(
+    provider_key="mmx",
+    session_filename=".mmx-session",
+)
+KIMI_CLIENT_SPEC = _client_spec(
+    provider_key="kimi",
+    session_filename=".kimi-session",
+)
 
 RUNTIME_SPECS_BY_PROVIDER = {
     "codex": CODEX_RUNTIME_SPEC,
@@ -112,6 +122,8 @@ RUNTIME_SPECS_BY_PROVIDER = {
     "copilot": COPILOT_RUNTIME_SPEC,
     "codebuddy": CODEBUDDY_RUNTIME_SPEC,
     "qwen": QWEN_RUNTIME_SPEC,
+    "mmx": MMX_RUNTIME_SPEC,
+    "kimi": KIMI_RUNTIME_SPEC,
 }
 
 CLIENT_SPECS_BY_PROVIDER = {
@@ -123,6 +135,8 @@ CLIENT_SPECS_BY_PROVIDER = {
     "copilot": COPILOT_CLIENT_SPEC,
     "codebuddy": CODEBUDDY_CLIENT_SPEC,
     "qwen": QWEN_CLIENT_SPEC,
+    "mmx": MMX_CLIENT_SPEC,
+    "kimi": KIMI_CLIENT_SPEC,
 }
 
 
@@ -163,6 +177,10 @@ __all__ = [
     "ProviderRuntimeSpec",
     "QWEN_CLIENT_SPEC",
     "QWEN_RUNTIME_SPEC",
+    "MMX_CLIENT_SPEC",
+    "MMX_RUNTIME_SPEC",
+    "KIMI_CLIENT_SPEC",
+    "KIMI_RUNTIME_SPEC",
     "RUNTIME_SPECS_BY_PROVIDER",
     "make_qualified_key",
     "parse_qualified_provider",

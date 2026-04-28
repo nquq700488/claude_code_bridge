@@ -1,0 +1,33 @@
+{
+  "hooks": {
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 /Users/zhangtao/Documents/study/claude_code_bridge-6/bin/ccb-provider-finish-hook --provider gemini --completion-dir /Users/zhangtao/Documents/study/claude_code_bridge-6/.ccb/agents/agent5/provider-runtime/gemini/completion --agent-name agent5 --workspace /Users/zhangtao/Documents/study/claude_code_bridge-6"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 /Users/zhangtao/.local/share/codex-dual/bin/ccb-provider-finish-hook --provider gemini --completion-dir /Users/zhangtao/Documents/study/claude_code_bridge-6/.ccb/agents/agent5/provider-runtime/gemini/completion --agent-name agent5 --workspace /Users/zhangtao/Documents/study/claude_code_bridge-6"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/python3 /Users/zhangtao/.local/share/ccb/bin/ccb-provider-finish-hook --provider gemini --completion-dir /Users/zhangtao/Documents/study/claude_code_bridge-6/.ccb/agents/agent5/provider-runtime/gemini/completion --agent-name agent5 --workspace /Users/zhangtao/Documents/study/claude_code_bridge-6"
+          }
+        ]
+      }
+    ]
+  }
+}
