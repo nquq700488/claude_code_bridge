@@ -16,6 +16,14 @@ _PROVIDER_API_SHORTCUT_ENV = {
         'key': 'GEMINI_API_KEY',
         'url': 'GOOGLE_GEMINI_BASE_URL',
     },
+    'kimi': {
+        'key': 'MOONSHOT_API_KEY',
+        'url': 'MOONSHOT_BASE_URL',
+    },
+    'mmx': {
+        'key': 'MINIMAX_API_KEY',
+        'url': 'MINIMAX_BASE_URL',
+    },
 }
 
 

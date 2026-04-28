@@ -88,13 +88,17 @@ creative:mmx, claude:claude
 
 ## 四、注册到 CCB 系统
 
-需要在 4 个地方注册 mmx：
+需要在 7 个地方注册 mmx：
 
 | 文件 | 注册内容 |
 |------|----------|
 | `lib/provider_core/runtime_specs.py` | `MMX_RUNTIME_SPEC`, `MMX_CLIENT_SPEC` |
 | `lib/provider_core/registry_runtime/builtin_backends.py` | 加入 `OPTIONAL_PROVIDER_NAMES`，在 `build_builtin_backends()` 中实例化 |
 | `lib/provider_core/pathing.py` | `PROVIDER_SESSION_FILENAMES['mmx'] = '.mmx-session'` |
+| `lib/provider_core/runtime_shared.py` | `_PROVIDER_START_ENV_VARS` 和 `_PROVIDER_DEFAULT_EXECUTABLES` 增加 `mmx` |
+| `lib/provider_profiles/api_shortcuts.py` | `_PROVIDER_API_SHORTCUT_ENV` 增加 `mmx: {key: 'MINIMAX_API_KEY', url: 'MINIMAX_BASE_URL'}` |
+| `lib/provider_profiles/materializer.py` | `_API_ENV_KEYS` 增加 `mmx` 相关环境变量集合 |
+| `lib/runtime_env/control_plane.py` | `_CONTROL_PLANE_ALLOWLIST` 增加 `MMX_START_CMD`、`MMX_POLL_INTERVAL`、`MMX_SYNC_TIMEOUT`、`MINIMAX_API_KEY`、`MINIMAX_BASE_URL` |
 | `install.sh` | 链接 `bin/mmx-daemon` |
 
 **踩坑 #3**：如果同时注册其他可选 provider（如 kimi），pathing.py 中也必须注册其 session filename，否则 ccbd 启动报 `unsupported session filename provider: kimi`。

@@ -25,7 +25,7 @@ CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot
 - `comm.py` — KimiLogReader（读取 context.jsonl，提取 assistant 文本）
 - `protocol.py` / `protocol_runtime.py` — prompt 包装与回复提取
 
-### 2. Provider 注册（4 处必须改）
+### 2. Provider 注册（7 处必须改）
 
 | 文件 | 修改内容 |
 |------|---------|
@@ -33,6 +33,9 @@ CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot
 | `lib/provider_core/registry_runtime/builtin_backends.py` | `OPTIONAL_PROVIDER_NAMES` 增加 `kimi`，并 import/build backend |
 | `lib/provider_core/runtime_specs.py` | 增加 `KIMI_RUNTIME_SPEC` / `KIMI_CLIENT_SPEC`，并加入两个字典 |
 | `lib/provider_core/runtime_shared.py` | `_PROVIDER_START_ENV_VARS` 和 `_PROVIDER_DEFAULT_EXECUTABLES` 增加 `kimi` |
+| `lib/provider_profiles/api_shortcuts.py` | `_PROVIDER_API_SHORTCUT_ENV` 增加 `kimi: {key: 'MOONSHOT_API_KEY', url: 'MOONSHOT_BASE_URL'}` |
+| `lib/provider_profiles/materializer.py` | `_API_ENV_KEYS` 增加 `kimi` 相关环境变量集合 |
+| `lib/runtime_env/control_plane.py` | `_CONTROL_PLANE_ALLOWLIST` 增加 `KIMI_START_CMD`、`KIMI_RUNTIME_DIR`、`MOONSHOT_API_KEY`、`MOONSHOT_BASE_URL` |
 
 ### 3. Skills
 

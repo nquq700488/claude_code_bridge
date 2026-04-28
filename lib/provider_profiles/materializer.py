@@ -29,6 +29,19 @@ _API_ENV_KEYS = {
         'GOOGLE_GEMINI_BASE_URL',
         'GOOGLE_GENAI_USE_VERTEXAI',
     },
+    'kimi': {
+        'MOONSHOT_API_KEY',
+        'MOONSHOT_BASE_URL',
+        'KIMI_START_CMD',
+        'KIMI_RUNTIME_DIR',
+    },
+    'mmx': {
+        'MINIMAX_API_KEY',
+        'MINIMAX_BASE_URL',
+        'MMX_START_CMD',
+        'MMX_POLL_INTERVAL',
+        'MMX_SYNC_TIMEOUT',
+    },
 }
 
 

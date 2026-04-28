@@ -11,6 +11,7 @@ _PROVIDER_START_ENV_VARS = {
     'opencode': 'OPENCODE_START_CMD',
     'droid': 'DROID_START_CMD',
     'kimi': 'KIMI_START_CMD',
+    'mmx': 'MMX_START_CMD',
 }
 
 _PROVIDER_DEFAULT_EXECUTABLES = {
