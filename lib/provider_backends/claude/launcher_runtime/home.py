@@ -105,6 +105,7 @@ def _prepare_managed_home(source_home: Path, target_layout: ClaudeHomeLayout, *,
         return
 
     _materialize_settings(source_home, target_layout, profile=profile)
+    _materialize_auth(source_home, target_layout, profile=profile)
     _materialize_trust(source_home, target_layout)
     _materialize_inherited_assets(source_home, target_layout, profile=profile)
 
@@ -135,6 +136,16 @@ def _materialize_trust(source_home: Path, target_layout: ClaudeHomeLayout) -> No
     if not target_layout.trust_path.exists() and source_trust.is_file():
         _copy_if_missing(source_trust, target_layout.trust_path)
     _ensure_trust_file(target_layout.trust_path)
+
+
+def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+    if not _inherits_auth(profile):
+        _remove_file(target_layout.auth_path)
+        return
+
+    source_auth = _source_auth_path(source_home)
+    if source_auth.is_file():
+        _sync_file(source_auth, target_layout.auth_path)
 
 
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
@@ -299,6 +310,19 @@ def _sync_file(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
     except Exception:
         pass
+
+
+def _remove_file(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+
+
+def _source_auth_path(source_home: Path) -> Path:
+    return source_home / '.config' / 'claude-code' / 'auth.json'
 
 
 def _sync_tree(source: Path, target: Path) -> None:

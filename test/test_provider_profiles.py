@@ -417,6 +417,21 @@ def test_materialize_claude_home_config_projects_system_settings_into_managed_ho
     assert payload['theme'] == 'light'
 
 
+def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_auth = source_home / '.config' / 'claude-code' / 'auth.json'
+    source_auth.parent.mkdir(parents=True, exist_ok=True)
+    source_auth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert json.loads(layout.auth_path.read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+
+
 def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
@@ -600,6 +615,7 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     target_settings = target_home / '.claude' / 'settings.json'
+    target_auth = target_home / '.config' / 'claude-code' / 'auth.json'
     target_settings.parent.mkdir(parents=True, exist_ok=True)
     target_settings.write_text(
         json.dumps(
@@ -612,6 +628,8 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
         ),
         encoding='utf-8',
     )
+    target_auth.parent.mkdir(parents=True, exist_ok=True)
+    target_auth.write_text('{"refresh_token":"stale-token"}\n', encoding='utf-8')
 
     layout = materialize_claude_home_config(
         target_home,
@@ -621,6 +639,31 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
     assert payload == {}
+    assert not layout.auth_path.exists()
+
+
+def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_auth = target_home / '.config' / 'claude-code' / 'auth.json'
+    target_auth.parent.mkdir(parents=True, exist_ok=True)
+    target_auth.write_text('{"refresh_token":"managed-refresh-token"}\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert json.loads(layout.auth_path.read_text(encoding='utf-8'))['refresh_token'] == 'managed-refresh-token'
 
 
 def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_override(tmp_path: Path) -> None:
@@ -675,7 +718,9 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
             {
                 'env': {
                     'GEMINI_API_KEY': 'system-gemini-key',
+                    'GEMINI_MODEL': 'gemini-3.1-pro-preview',
                     'GOOGLE_API_KEY': 'system-google-key',
+                    'GOOGLE_GEMINI_BASE_URL': 'https://chatapi.onechats.ai',
                 },
                 'theme': 'Default',
             },
@@ -689,7 +734,9 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
     assert payload['env']['GEMINI_API_KEY'] == 'system-gemini-key'
+    assert payload['env']['GEMINI_MODEL'] == 'gemini-3.1-pro-preview'
     assert payload['env']['GOOGLE_API_KEY'] == 'system-google-key'
+    assert payload['env']['GOOGLE_GEMINI_BASE_URL'] == 'https://chatapi.onechats.ai'
     assert payload['theme'] == 'Default'
 
 

@@ -2,6 +2,30 @@
 
 ## Unreleased
 
+## v6.0.19 (2026-04-28)
+
+### Claude Official Login Inheritance
+
+- **Claude Official Login Projection**: managed Claude homes now project Claude Code official login credentials from `.config/claude-code/auth.json`, so browser-login-backed auth can be inherited into isolated CCB runtimes instead of only API-token-based settings auth
+- **Managed Login Auth Retention**: when global Claude auth artifacts disappear but managed Claude state already holds a valid project-scoped login, startup now preserves that managed login auth across restart instead of silently dropping it
+- **Auth Cleanup And Regression Coverage**: disabling auth inheritance now clears stale copied Claude login credentials, and targeted tests now lock the projection, cleanup, and launcher startup paths
+
+## v6.0.18 (2026-04-28)
+
+### Gemini Hook Empty-Reply Guard
+
+- **Empty Gemini Hook Replies No Longer Burn Jobs**: managed Gemini `AfterAgent` hooks that fire with an empty reply now downgrade to `incomplete` instead of terminalizing as a false exact completion
+- **Exact Hook Polling Becomes Safer**: Gemini exact-hook polling now ignores `completed` hook artifacts with no reply text, allowing observed session-stability or timeout reliability paths to converge the request instead of accepting a blank terminal result
+- **Regression Coverage Added**: targeted tests now lock the empty-reply guard at both the finish-hook artifact writer and Gemini execution-service polling layers
+
+## v6.0.17 (2026-04-28)
+
+### Gemini Custom Endpoint Env Propagation
+
+- **Gemini Endpoint Override Restored**: managed Gemini startup now preserves `GOOGLE_GEMINI_BASE_URL` end to end, so custom endpoint and proxy-backed Gemini CLI setups no longer fall back to Google's default production API host
+- **Gemini Model Env Allowlisted**: control-plane and provider-profile env filtering now preserve `GEMINI_MODEL`, allowing isolated Gemini agents to keep explicit model selection instead of silently dropping it at startup
+- **Config Shortcut Alignment**: Gemini `key` / `url` shortcuts now materialize the same environment variables the current Gemini CLI actually reads, keeping explicit config-based routes aligned with shell-level env behavior
+
 ## v6.0.16 (2026-04-27)
 
 ### Codex Plugin Projection & Cmd Shell Compatibility

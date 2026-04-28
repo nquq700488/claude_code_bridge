@@ -8,6 +8,8 @@ def test_control_plane_env_keeps_provider_api_env(monkeypatch) -> None:
     monkeypatch.setenv('OPENAI_BASE_URL', 'https://api.example.test/v1')
     monkeypatch.setenv('ANTHROPIC_API_KEY', 'anthropic-key')
     monkeypatch.setenv('GEMINI_API_KEY', 'gemini-key')
+    monkeypatch.setenv('GEMINI_MODEL', 'gemini-3.1-pro-preview')
+    monkeypatch.setenv('GOOGLE_GEMINI_BASE_URL', 'https://chatapi.onechats.ai')
 
     env = control_plane_env()
 
@@ -15,6 +17,8 @@ def test_control_plane_env_keeps_provider_api_env(monkeypatch) -> None:
     assert env['OPENAI_BASE_URL'] == 'https://api.example.test/v1'
     assert env['ANTHROPIC_API_KEY'] == 'anthropic-key'
     assert env['GEMINI_API_KEY'] == 'gemini-key'
+    assert env['GEMINI_MODEL'] == 'gemini-3.1-pro-preview'
+    assert env['GOOGLE_GEMINI_BASE_URL'] == 'https://chatapi.onechats.ai'
 
 
 def test_control_plane_env_keeps_user_session_transport_for_cmd_shell(monkeypatch) -> None:

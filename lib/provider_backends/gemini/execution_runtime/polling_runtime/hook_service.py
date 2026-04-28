@@ -28,6 +28,8 @@ def poll_exact_hook(submission, *, now: str) -> ProviderPollResult | None:
     reply = str(event.get('reply') or '').strip()
     cursor_path = hook_cursor_path(context)
     status = hook_status(event)
+    if status is CompletionStatus.COMPLETED and not reply:
+        return None
     diagnostics = hook_event_diagnostics(event)
     provider_turn_ref = hook_provider_turn_ref(event, request_anchor=context.request_anchor)
     item = build_hook_item(

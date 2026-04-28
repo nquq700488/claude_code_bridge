@@ -2604,6 +2604,70 @@ def test_execution_service_gemini_adapter_maps_exact_hook_failures_to_api_error(
     assert update.decision.diagnostics['error_message'] == failure_text
 
 
+def test_execution_service_gemini_adapter_ignores_empty_completed_hook_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import gemini as gemini_adapter_module
+    from provider_hooks.artifacts import write_event
+
+    fixed_req_id = '20260318-000000-000-5-empty-completed'
+    completion_dir = tmp_path / 'completion'
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%3'
+
+    class FakeSession:
+        data = {
+            'completion_artifact_dir': str(completion_dir),
+        }
+        gemini_session_path = str(tmp_path / 'gemini-session.json')
+        gemini_session_id = 'gemini-session-id'
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%3'
+
+    class EmptyReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+
+        def set_preferred_session(self, session_path) -> None:
+            del session_path
+
+        def capture_state(self):
+            return {'session_path': str(tmp_path / 'gemini-session.json'), 'msg_count': 0}
+
+        def try_get_message(self, state):
+            return None, state
+
+    write_event(
+        provider='gemini',
+        completion_dir=completion_dir,
+        agent_name='agent1',
+        workspace_path=str(tmp_path),
+        req_id=fixed_req_id,
+        status='completed',
+        reply='',
+        session_id='gemini-session-id',
+        hook_event_name='AfterAgent',
+    )
+
+    monkeypatch.setattr(gemini_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(gemini_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(gemini_adapter_module, 'GeminiLogReader', EmptyReader)
+
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    service.start(_anchored_job_for_provider('gemini', fixed_req_id, body='real gemini'), runtime_context=_runtime_context(tmp_path))
+    update = service.poll()[0]
+
+    assert update.decision is None
+    assert all(item.kind is not CompletionItemKind.ASSISTANT_FINAL for item in update.items)
+
+
 def test_execution_service_gemini_exact_hook_submission_uses_strict_tmux_sender(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

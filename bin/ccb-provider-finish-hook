@@ -239,7 +239,7 @@ def _handle_gemini(*, payload: dict, completion_dir: Path, agent_name: str, work
     req_id = extract_req_id(prompt)
     if not req_id:
         return 0
-    reply = _first_text(
+    raw_reply = _first_value(
         payload,
         'prompt_response',
         'response',
@@ -247,7 +247,12 @@ def _handle_gemini(*, payload: dict, completion_dir: Path, agent_name: str, work
         'reply',
         'message',
     )
+    reply = '' if raw_reply is None else str(raw_reply).strip()
     status, diagnostics = _gemini_event_status_and_diagnostics(payload, reply)
+    if status == 'completed' and not reply:
+        status = 'incomplete'
+        diagnostics.setdefault('reason', 'hook_after_agent_incomplete')
+        diagnostics.setdefault('empty_reply', True)
     session_id = _first_text(payload, 'session_id', 'sessionId', 'session.id') or None
     hook_event_name = _first_text(payload, 'hook_event_name') or 'AfterAgent'
     write_event(

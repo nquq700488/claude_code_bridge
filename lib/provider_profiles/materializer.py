@@ -21,7 +21,14 @@ _API_ENV_KEYS = {
         'OPENAI_ORGANIZATION',
     },
     'claude': {'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL'},
-    'gemini': {'GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_API_BASE', 'GOOGLE_GENAI_USE_VERTEXAI'},
+    'gemini': {
+        'GEMINI_API_KEY',
+        'GEMINI_MODEL',
+        'GOOGLE_API_KEY',
+        'GOOGLE_API_BASE',
+        'GOOGLE_GEMINI_BASE_URL',
+        'GOOGLE_GENAI_USE_VERTEXAI',
+    },
 }
 
 

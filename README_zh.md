@@ -11,7 +11,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.0.16-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.0.19-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -98,6 +98,33 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.0.19</b> - Claude 官方登录继承</summary>
+
+- **Claude 官方登录凭据投影**：managed Claude home 现在会把 Claude Code 官方登录使用的 `.config/claude-code/auth.json` 投影到隔离运行时中，使浏览器登录态也能被 CCB 继承，而不再只有 API token / settings 这一路生效
+- **Managed 登录态保留**：当全局 Claude 登录凭据消失、但 managed Claude 已经持有有效项目级登录态时，启动现在会保留这份 managed 登录凭据，不再在重启时被静默丢掉
+- **鉴权清理与回归覆盖**：关闭 auth 继承时会清理陈旧的 Claude 登录凭据副本，并新增针对投影、清理和 launcher 启动路径的回归测试
+
+</details>
+
+<details>
+<summary><b>v6.0.18</b> - Gemini Hook 空回复保护</summary>
+
+- **Gemini 空 Hook 回复不再误烧掉任务**：managed Gemini 的 `AfterAgent` hook 如果在空回复下触发，现在会降级成 `incomplete`，不再被当作错误的 exact completion 直接终结任务
+- **Exact Hook 轮询更保守**：Gemini exact-hook 轮询现在会忽略没有回复文本的 `completed` hook artifact，让 observed session-stability 或 timeout reliability 路径继续收口，而不是接受空白终态
+- **补齐回归覆盖**：新增针对 finish-hook artifact 写入层与 Gemini execution-service 轮询层的空回复保护测试，锁住这条回归路径
+
+</details>
+
+<details>
+<summary><b>v6.0.17</b> - Gemini 自定义端点环境变量透传修复</summary>
+
+- **Gemini 端点覆盖恢复**：managed Gemini 启动现在会端到端保留 `GOOGLE_GEMINI_BASE_URL`，使走自定义 endpoint 或代理的 Gemini CLI 不再悄悄回退到 Google 默认生产 API 地址
+- **Gemini 模型环境变量放行**：control-plane 与 provider-profile 的环境变量过滤现在会保留 `GEMINI_MODEL`，隔离 Gemini agent 启动时不再吞掉显式模型选择
+- **配置快捷项对齐 CLI 语义**：Gemini 的 `key` / `url` 快捷配置现在会物化为当前 Gemini CLI 实际读取的环境变量，避免 `ccb.config` 路由与 shell 直跑行为不一致
+
+</details>
+
+<details>
 <summary><b>v6.0.16</b> - Codex 插件投影与 cmd shell 兼容性修复</summary>
 
 - **Codex 插件投影修复**：managed Codex home 现在会把 `.tmp/plugins/` 与 `.tmp/plugins.sha` 作为插件 authority 一起投影，使隔离 agent 不再出现“配置声明启用了插件，但实际 marketplace / 插件资产缺失”的不一致状态

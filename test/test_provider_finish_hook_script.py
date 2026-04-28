@@ -143,3 +143,47 @@ def test_provider_finish_hook_accepts_job_id_anchor_from_prompt(tmp_path: Path) 
     event = json.loads(event_path.read_text(encoding="utf-8"))
     assert event["req_id"] == req_id
     assert event["reply"] == "job-based reply"
+
+
+def test_provider_finish_hook_marks_empty_gemini_reply_incomplete(tmp_path: Path) -> None:
+    project_root = Path(__file__).resolve().parents[1]
+    completion_dir = tmp_path / "completion"
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    req_id = "job_7c1f6ab28cde"
+    payload = {
+        "hook_event_name": "AfterAgent",
+        "prompt": f"CCB_REQ_ID: {req_id} Execute the full request from @/tmp/request.md and reply directly.",
+        "prompt_response": "",
+        "session_id": "gemini-session-1",
+        "finishReason": "STOP",
+    }
+
+    proc = subprocess.run(
+        [
+            sys.executable,
+            str(project_root / "bin" / "ccb-provider-finish-hook"),
+            "--provider",
+            "gemini",
+            "--completion-dir",
+            str(completion_dir),
+            "--agent-name",
+            "agent2",
+            "--workspace",
+            str(workspace),
+        ],
+        input=json.dumps(payload, ensure_ascii=False),
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    event_path = completion_dir / "events" / f"{req_id}.json"
+    assert event_path.exists()
+    event = json.loads(event_path.read_text(encoding="utf-8"))
+    assert event["req_id"] == req_id
+    assert event["reply"] == ""
+    assert event["status"] == "incomplete"
+    assert event["diagnostics"]["reason"] == "hook_after_agent_incomplete"
+    assert event["diagnostics"]["empty_reply"] is True

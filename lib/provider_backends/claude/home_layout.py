@@ -13,6 +13,7 @@ class ClaudeHomeLayout:
     session_env_root: Path
     trust_path: Path
     settings_path: Path
+    auth_path: Path
 
 
 def claude_layout_for_home(home_root: Path) -> ClaudeHomeLayout:
@@ -25,6 +26,7 @@ def claude_layout_for_home(home_root: Path) -> ClaudeHomeLayout:
         session_env_root=claude_dir / 'session-env',
         trust_path=root / '.claude.json',
         settings_path=claude_dir / 'settings.json',
+        auth_path=root / '.config' / 'claude-code' / 'auth.json',
     )
 
 

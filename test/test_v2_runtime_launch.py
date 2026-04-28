@@ -2188,6 +2188,48 @@ def test_claude_launcher_build_start_cmd_preserves_managed_auth_when_system_home
     assert f'HOME={shlex.quote(str(project_root / ".ccb" / "agents" / "reviewer" / "provider-state" / "claude" / "home"))}' in start_cmd
 
 
+def test_claude_launcher_build_start_cmd_projects_official_login_auth_into_managed_home(
+    monkeypatch, tmp_path: Path
+) -> None:
+    project_root = tmp_path / 'repo-claude-login-auth'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    home_dir = tmp_path / 'home'
+    source_auth = home_dir / '.config' / 'claude-code' / 'auth.json'
+    source_auth.parent.mkdir(parents=True, exist_ok=True)
+    source_auth.write_text(
+        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: home_dir)
+    monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: home_dir)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-login-auth')
+
+    managed_auth = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'reviewer'
+        / 'provider-state'
+        / 'claude'
+        / 'home'
+        / '.config'
+        / 'claude-code'
+        / 'auth.json'
+    )
+    assert json.loads(managed_auth.read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+
+
 def test_gemini_launcher_build_start_cmd_uses_isolated_profile_api_env(tmp_path: Path) -> None:
     runtime_dir = tmp_path / 'runtime'
     _write_provider_profile(

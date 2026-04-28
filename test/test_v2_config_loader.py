@@ -301,7 +301,7 @@ OPENAI_API_KEY = "sk-test"
             'https://gemini.example.test',
             {
                 'GEMINI_API_KEY': 'gemini-key',
-                'GOOGLE_API_BASE': 'https://gemini.example.test',
+                'GOOGLE_GEMINI_BASE_URL': 'https://gemini.example.test',
             },
             True,
         ),

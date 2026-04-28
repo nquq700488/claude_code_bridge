@@ -14,7 +14,7 @@ _PROVIDER_API_SHORTCUT_ENV = {
     },
     'gemini': {
         'key': 'GEMINI_API_KEY',
-        'url': 'GOOGLE_API_BASE',
+        'url': 'GOOGLE_GEMINI_BASE_URL',
     },
 }
 

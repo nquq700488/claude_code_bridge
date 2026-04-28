@@ -16,7 +16,12 @@ def test_build_gemini_env_prefix_clears_non_inherited_api_and_exports_filtered_k
     profile = ResolvedProviderProfile(
         provider="gemini",
         agent_name="agent1",
-        env={"GEMINI_API_KEY": "profile-key", "OTHER_ENV": "ignored"},
+        env={
+            "GEMINI_API_KEY": "profile-key",
+            "GEMINI_MODEL": "gemini-3.1-pro-preview",
+            "GOOGLE_GEMINI_BASE_URL": "https://chatapi.onechats.ai",
+            "OTHER_ENV": "ignored",
+        },
         inherit_api=False,
     )
 
@@ -26,10 +31,15 @@ def test_build_gemini_env_prefix_clears_non_inherited_api_and_exports_filtered_k
     )
 
     assert "unset GEMINI_API_KEY" in prefix
+    assert "unset GEMINI_MODEL" in prefix
     assert "unset GOOGLE_API_KEY" in prefix
+    assert "unset GOOGLE_GEMINI_BASE_URL" in prefix
     assert "OTHER_ENV" not in prefix
     assert "UNRELATED" not in prefix
-    assert "export GEMINI_API_KEY=profile-key GOOGLE_API_KEY=extra-key" in prefix
+    assert (
+        "export GEMINI_API_KEY=profile-key GEMINI_MODEL=gemini-3.1-pro-preview "
+        "GOOGLE_API_KEY=extra-key GOOGLE_GEMINI_BASE_URL=https://chatapi.onechats.ai"
+    ) in prefix
 
 
 def _spec(name: str = 'agent1') -> AgentSpec:
