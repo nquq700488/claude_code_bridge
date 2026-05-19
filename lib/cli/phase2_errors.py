@@ -22,10 +22,32 @@ def print_phase2_error(
     config_command: bool,
     exc: Exception,
 ) -> None:
+    lines = [
+        error_prefix(kind=kind, config_command=config_command),
+        f'error: {exc}',
+    ]
+    lines.extend(f'error_cause: {cause}' for cause in _exception_causes(exc))
     print(
-        f'{error_prefix(kind=kind, config_command=config_command)}\nerror: {exc}',
+        '\n'.join(lines),
         file=err,
     )
+
+
+def _exception_causes(exc: BaseException) -> tuple[str, ...]:
+    seen: set[int] = set()
+    causes: list[str] = []
+    cause = exc.__cause__
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        text = _single_line_exception(cause)
+        if text and text != _single_line_exception(exc):
+            causes.append(text)
+        cause = cause.__cause__
+    return tuple(causes)
+
+
+def _single_line_exception(exc: BaseException) -> str:
+    return ' | '.join(line.strip() for line in str(exc).splitlines() if line.strip())
 
 
 def parse_phase2_command(

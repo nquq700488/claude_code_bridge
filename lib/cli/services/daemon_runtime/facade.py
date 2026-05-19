@@ -8,6 +8,8 @@ from .keeper import ensure_keeper_started as ensure_keeper_started_runtime
 from .keeper import keeper_pid as keeper_pid_runtime
 from .keeper import wait_for_keeper_exit as wait_for_keeper_exit_runtime
 from .policy import (
+    FOREGROUND_ATTACH_RPC_TIMEOUT_S,
+    FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S,
     KEEPER_READY_TIMEOUT_S,
     STARTUP_PROGRESS_STALL_TIMEOUT_S,
     STARTUP_TRANSACTION_TIMEOUT_S,
@@ -60,6 +62,8 @@ def spawn_ccbd_process(context) -> None:
 
 
 __all__ = [
+    'FOREGROUND_ATTACH_RPC_TIMEOUT_S',
+    'FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S',
     'KEEPER_READY_TIMEOUT_S',
     'STARTUP_PROGRESS_STALL_TIMEOUT_S',
     'SHUTDOWN_TIMEOUT_S',

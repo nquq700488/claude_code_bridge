@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import os
 from pathlib import Path
 import sys
 
+from provider_core.source_home import current_provider_source_home
 from provider_backends.claude.launcher_runtime import materialize_claude_home_config, resolve_claude_home_layout
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 from provider_hooks.settings import build_hook_command, install_workspace_completion_hooks
@@ -97,7 +97,7 @@ def _materialize_provider_home(*, layout, spec, runtime_dir: Path, resolved_prof
         materialize_claude_home_config(
             home_root,
             profile=resolved_profile,
-            source_home=_current_system_home(),
+            source_home=current_provider_source_home(),
         )
         return
     if provider == 'gemini':
@@ -108,12 +108,8 @@ def _materialize_provider_home(*, layout, spec, runtime_dir: Path, resolved_prof
                 resolved_profile=resolved_profile,
             ),
             profile=resolved_profile,
-            source_home=_current_system_home(),
+            source_home=current_provider_source_home(),
         )
-
-
-def _current_system_home() -> Path:
-    return Path(os.environ.get('HOME') or Path.home()).expanduser()
 
 
 def provider_hook_home_root(

@@ -18,6 +18,8 @@ The repo-local agent memory file [AGENTS.md](/home/bfly/yunwei/ccb_source/AGENTS
 
 Diagnostics-specific rules live in [docs/ccbd-diagnostics-contract.md](/home/bfly/yunwei/ccb_source/docs/ccbd-diagnostics-contract.md). Startup/shutdown behavior and diagnostics must evolve together.
 
+Startup errors must preserve enough cause detail for the diagnostics contract to be useful. In particular, project tmux namespace preparation failures must not collapse original tmux stderr/stdout into only a generic foreground message such as `failed to prepare tmux server`.
+
 Module/function-level redesign for the project-scoped tmux namespace model lives in [docs/ccbd-project-namespace-lifecycle-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-project-namespace-lifecycle-plan.md).
 
 Detailed redesign for pane recovery layering and continuous foreground attach lives in [docs/ccbd-pane-recovery-continuous-attach-plan.md](/home/bfly/yunwei/ccb_source/docs/ccbd-pane-recovery-continuous-attach-plan.md).
@@ -139,7 +141,7 @@ Evidence sources:
 - provider session files
 - tmux pane liveness
 - provider-runtime pid files
-- runtime-root contents
+- runtime-root contents when runtime state is relocated away from the anchor
 
 Residue sources:
 
@@ -161,6 +163,7 @@ Rules:
 - provider-base session files such as `.codex-session` or `.claude-session` are legacy or unscoped evidence only:
   - they must not be reinterpreted as a configured agent's identity
   - they may be consulted only when no explicit agent binding is available
+- runtime-state relocation markers under either the anchor or the relocated runtime root are evidence only; they must not redefine project authority
 - residue such as provider session files or preserved workspaces must not by itself block config bootstrap
 - neither evidence nor residue may silently redefine authority
 - runtime pid loss is evidence only; for pane-backed runtime it must not preempt pane/session-based recovery checks
@@ -206,14 +209,28 @@ Managed provider startup mutation rules:
   - those variables are runtime-local evidence for the currently running managed agent process, not startup authority for a new or existing project backend
   - provider runtime environment must be injected only into the managed provider process being launched, not leaked into project-scoped control-plane subprocesses
 - that provider-runtime scrub must still preserve ordinary user-session variables needed for the project command pane to behave like the user's shell:
-  - examples include `PATH`, `SHELL`, `DISPLAY`, `WAYLAND_DISPLAY`, `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, and `SSH_AUTH_SOCK`
+  - examples include `PATH`, `SHELL`, `DISPLAY`, `WAYLAND_DISPLAY`,
+    `DBUS_SESSION_BUS_ADDRESS`, `XAUTHORITY`, and `SSH_AUTH_SOCK`
+  - user-session transport variables such as proxy settings, custom CA bundle
+    paths, browser/session IPC state, and WSL interop markers must also be
+    preserved for control-plane children and explicitly injected into managed
+    provider panes
+  - examples include `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
+    `CODEX_CA_CERTIFICATE`, `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `BROWSER`,
+    `WSL_INTEROP`, and `WSL_DISTRO_NAME`
   - those variables are user-session transport or shell-usability state, not managed-provider session authority
+  - this allowance must not reopen provider runtime authority inheritance;
+    managed variables such as `CODEX_HOME`, `CODEX_SESSION_ROOT`,
+    `GEMINI_ROOT`, `GEMINI_CLI_HOME`, `CLAUDE_PROJECTS_ROOT`,
+    `OPENCODE_*`, `DROID_*`, and `CCB_CALLER_*` remain runtime-local and must
+    be injected only by the provider launch path that owns them
 
 Missing-config recovery rules:
 
-- if `.ccb/ccb.config` is missing and the anchor is otherwise empty, bootstrap may write the default config
-- if `.ccb/ccb.config` is missing and `.ccb/agents/*/agent.json` provides a complete recoverable agent-spec set, bootstrap may reconstruct `.ccb/ccb.config` from those specs
-- if `.ccb/ccb.config` is missing and authoritative state exists but agent specs are incomplete or malformed, startup must still fail clearly rather than inventing project truth
+- if `.ccb/ccb.config` is missing, startup must use the built-in default project config from code
+- bootstrap must not auto-create, reconstruct, or rewrite `.ccb/ccb.config`
+- persisted runtime residue, including `.ccb/agents/*/agent.json`, must not be promoted into a reconstructed user config file
+- only a user-authored `.ccb/ccb.config` may replace the built-in default project config
 
 Runtime start policy rules:
 
@@ -251,6 +268,13 @@ Startup waiter rules:
   - the current authoritative generation bound the project socket
   - the current authoritative generation answers the minimal control-plane readiness probe for that socket
   - the current authoritative generation published the matching current lease authority
+- the socket server must keep accepting control-plane connections even when an earlier client connects but does not send a complete request:
+  - accepted connections must have a bounded request-read timeout
+  - accept and request handling must be decoupled so the kernel listen queue is not consumed by one bad or slow client
+  - request handlers and heartbeat/reconcile ticks must still execute serially in one worker lane, preserving current runtime-file write ordering
+  - mutating-operation post-request ticks, including the double tick after `submit`, must remain synchronous with the handled request in that worker lane
+  - worker-lane heartbeat/reconcile failures must terminate the serving loop and release backend ownership; the server must not remain accept-only with a dead worker lane
+- clients may retry transient connect failures such as `ENOENT`, `ECONNREFUSED`, and `EAGAIN` inside the caller's existing RPC timeout budget, but must not retry after a request has been sent
 - commands that only need control-plane RPC, including `ccb ask`, `ping`, `pend`, `watch`, `queue`, and similar daemon callers, must stop waiting at control-plane readiness
 - those non-foreground callers must not wait for project-namespace attachability or full desired-agent recovery before submitting work
 - interactive `ccb` may continue waiting past control-plane readiness for project-namespace/UI readiness and desired-agent recovery
@@ -259,6 +283,7 @@ Startup waiter rules:
 - `startup_transaction_timeout_s` is the maximum budget ceiling for one keeper-owned cold-start transaction:
   - it is not a fixed sleep
   - it is not a generic per-RPC timeout
+  - foreground `ccb` startup may use it for the scoped `start` RPC that completes namespace, desired-agent, and startup-report work after control-plane readiness is reached
   - it must return immediately when the relevant transaction reaches success or failure
   - it must not delay ordinary hot-path calls against an already mounted backend
   - stalled startup should also be bounded by a shorter progress-stall policy based on lifecycle startup progress
@@ -305,9 +330,13 @@ Foreground command split:
   - foreground attach must tolerate short tmux visibility lag after namespace create/reflow:
     - persisted namespace state may become visible slightly before tmux session/window targets are selectable
     - `ccb` must therefore perform a bounded readiness wait for the authoritative session and workspace window before declaring foreground attach failure
+    - this bounded wait must use foreground-attach-specific policy, not the short `rpc_probe_timeout_s` used for daemon compatibility probes
+    - the foreground attach RPC budget is allowed to match the stable operational client budget, while daemon config/probe checks must remain fast-fail
+    - the foreground attach target-ready budget must remain bounded by the startup transaction budget so namespace/UI lag does not redefine backend startup authority
   - once the tmux client is observed attached, `ccb` should issue a best-effort tmux client refresh so the first attached frame does not depend on a manual user redraw
   - in a non-interactive terminal, reports the start transaction without attaching to tmux
   - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
+  - foreground attach errors must state whether `ccbd` failed to answer the attach ping or whether `ccbd` was responsive but the project namespace was not attachable
 - ask-family and other non-foreground daemon commands
   - reuse the same keeper-owned backend startup transaction
   - stop waiting at control-plane readiness
@@ -458,6 +487,7 @@ Target architecture:
 - `DEGRADED` with a live pid plus fresh heartbeat is observation only, not restart authority, even if the project socket is temporarily unreachable
 - therefore temporary UNIX-socket accept stalls during active work must surface as degraded availability, not a keeper-triggered daemon replacement
 - config-check or live-ping timeout against a nominally mounted daemon is degraded observation only unless lifecycle state or ownership proof explicitly marks the generation failed
+- keeper config-check and graceful-shutdown probes must use the shared short `rpc_probe_timeout_s`; they must not use private shorter literals that make mounted generations look failed during normal startup load
 - if takeover does occur, any superseded daemon that wakes up again must fail its next lease refresh and exit rather than continuing to serve against stale authority
 
 If keeper is absent, the system can only provide "restart on next `ccb` command", which is weaker than the target contract.

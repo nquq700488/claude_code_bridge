@@ -6,7 +6,14 @@ from pathlib import Path
 _TAIL_SUFFIXES = {'.log', '.jsonl', '.txt', '.yaml', '.yml'}
 _COPY_SUFFIXES = {'.json', '.pid'}
 _PROVIDER_STATE_SUFFIXES = _TAIL_SUFFIXES | _COPY_SUFFIXES | {'.toml'}
-_PROVIDER_STATE_SECRET_FILENAMES = {'auth.json', 'oauth_creds.json'}
+_PROVIDER_STATE_SECRET_FILENAMES = {
+    '.credentials.json',
+    '.env',
+    'auth.json',
+    'google_accounts.json',
+    'oauth_creds.json',
+}
+_PROVIDER_STATE_SECRET_DIRNAMES = {'.codeisland'}
 
 
 def project_root_sources(context) -> tuple[tuple[str, Path], ...]:
@@ -34,6 +41,18 @@ def project_root_sources(context) -> tuple[tuple[str, Path], ...]:
         ('ccbd-log', context.paths.ccbd_dir / 'keeper.stdout.log'),
         ('ccbd-log', context.paths.ccbd_dir / 'keeper.stderr.log'),
     ]
+
+    if (
+        context.paths.runtime_state_placement.root_kind == 'relocated'
+        or context.paths.runtime_root_ref_path.exists()
+        or context.paths.runtime_root_marker_path.exists()
+    ):
+        items.extend(
+            [
+                ('runtime-root', context.paths.runtime_root_ref_path),
+                ('runtime-root', context.paths.runtime_root_marker_path),
+            ]
+        )
 
     items.extend(iter_dir_files('ccbd-execution', context.paths.ccbd_executions_dir, suffixes={'.json'}))
     items.extend(iter_dir_files('ccbd-snapshot', context.paths.ccbd_snapshots_dir, suffixes={'.json'}))
@@ -63,6 +82,8 @@ def iter_provider_state_files(category: str, root: Path) -> list[tuple[str, Path
     files: list[tuple[str, Path]] = []
     for path in sorted(root.rglob('*')):
         if not path.is_file() or path.suffix.lower() not in _PROVIDER_STATE_SUFFIXES:
+            continue
+        if any(part.lower() in _PROVIDER_STATE_SECRET_DIRNAMES for part in path.parts):
             continue
         if path.name.lower() in _PROVIDER_STATE_SECRET_FILENAMES:
             continue
@@ -95,12 +116,19 @@ def session_path_from_runtime(runtime_path: Path) -> Path | None:
 
 
 def archive_path_for_source(context, source: Path) -> str:
+    source_path = _resolve_source(source)
     try:
-        relative = source.resolve().relative_to(context.project.project_root.resolve())
+        relative = source_path.relative_to(_resolve_source(context.project.project_root))
         return str(Path('project') / relative)
     except Exception:
+        pass
+    try:
+        relative = source_path.relative_to(_resolve_source(context.paths.runtime_state_root))
+        return str(Path('project') / '.ccb' / relative)
+    except Exception:
         safe_parts = [part for part in source.parts if part not in ('/', '')]
-        return str(Path('external') / Path(*safe_parts[-4:]))
+        suffix = Path(*safe_parts[-4:]) if safe_parts else Path(source.name)
+        return str(Path('external') / suffix)
 
 
 def _agent_source_items(context, *, seen_sources: set[Path]) -> list[tuple[str, Path]]:

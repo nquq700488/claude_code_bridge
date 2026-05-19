@@ -2,11 +2,95 @@
 
 ## Unreleased
 
+## v6.0.29 (2026-05-07)
+
+### WSL Runtime State Relocation
+
+- **Runtime State Moved Off Mounted Drives**: on WSL projects rooted under `/mnt/<drive>/...`, project authority remains in `.ccb` while `ccbd/` and agent runtime state relocate to a local Linux state root with explicit marker files
+- **Diagnostics and Bundle Mapping Updated**: doctor output and support bundles now expose the project anchor, runtime-state root, relocation reason, and logical `.ccb` archive paths for relocated runtime files
+- **Provider Lookup and Ask Routing Kept Stable**: relocated runtime directories still resolve back to the project anchor for session discovery and ask sender attribution without changing Linux or macOS default layout behavior
+
+## v6.0.28 (2026-05-07)
+
+### WSL Control Plane Socket Hardening
+
+- **WSL Control Plane Startup Hardened**: keeper and daemon readiness probes now share the configured control-plane RPC timeout instead of using shorter hardcoded budgets that could misread a slow mounted-drive startup as config drift
+- **Socket Server Accept Path Decoupled**: ccbd now accepts connections separately from a serialized worker lane, so one slow or incomplete client request no longer blocks new control-plane probes or heartbeats
+- **Transient Connect Retry Added**: Unix socket clients retry only short-lived connect races within the existing timeout budget, without retrying already-sent RPC requests or mutating operations
+- **README Refreshed**: the public README was reorganized around the current agent CLI hub/team workflow and updated release guidance
+
+## v6.0.27 (2026-05-06)
+
+### macOS Foreground Attach Timeout Hardening
+
+- **Foreground Attach Timeout Split**: interactive `ccb` startup now uses foreground-attach-specific RPC and target-ready budgets instead of reusing the short daemon probe timeout
+- **macOS Attach Race Reduced**: foreground attach now tolerates slower post-start `ccbd` ping and tmux namespace/window visibility on macOS without redefining daemon startup success
+- **Clearer Attach Failures**: attach errors now distinguish between an unresponsive control-plane ping and a responsive daemon whose project namespace is not yet attachable
+
+## v6.0.26 (2026-05-05)
+
+### macOS Install And Claude Ask Cleanup
+
+- **macOS Release Install Fixed**: release installs now keep generated CLI wrappers bound to the managed `.venv` Python, avoiding environment drift when optional dependencies such as `watchdog` are installed
+- **WSL Install Tests Unblocked**: watchdog install regression tests now explicitly confirm WSL non-interactive install mode so CI exercises the intended optional-dependency path
+- **Claude Ask Prompt Slimmed Down**: managed Claude `ask` no longer injects local ask skill runtime text into the prompt body, so agent-to-agent asks stay limited to the request anchor and the user's original message
+
+## v6.0.25 (2026-05-02)
+
+### Gemini Managed Home Alignment
+
+- **Gemini Login Inheritance Fixed**: managed Gemini panes now set `GEMINI_CLI_HOME` to the isolated home root so Gemini CLI reads projected `.gemini/.env`, settings, and login state from the intended managed boundary
+- **Regression Coverage Added**: launcher tests now lock the aligned `HOME`, `GEMINI_CLI_HOME`, and `GEMINI_ROOT` contract and guard against nested `.gemini/.gemini` settings writes
+- **Community Contact Trimmed**: README removed the standalone Linux.do contact entry while keeping the Linux.do community acknowledgement
+
+## v6.0.24 (2026-05-02)
+
+### WSL Official Login Transport
+
+- **WSL Provider Transport Inherited**: managed provider panes now preserve user-session proxy, CA, browser, and WSL interop environment needed by official-login and Codex Apps/MCP networking paths
+- **Managed Isolation Preserved**: transport inheritance is centralized and does not allow caller-global `CODEX_HOME`, `GEMINI_ROOT`, `CLAUDE_PROJECTS_ROOT`, or `CCB_CALLER_*` runtime authority to override agent-scoped managed state
+- **Gemini Login Projection Extended**: managed Gemini homes now project allowlisted `.gemini/.env` API credentials, `google_accounts.json`, and `GEMINI_CLI_HOME` while diagnostics continue excluding copied auth artifacts
+- **Opencode Session Detection Hardened**: opencode now treats env-session mode as active only when its provider-specific runtime env is present, avoiding stale generic `CCB_SESSION_ID` contamination
+- **Community Entry Refreshed**: README now includes the refreshed WeChat group QR image and Linux.do community acknowledgement so users can find the current support channels from the public project page
+
+## v6.0.23 (2026-05-01)
+
+### CI Matrix Stabilization
+
+- **Release CI Greened**: latest release validation now points at a commit whose full GitHub Actions test workflow passes across Ubuntu, macOS, WSL, and install smoke jobs
+- **Provider Blackbox Coverage Focused**: heavy pane-backed provider restart / rotate / settle tests now run in a dedicated Ubuntu provider-blackbox job instead of being repeated across every OS and Python matrix cell
+- **macOS Socket Test Race Fixed**: ccbd socket tests now wait for the daemon socket to answer ping requests before issuing RPCs, avoiding macOS runner readiness races
+
+## v6.0.22 (2026-04-29)
+
+### Claude macOS Login Inheritance
+
+- **macOS Keychain Login Inherited**: managed Claude startup now reads official Claude Code login credentials from macOS Keychain and materializes an equivalent project-scoped `.claude/.credentials.json` inside isolated Claude homes
+- **Claude Account Metadata Refreshed**: inherited `.claude.json` account metadata now refreshes from the source home while preserving managed workspace trust and excluding source workspace trust or API key secrets
+- **Default Config Startup Fixed**: keeper startup now treats a missing `.ccb/ccb.config` as a request to use the built-in default project config instead of exiting before `ccbd` can mount
+- **Regression Coverage Expanded**: tests now lock Keychain projection, metadata refresh, and disabled-auth cleanup paths for managed Claude login inheritance
+
+## v6.0.21 (2026-04-28)
+
+### Claude Hook Asset Projection
+
+- **CodeIsland Hook Assets Inherited**: managed Claude startup now copies referenced source-home hook assets such as `.codeisland/` when inherited Claude hooks call `$HOME/.codeisland/...`, preventing missing-hook failures inside isolated Claude homes
+- **Config Boundary Preserved**: third-party hook assets are copied only when Claude config inheritance is enabled and the inherited hook payload actually references that home-relative asset path
+- **Diagnostics Redaction Extended**: diagnostic bundles now exclude copied `.codeisland/` provider-state assets while still including ordinary managed Claude settings for support
+
+## v6.0.20 (2026-04-28)
+
+### Claude Official Login Source Home Fix
+
+- **Claude Official Login Source Home Fixed**: managed Claude startup now treats `.ccb/agents/*/provider-state/*/home` as an isolated runtime home, not the user's source home, so official browser-login credentials are copied from the real account home
+- **Claude Credential Path Coverage**: managed Claude homes now project Claude Code official-login credentials from `.claude/.credentials.json` while retaining compatibility with `.config/claude-code/auth.json`
+- **Regression Coverage Added**: tests now lock source-home fallback, launcher projection, diagnostics redaction, and workspace preparation for official Claude login inheritance
+
 ## v6.0.19 (2026-04-28)
 
 ### Claude Official Login Inheritance
 
-- **Claude Official Login Projection**: managed Claude homes now project Claude Code official login credentials from `.config/claude-code/auth.json`, so browser-login-backed auth can be inherited into isolated CCB runtimes instead of only API-token-based settings auth
+- **Claude Official Login Projection**: managed Claude homes now project Claude Code official login credentials from `.claude/.credentials.json`, so browser-login-backed auth can be inherited into isolated CCB runtimes instead of only API-token-based settings auth
 - **Managed Login Auth Retention**: when global Claude auth artifacts disappear but managed Claude state already holds a valid project-scoped login, startup now preserves that managed login auth across restart instead of silently dropping it
 - **Auth Cleanup And Regression Coverage**: disabling auth inheritance now clears stale copied Claude login credentials, and targeted tests now lock the projection, cleanup, and launcher startup paths
 

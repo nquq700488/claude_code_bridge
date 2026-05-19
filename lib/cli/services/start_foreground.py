@@ -8,12 +8,16 @@ import time
 
 from cli.context import CliContext
 from ccbd.socket_client import CcbdClient, CcbdClientError
-from .daemon_runtime.policy import CONTROL_PLANE_RPC_TIMEOUT_S
+from .daemon_runtime.policy import (
+    FOREGROUND_ATTACH_RPC_TIMEOUT_S,
+    FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S,
+)
 
 _ATTACH_ESTABLISH_TIMEOUT_S = 1.5
 _ATTACH_ESTABLISH_POLL_INTERVAL_S = 0.05
-_ATTACH_TARGET_READY_TIMEOUT_S = 2.0
+_ATTACH_TARGET_READY_TIMEOUT_S = FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S
 _ATTACH_TARGET_READY_POLL_INTERVAL_S = 0.05
+_MIN_ATTACH_RPC_TIMEOUT_S = 0.1
 
 
 @dataclass(frozen=True)
@@ -30,7 +34,7 @@ class ForegroundAttachError(RuntimeError):
 def attach_started_project_namespace(context: CliContext) -> ForegroundAttachSummary:
     if shutil.which('tmux') is None:
         raise ForegroundAttachError('tmux is required for interactive `ccb`')
-    client = _client_for_started_project(context)
+    client = _foreground_attach_client(context)
     env = _attach_env()
     payload = _wait_for_attach_target(client, env=env)
     tmux_socket_path = str(payload.get('namespace_tmux_socket_path') or '').strip()
@@ -104,20 +108,41 @@ def _tmux_client_pid_attached(
 
 def _wait_for_attach_target(client, *, env: dict[str, str]) -> dict[str, object]:
     deadline = time.monotonic() + _ATTACH_TARGET_READY_TIMEOUT_S
-    last_error = 'project namespace is not attachable after successful `ccb` start'
+    attempts = 0
+    ping_successes = 0
+    last_error = _attach_target_unavailable_error(
+        attempts=attempts,
+        timeout_s=_ATTACH_TARGET_READY_TIMEOUT_S,
+    )
     while True:
+        remaining_s = deadline - time.monotonic()
+        if remaining_s < _MIN_ATTACH_RPC_TIMEOUT_S:
+            raise ForegroundAttachError(last_error)
+        attempt_timeout_s = min(FOREGROUND_ATTACH_RPC_TIMEOUT_S, remaining_s)
         try:
-            payload = client.ping('ccbd')
+            attempts += 1
+            payload = _client_for_attach_attempt(client, timeout_s=attempt_timeout_s).ping('ccbd')
         except CcbdClientError as exc:
-            last_error = f'project ccbd is unavailable after successful `ccb` start: {exc}'
+            last_error = _attach_ping_timeout_error(
+                exc,
+                attempts=attempts,
+                timeout_s=_ATTACH_TARGET_READY_TIMEOUT_S,
+                rpc_timeout_s=attempt_timeout_s,
+            )
         else:
+            ping_successes += 1
             ready, error = _attach_target_ready(payload, env=env)
             if ready:
                 return payload
-            last_error = error
+            last_error = _attach_namespace_timeout_error(
+                error,
+                attempts=attempts,
+                ping_successes=ping_successes,
+                timeout_s=_ATTACH_TARGET_READY_TIMEOUT_S,
+            )
         if time.monotonic() >= deadline:
             raise ForegroundAttachError(last_error)
-        time.sleep(_ATTACH_TARGET_READY_POLL_INTERVAL_S)
+        time.sleep(min(_ATTACH_TARGET_READY_POLL_INTERVAL_S, max(0.0, deadline - time.monotonic())))
 
 
 def _attach_target_ready(payload: dict[str, object], *, env: dict[str, str]) -> tuple[bool, str]:
@@ -136,6 +161,51 @@ def _attach_target_ready(payload: dict[str, object], *, env: dict[str, str]) -> 
     ):
         return False, 'project namespace workspace window is missing after successful `ccb` start'
     return True, ''
+
+
+def _client_for_attach_attempt(client, *, timeout_s: float):
+    with_timeout = getattr(client, 'with_timeout', None)
+    if callable(with_timeout):
+        return with_timeout(timeout_s)
+    return client
+
+
+def _attach_target_unavailable_error(*, attempts: int, timeout_s: float) -> str:
+    return (
+        'foreground attach timed out: project namespace did not become '
+        f'attachable within {timeout_s:.1f}s after successful `ccb` start '
+        f'(attempts={attempts})'
+    )
+
+
+def _attach_ping_timeout_error(
+    exc: Exception,
+    *,
+    attempts: int,
+    timeout_s: float,
+    rpc_timeout_s: float,
+) -> str:
+    detail = str(exc or '').strip() or type(exc).__name__
+    return (
+        'foreground attach timed out: ccbd did not respond to ping '
+        f'within {timeout_s:.1f}s after successful `ccb` start '
+        f'(rpc_timeout={rpc_timeout_s:.1f}s, attempts={attempts}, last_error={detail})'
+    )
+
+
+def _attach_namespace_timeout_error(
+    error: str,
+    *,
+    attempts: int,
+    ping_successes: int,
+    timeout_s: float,
+) -> str:
+    detail = str(error or '').strip() or 'project namespace is not attachable'
+    return (
+        'foreground attach timed out: ccbd is responsive but project namespace '
+        f'was not attachable within {timeout_s:.1f}s after successful `ccb` start '
+        f'(attempts={attempts}, ping_successes={ping_successes}, last_error={detail})'
+    )
 
 
 def _tmux_list_client_pids(
@@ -232,19 +302,18 @@ def _best_effort_refresh_attached_client(
         return
 
 
-def _client_for_started_project(context: CliContext):
+def _foreground_attach_client(context: CliContext):
     try:
-        return _build_control_plane_client(context.paths.ccbd_socket_path)
+        return _build_foreground_attach_client(context.paths.ccbd_socket_path)
     except CcbdClientError as exc:
-        raise ForegroundAttachError(f'project ccbd is unavailable after successful `ccb` start: {exc}') from exc
+        raise ForegroundAttachError(
+            'foreground attach failed: ccbd client is unavailable '
+            f'after successful `ccb` start: {exc}'
+        ) from exc
 
 
-def _build_control_plane_client(socket_path):
-    try:
-        return CcbdClient(socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S)
-    except TypeError:
-        # Some test doubles or compatibility shims expose only the legacy single-arg constructor.
-        return CcbdClient(socket_path)
+def _build_foreground_attach_client(socket_path):
+    return CcbdClient(socket_path, timeout_s=FOREGROUND_ATTACH_RPC_TIMEOUT_S)
 
 
 def _attach_env() -> dict[str, str]:

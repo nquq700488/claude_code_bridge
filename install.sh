@@ -6,6 +6,20 @@ INSTALL_PREFIX="${CODEX_INSTALL_PREFIX:-$HOME/.local/share/ccb}"
 BIN_DIR="${CODEX_BIN_DIR:-$HOME/.local/bin}"
 readonly REPO_ROOT INSTALL_PREFIX BIN_DIR
 
+require_supported_bash() {
+  if [[ -z "${BASH_VERSION:-}" ]]; then
+    echo "ERROR: install.sh must be run with bash. Try: bash ./install.sh install" >&2
+    exit 1
+  fi
+  if (( BASH_VERSINFO[0] < 3 || (BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 2) )); then
+    echo "ERROR: bash ${BASH_VERSION} is too old for install.sh." >&2
+    echo "   Please run with bash 3.2+ or install a newer bash, then retry." >&2
+    exit 1
+  fi
+}
+
+require_supported_bash
+
 # i18n support
 detect_lang() {
   local lang="${CCB_LANG:-auto}"
@@ -71,11 +85,20 @@ msg() {
       en_msg="OK: watchdog installed"
       zh_msg="OK: watchdog 已安装" ;;
     watchdog_failed)
-      en_msg="WARN: watchdog install failed (will fall back to polling)"
-      zh_msg="警告：watchdog 安装失败（将退回轮询）" ;;
+      en_msg="WARN: watchdog install failed; continuing without optional file watchers"
+      zh_msg="警告：watchdog 安装失败；将不启用可选文件监听" ;;
+    watchdog_optional)
+      en_msg="INFO: watchdog is optional. ccb will still install and use polling/readback paths when watchers are unavailable."
+      zh_msg="信息：watchdog 是可选依赖。未启用监听时，ccb 仍会安装并使用轮询/回读路径。" ;;
+    watchdog_skipped)
+      en_msg="INFO: watchdog auto-install skipped by CCB_INSTALL_WATCHDOG=0"
+      zh_msg="信息：已通过 CCB_INSTALL_WATCHDOG=0 跳过 watchdog 自动安装" ;;
+    watchdog_python_missing)
+      en_msg="WARN: python not available; skipping optional watchdog install"
+      zh_msg="警告：未找到 Python；跳过可选 watchdog 安装" ;;
     pip_missing)
-      en_msg="WARN: pip not available; please install watchdog manually"
-      zh_msg="警告：未找到 pip，请手动安装 watchdog" ;;
+      en_msg="WARN: pip not available for selected Python; skipping optional watchdog install"
+      zh_msg="警告：当前 Python 未提供 pip；跳过可选 watchdog 安装" ;;
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
@@ -186,6 +209,9 @@ Optional environment variables:
   CCB_BUILD_ARCH           Override build arch metadata (default: uname -m)
   CCB_BUILD_TIME           Override build timestamp metadata (default: current UTC time)
   CCB_SOURCE_KIND          Override source kind metadata (default: source if .git exists, else release)
+  CCB_USE_MANAGED_VENV     Use install-local Python venv: auto (default), 1, or 0
+                           auto = enabled for macOS release installs, disabled for source/dev installs
+  CCB_INSTALL_WATCHDOG     Auto-install optional watchdog dependency (default: 1; set 0 to skip)
   CCB_CONFIRM_MAJOR_UPGRADE Set to 1 to confirm replacing a pre-v6 install with v6+
   CCB_CLAUDE_MD_MODE       CLAUDE.md injection mode: "inline" (default) or "route"
                            inline = full config in CLAUDE.md (~57 lines)
@@ -290,13 +316,94 @@ sys.exit(0 if importlib.util.find_spec("${module}") else 1)
 PY
 }
 
+python_is_virtual_environment() {
+  local python_path="${1:-$PYTHON_BIN}"
+  "$python_path" - <<'PY' >/dev/null 2>&1
+import sys
+
+is_virtualenv = getattr(sys, "base_prefix", sys.prefix) != sys.prefix or hasattr(sys, "real_prefix")
+raise SystemExit(0 if is_virtualenv else 1)
+PY
+}
+
+watchdog_manual_install_command() {
+  local use_venv_scope="${1:-0}"
+  if [[ "$use_venv_scope" == "1" ]]; then
+    echo "   $PYTHON_BIN -m pip install 'watchdog>=2.1.0'"
+  else
+    echo "   $PYTHON_BIN -m pip install --user 'watchdog>=2.1.0'"
+  fi
+}
+
+install_watchdog_into_virtualenv() {
+  local python_version python_path
+  python_version="$("$PYTHON_BIN" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
+  python_path="$("$PYTHON_BIN" -c 'import sys; print(sys.executable)' 2>/dev/null || command -v "$PYTHON_BIN" 2>/dev/null || echo "$PYTHON_BIN")"
+
+  local pip_log pip_log_cleanup=0 last_failure=""
+  pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-watchdog-pip.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-watchdog-pip.XXXXXX.log" 2>/dev/null || true)"
+  if [[ -z "$pip_log" ]]; then
+    pip_log="/dev/null"
+  else
+    pip_log_cleanup=1
+  fi
+
+  if "$PYTHON_BIN" -m pip install "watchdog>=2.1.0" >"$pip_log" 2>&1; then
+    if python_has_module "watchdog"; then
+      if [[ "$pip_log_cleanup" -eq 1 ]]; then
+        rm -f "$pip_log"
+      fi
+      msg watchdog_installed
+      return 0
+    fi
+    last_failure="pip install succeeded, but Python $python_path still cannot import watchdog"
+  else
+    last_failure="$PYTHON_BIN -m pip install 'watchdog>=2.1.0' failed"
+  fi
+
+  msg watchdog_failed
+  if [[ -n "$last_failure" ]]; then
+    echo "   Last failure: $last_failure"
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 && -s "$pip_log" ]]; then
+    echo "   pip output:"
+    tail -20 "$pip_log" | sed 's/^/     /'
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 ]]; then
+    rm -f "$pip_log"
+  fi
+  echo "   Manual optional install:"
+  watchdog_manual_install_command 1
+  msg watchdog_optional
+  return 0
+}
+
 install_watchdog() {
+  if [[ "${CCB_INSTALL_WATCHDOG:-1}" == "0" ]]; then
+    msg watchdog_skipped
+    return 0
+  fi
   if python_has_module "watchdog"; then
     msg watchdog_installed
     return 0
   fi
+  if ! pick_any_python_bin; then
+    msg watchdog_python_missing
+    msg watchdog_optional
+    return 0
+  fi
+  local python_version python_path
+  python_version="$("$PYTHON_BIN" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
+  python_path="$("$PYTHON_BIN" -c 'import sys; print(sys.executable)' 2>/dev/null || command -v "$PYTHON_BIN" 2>/dev/null || echo "$PYTHON_BIN")"
   msg watchdog_installing
+  echo "   Python: $python_path ($python_version)"
 
+  if python_is_virtual_environment; then
+    install_watchdog_into_virtualenv
+    return 0
+  fi
+
+  local last_failure=""
   # 1. Try uv (fast, no PEP 668 issues)
   if command -v uv >/dev/null 2>&1; then
     if uv pip install --system "watchdog>=2.1.0" >/dev/null 2>&1 || \
@@ -305,42 +412,95 @@ install_watchdog() {
         msg watchdog_installed
         return 0
       fi
+      last_failure="uv installed watchdog, but Python $python_path still cannot import it"
+    else
+      last_failure="uv pip install watchdog>=2.1.0 failed"
     fi
   fi
 
   if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
     msg pip_missing
-    return 1
+    echo "   Install manually for this Python if file watchers are desired:"
+    echo "   $PYTHON_BIN -m ensurepip --upgrade"
+    watchdog_manual_install_command 0
+    msg watchdog_optional
+    return 0
   fi
 
   # 2. Try standard pip install --user
-  if "$PYTHON_BIN" -m pip install --user "watchdog>=2.1.0" >/dev/null 2>&1; then
+  local pip_log pip_log_cleanup=0
+  pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-watchdog-pip.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-watchdog-pip.XXXXXX.log" 2>/dev/null || true)"
+  if [[ -z "$pip_log" ]]; then
+    pip_log="/dev/null"
+  else
+    pip_log_cleanup=1
+  fi
+  if "$PYTHON_BIN" -m pip install --user "watchdog>=2.1.0" >"$pip_log" 2>&1; then
     if python_has_module "watchdog"; then
+      if [[ "$pip_log_cleanup" -eq 1 ]]; then
+        rm -f "$pip_log"
+      fi
       msg watchdog_installed
       return 0
     fi
+    last_failure="pip install --user succeeded, but Python $python_path still cannot import watchdog"
+  else
+    last_failure="$PYTHON_BIN -m pip install --user 'watchdog>=2.1.0' failed"
   fi
 
   # 3. PEP 668 fallback: --break-system-packages (Homebrew Python, Debian 12+, etc.)
-  if "$PYTHON_BIN" -m pip install --user --break-system-packages "watchdog>=2.1.0" >/dev/null 2>&1; then
+  if "$PYTHON_BIN" -m pip install --user --break-system-packages "watchdog>=2.1.0" >"$pip_log" 2>&1; then
     if python_has_module "watchdog"; then
+      if [[ "$pip_log_cleanup" -eq 1 ]]; then
+        rm -f "$pip_log"
+      fi
       msg watchdog_installed
       return 0
     fi
+    last_failure="pip install --user --break-system-packages succeeded, but Python $python_path still cannot import watchdog"
+  else
+    last_failure="$PYTHON_BIN -m pip install --user --break-system-packages 'watchdog>=2.1.0' failed"
   fi
 
   # 4. Try pipx inject into a shared venv as last resort
   if command -v pipx >/dev/null 2>&1; then
     if pipx install watchdog >/dev/null 2>&1; then
       if python_has_module "watchdog"; then
+        if [[ "$pip_log_cleanup" -eq 1 ]]; then
+          rm -f "$pip_log"
+        fi
         msg watchdog_installed
         return 0
       fi
+      last_failure="pipx installed watchdog, but Python $python_path still cannot import it"
+    else
+      last_failure="pipx install watchdog failed"
     fi
   fi
 
   msg watchdog_failed
-  return 1
+  if [[ -n "$last_failure" ]]; then
+    echo "   Last failure: $last_failure"
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 && -s "$pip_log" ]]; then
+    echo "   pip output:"
+    tail -20 "$pip_log" | sed 's/^/     /'
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 ]]; then
+    rm -f "$pip_log"
+  fi
+  echo "   Manual optional install:"
+  watchdog_manual_install_command 0
+  msg watchdog_optional
+  return 0
+}
+
+install_watchdog_for_python() {
+  local python_cmd="$1"
+  local previous_python_bin="$PYTHON_BIN"
+  PYTHON_BIN="$python_cmd"
+  install_watchdog
+  PYTHON_BIN="$previous_python_bin"
 }
 
 # Return linux / macos / unknown based on uname
@@ -488,6 +648,26 @@ install_uses_live_source() {
   [[ "$(resolve_install_mode)" == "source" ]]
 }
 
+managed_venv_path() {
+  echo "$INSTALL_PREFIX/.venv"
+}
+
+managed_venv_python() {
+  echo "$(managed_venv_path)/bin/python"
+}
+
+use_managed_venv() {
+  local requested="${CCB_USE_MANAGED_VENV:-auto}"
+  if install_uses_live_source; then
+    return 1
+  fi
+  case "$requested" in
+    1|true|yes|on) return 0 ;;
+    0|false|no|off) return 1 ;;
+  esac
+  [[ "$(resolve_install_mode)" == "release" && "$(detect_platform)" == "macos" ]]
+}
+
 resolve_live_source_root() {
   local root="${CCB_SOURCE_ROOT:-$REPO_ROOT}"
   echo "$root"
@@ -508,6 +688,20 @@ read_simple_json_string_field() {
     return 0
   fi
   grep -o "\"${key}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" "$file" 2>/dev/null | head -1 | sed -E "s/.*:[[:space:]]*\"([^\"]*)\"/\1/"
+}
+
+json_string_literal() {
+  local value="$1"
+  if ! pick_any_python_bin; then
+    echo "ERROR: python required to encode install metadata" >&2
+    exit 1
+  fi
+  JSON_LITERAL_VALUE="$value" "$PYTHON_BIN" - <<'PY'
+import json
+import os
+
+print(json.dumps(os.environ.get("JSON_LITERAL_VALUE", ""), ensure_ascii=True))
+PY
 }
 
 read_installed_version() {
@@ -654,6 +848,17 @@ write_install_metadata() {
     echo "WARN: python required to write VERSION/BUILD_INFO metadata"
     return
   fi
+  local version_json commit_json date_json build_time_json platform_json arch_json channel_json source_kind_json install_mode_json installed_at_json
+  version_json="$(json_string_literal "$version")"
+  commit_json="$(json_string_literal "$commit")"
+  date_json="$(json_string_literal "$date")"
+  build_time_json="$(json_string_literal "$build_time")"
+  platform_json="$(json_string_literal "$platform_name")"
+  arch_json="$(json_string_literal "$arch_name")"
+  channel_json="$(json_string_literal "$channel")"
+  source_kind_json="$(json_string_literal "$source_kind")"
+  install_mode_json="$(json_string_literal "$install_mode")"
+  installed_at_json="$(json_string_literal "$installed_at")"
 
   "$PYTHON_BIN" - <<PY
 from pathlib import Path
@@ -661,16 +866,16 @@ import json
 
 install_prefix = Path("$INSTALL_PREFIX")
 payload = {
-    "version": ${version@Q},
-    "commit": ${commit@Q},
-    "date": ${date@Q},
-    "build_time": ${build_time@Q},
-    "platform": ${platform_name@Q},
-    "arch": ${arch_name@Q},
-    "channel": ${channel@Q},
-    "source_kind": ${source_kind@Q},
-    "install_mode": ${install_mode@Q},
-    "installed_at": ${installed_at@Q},
+    "version": ${version_json},
+    "commit": ${commit_json},
+    "date": ${date_json},
+    "build_time": ${build_time_json},
+    "platform": ${platform_json},
+    "arch": ${arch_json},
+    "channel": ${channel_json},
+    "source_kind": ${source_kind_json},
+    "install_mode": ${install_mode_json},
+    "installed_at": ${installed_at_json},
 }
 
 version_text = str(payload["version"] or "").strip()
@@ -879,6 +1084,43 @@ prepare_install_tree() {
   copy_project
 }
 
+install_managed_venv() {
+  if ! use_managed_venv; then
+    return 0
+  fi
+  if ! pick_python_bin; then
+    echo "ERROR: Missing dependency: python (3.10+ required)" >&2
+    echo "   Please install Python 3.10+ and ensure it is on PATH, then retry." >&2
+    exit 1
+  fi
+  local venv_dir venv_python
+  venv_dir="$(managed_venv_path)"
+  venv_python="$(managed_venv_python)"
+  echo "Creating managed Python venv: $venv_dir"
+  rm -rf "$venv_dir"
+  if ! "$PYTHON_BIN" -m venv "$venv_dir"; then
+    echo "ERROR: Failed to create managed Python venv at $venv_dir"
+    case "$(detect_platform)" in
+      macos)
+        echo "   macOS: install or repair Homebrew Python: brew install python"
+        ;;
+      linux)
+        echo "   Debian/Ubuntu: sudo apt-get install -y python3-venv"
+        ;;
+    esac
+    exit 1
+  fi
+  if [[ ! -x "$venv_python" ]]; then
+    echo "ERROR: Managed venv Python not executable: $venv_python"
+    exit 1
+  fi
+  if ! "$venv_python" -m pip install --upgrade pip >/dev/null 2>&1; then
+    echo "WARN: unable to upgrade pip inside managed venv; continuing"
+  fi
+  install_watchdog_for_python "$venv_python"
+  echo "OK: Managed Python venv ready"
+}
+
 write_live_source_wrapper() {
   local target="$1"
   local wrapper_path="$2"
@@ -978,6 +1220,45 @@ install_owned_executable() {
   chmod +x "$destination_path" 2>/dev/null || true
 }
 
+write_managed_venv_python_wrapper() {
+  local source_path="$1"
+  local destination_path="$2"
+  local venv_python
+  local absolute_source="$source_path"
+  if [[ "$absolute_source" != /* ]]; then
+    absolute_source="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
+  fi
+  venv_python="$(managed_venv_python)"
+  mkdir -p "$(dirname "$destination_path")"
+  clear_installed_path "$destination_path"
+  cat > "$destination_path" <<EOF
+#!/usr/bin/env bash
+exec "$venv_python" "$absolute_source" "\$@"
+EOF
+  chmod +x "$destination_path" 2>/dev/null || true
+}
+
+install_entrypoint_executable() {
+  local source_path="$1"
+  local destination_path="$2"
+
+  if [[ ! -f "$source_path" ]]; then
+    echo "WARN: Script not found $source_path, skipping"
+    return 1
+  fi
+
+  local absolute_source="$source_path"
+  if [[ "$absolute_source" != /* ]]; then
+    absolute_source="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
+  fi
+  if use_managed_venv && [[ "$absolute_source" == "$INSTALL_PREFIX/"* ]]; then
+    write_managed_venv_python_wrapper "$absolute_source" "$destination_path"
+    return 0
+  fi
+
+  install_owned_executable "$source_path" "$destination_path"
+}
+
 install_bin_links() {
   mkdir -p "$BIN_DIR"
   local target_root
@@ -987,7 +1268,7 @@ install_bin_links() {
     local name
     name="$(basename "$path")"
     local target_path="$target_root/$path"
-    install_owned_executable "$target_path" "$BIN_DIR/$name"
+    install_entrypoint_executable "$target_path" "$BIN_DIR/$name"
   done
 
   for legacy in "${LEGACY_SCRIPTS[@]}"; do
@@ -1860,7 +2141,11 @@ install_requirements() {
   check_wsl_compatibility
   confirm_backend_env_wsl
   require_python_version
-  install_watchdog || true
+  if use_managed_venv; then
+    echo "INFO: watchdog will be installed inside the managed Python venv"
+  else
+    install_watchdog
+  fi
   require_terminal_backend
 }
 
@@ -1919,6 +2204,7 @@ install_all() {
   remove_codex_mcp
   cleanup_legacy_files
   prepare_install_tree
+  install_managed_venv
   if ! install_uses_live_source; then
     write_install_metadata
   fi
@@ -1956,6 +2242,9 @@ install_all() {
   else
     echo "   AGENTS.md configured with review rubrics"
     echo "   .clinerules configured with role assignments"
+  fi
+  if use_managed_venv; then
+    echo "   Managed Python: $(managed_venv_python)"
   fi
   echo "   Global settings.json permissions added"
   print_install_identity_notice

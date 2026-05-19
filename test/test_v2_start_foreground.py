@@ -5,6 +5,8 @@ import subprocess
 
 import pytest
 
+import cli.services.start_foreground as start_foreground_service
+from ccbd.socket_client import CcbdClientError
 from cli.context import CliContextBuilder
 from cli.models import ParsedStartCommand
 from cli.services.start_foreground import ForegroundAttachError, attach_started_project_namespace
@@ -48,10 +50,13 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
     (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
     bootstrap_project(project_root)
     context = _context(project_root)
+    client_timeouts: list[float | None] = []
 
     class _FakeClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_s=None):
             self.socket_path = socket_path
+            self.timeout_s = timeout_s
+            client_timeouts.append(timeout_s)
 
         def ping(self, target: str) -> dict[str, object]:
             assert target == 'ccbd'
@@ -90,6 +95,8 @@ def test_start_foreground_attaches_to_namespace_tmux_session(tmp_path: Path, mon
     assert summary.project_id == context.project.project_id
     assert summary.tmux_socket_path == str(context.paths.ccbd_tmux_socket_path)
     assert summary.tmux_session_name == context.paths.ccbd_tmux_session_name
+    assert client_timeouts == [start_foreground_service.FOREGROUND_ATTACH_RPC_TIMEOUT_S]
+    assert 'CONTROL_PLANE_RPC_TIMEOUT_S' not in start_foreground_service.__dict__
     _assert_call_subsequence(run_calls, [
         ['tmux', '-S', str(context.paths.ccbd_tmux_socket_path), 'has-session', '-t', context.paths.ccbd_tmux_session_name],
         [
@@ -136,8 +143,9 @@ def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tm
     context = _context(project_root)
 
     class _FakeClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_s=None):
             self.socket_path = socket_path
+            self.timeout_s = timeout_s
             self.calls = 0
 
         def ping(self, target: str) -> dict[str, object]:
@@ -229,6 +237,139 @@ def test_start_foreground_waits_for_workspace_window_visibility_before_attach(tm
     ) == 1
 
 
+def test_start_foreground_retries_transient_ccbd_ping_timeouts_before_attach(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-attach-delayed-ping'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = _context(project_root)
+
+    class _FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None):
+            self.socket_path = socket_path
+            self.timeout_s = timeout_s
+            self.calls = 0
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            self.calls += 1
+            if self.calls < 3:
+                raise CcbdClientError('timed out')
+            return {
+                'namespace_tmux_socket_path': str(context.paths.ccbd_tmux_socket_path),
+                'namespace_tmux_session_name': context.paths.ccbd_tmux_session_name,
+                'namespace_workspace_window_name': context.paths.ccbd_tmux_workspace_window_name,
+                'namespace_ui_attachable': True,
+            }
+
+    client_holder: list[_FakeClient] = []
+    run_calls: list[list[str]] = []
+    attach_process = _FakeAttachProcess(pid=4444, returncode=0)
+
+    def _client(socket_path, *, timeout_s=None):
+        client = _FakeClient(socket_path, timeout_s=timeout_s)
+        client_holder.append(client)
+        return client
+
+    def _run(args, **kwargs):
+        call = list(args)
+        run_calls.append(call)
+        if call[3:4] == ['list-clients']:
+            if call[-1] == '#{client_pid}\t#{client_tty}':
+                return subprocess.CompletedProcess(args=args, returncode=0, stdout='4444\t/dev/pts/44\n')
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout='4444\n')
+        return subprocess.CompletedProcess(args=args, returncode=0)
+
+    monkeypatch.setattr('cli.services.start_foreground.shutil.which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr('cli.services.start_foreground.CcbdClient', _client)
+    monkeypatch.setattr('cli.services.start_foreground.subprocess.run', _run)
+    monkeypatch.setattr('cli.services.start_foreground.subprocess.Popen', lambda *args, **kwargs: attach_process)
+    monkeypatch.setattr('cli.services.start_foreground._ATTACH_TARGET_READY_POLL_INTERVAL_S', 0.0)
+
+    summary = attach_started_project_namespace(context)
+
+    assert summary.tmux_session_name == context.paths.ccbd_tmux_session_name
+    assert len(client_holder) == 1
+    assert client_holder[0].calls == 3
+    assert any(call[3:4] == ['refresh-client'] for call in run_calls)
+
+
+def test_start_foreground_ping_timeout_error_reports_foreground_attach_context(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo-attach-ping-timeout'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    bootstrap_project(project_root)
+    context = _context(project_root)
+    current = {'t': 0.0}
+
+    class _FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None):
+            self.socket_path = socket_path
+            self.timeout_s = timeout_s
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            current['t'] = 0.2
+            raise CcbdClientError('timed out')
+
+    monkeypatch.setattr('cli.services.start_foreground.shutil.which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr('cli.services.start_foreground.CcbdClient', _FakeClient)
+    monkeypatch.setattr('cli.services.start_foreground.time.monotonic', lambda: current['t'])
+    monkeypatch.setattr('cli.services.start_foreground._ATTACH_TARGET_READY_TIMEOUT_S', 0.1)
+
+    with pytest.raises(
+        ForegroundAttachError,
+        match=r'foreground attach timed out: ccbd did not respond.*rpc_timeout=.*attempts=1',
+    ):
+        attach_started_project_namespace(context)
+
+
+def test_start_foreground_caps_each_attach_ping_to_remaining_ready_budget(monkeypatch) -> None:
+    current = {'t': 0.0}
+
+    def _monotonic() -> float:
+        return current['t']
+
+    def _sleep(seconds: float) -> None:
+        current['t'] += float(seconds)
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.timeouts: list[float] = []
+            self.calls = 0
+
+        def with_timeout(self, timeout_s: float):
+            self.timeouts.append(timeout_s)
+            return self
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            self.calls += 1
+            current['t'] += 1.4
+            raise CcbdClientError('timed out')
+
+    client = _FakeClient()
+
+    monkeypatch.setattr('cli.services.start_foreground.time.monotonic', _monotonic)
+    monkeypatch.setattr('cli.services.start_foreground.time.sleep', _sleep)
+    monkeypatch.setattr('cli.services.start_foreground._ATTACH_TARGET_READY_TIMEOUT_S', 2.0)
+    monkeypatch.setattr('cli.services.start_foreground._ATTACH_TARGET_READY_POLL_INTERVAL_S', 0.0)
+    monkeypatch.setattr('cli.services.start_foreground.FOREGROUND_ATTACH_RPC_TIMEOUT_S', 3.0)
+
+    with pytest.raises(ForegroundAttachError, match=r'rpc_timeout=0\.6s'):
+        start_foreground_service._wait_for_attach_target(client, env={})
+
+    assert client.calls == 2
+    assert client.timeouts[0] == 2.0
+    assert 0.5 <= client.timeouts[1] <= 0.7
+
+
 def test_start_foreground_reports_clean_error_when_session_exits_before_attach(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-attach-fail'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
@@ -237,8 +378,9 @@ def test_start_foreground_reports_clean_error_when_session_exits_before_attach(t
     context = _context(project_root)
 
     class _FakeClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_s=None):
             self.socket_path = socket_path
+            self.timeout_s = timeout_s
 
         def ping(self, target: str) -> dict[str, object]:
             assert target == 'ccbd'
@@ -313,8 +455,9 @@ def test_start_foreground_treats_post_attach_session_exit_as_success(tmp_path: P
     context = _context(project_root)
 
     class _FakeClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_s=None):
             self.socket_path = socket_path
+            self.timeout_s = timeout_s
 
         def ping(self, target: str) -> dict[str, object]:
             assert target == 'ccbd'
@@ -396,13 +539,16 @@ def test_start_foreground_requires_attachable_namespace(tmp_path: Path, monkeypa
     (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
     bootstrap_project(project_root)
     context = _context(project_root)
+    current = {'t': 0.0}
 
     class _FakeClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_s=None):
             self.socket_path = socket_path
+            self.timeout_s = timeout_s
 
         def ping(self, target: str) -> dict[str, object]:
             assert target == 'ccbd'
+            current['t'] = 0.2
             return {
                 'namespace_tmux_socket_path': str(context.paths.ccbd_tmux_socket_path),
                 'namespace_tmux_session_name': context.paths.ccbd_tmux_session_name,
@@ -412,6 +558,8 @@ def test_start_foreground_requires_attachable_namespace(tmp_path: Path, monkeypa
 
     monkeypatch.setattr('cli.services.start_foreground.shutil.which', lambda name: f'/usr/bin/{name}')
     monkeypatch.setattr('cli.services.start_foreground.CcbdClient', _FakeClient)
+    monkeypatch.setattr('cli.services.start_foreground.time.monotonic', lambda: current['t'])
+    monkeypatch.setattr('cli.services.start_foreground._ATTACH_TARGET_READY_TIMEOUT_S', 0.1)
 
     with pytest.raises(ForegroundAttachError, match='not attachable after successful `ccb` start'):
         attach_started_project_namespace(context)
@@ -425,8 +573,9 @@ def test_start_foreground_skips_refresh_when_client_tty_is_unavailable(tmp_path:
     context = _context(project_root)
 
     class _FakeClient:
-        def __init__(self, socket_path):
+        def __init__(self, socket_path, *, timeout_s=None):
             self.socket_path = socket_path
+            self.timeout_s = timeout_s
 
         def ping(self, target: str) -> dict[str, object]:
             assert target == 'ccbd'

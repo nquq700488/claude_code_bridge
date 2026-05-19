@@ -6,7 +6,12 @@ from pathlib import Path
 from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
-from provider_core.caller_env import caller_context_env, export_env_clause
+from provider_core.caller_env import (
+    caller_context_env,
+    export_env_clause,
+    join_env_prefix,
+    provider_user_session_env,
+)
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import provider_start_parts
 from workspace.models import WorkspacePlan
@@ -27,8 +32,12 @@ def build_start_cmd(command: ParsedStartCommand, spec: AgentSpec, runtime_dir, l
         cmd_parts.append('--continue')
     cmd_parts.extend(spec.startup_args)
     cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
-    env_prefix = export_env_clause(
-        caller_context_env(actor=spec.name, runtime_dir=Path(runtime_dir), launch_session_id=launch_session_id)
+    runtime_dir = Path(runtime_dir)
+    env_prefix = join_env_prefix(
+        export_env_clause(provider_user_session_env()),
+        export_env_clause(
+            caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
+        ),
     )
     if env_prefix:
         return f'{env_prefix}; {cmd}'

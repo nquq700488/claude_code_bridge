@@ -12,11 +12,8 @@ from agents.config_loader import (
     ensure_default_project_config,
     load_project_config,
     render_project_config_text,
-    render_default_project_config_text,
 )
-from agents.models import AgentApiSpec, AgentSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
-from agents.store import AgentSpecStore
-from storage.paths import PathLayout
+from agents.models import AgentApiSpec, PermissionMode, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 
 
 def _write(path: Path, text: str) -> None:
@@ -91,15 +88,14 @@ def test_load_project_config_rejects_case_insensitive_duplicates(tmp_path: Path)
         load_project_config(project_root)
 
 
-def test_build_and_ensure_default_project_config(tmp_path: Path) -> None:
+def test_load_project_config_uses_builtin_default_when_project_config_is_missing(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     config = build_default_project_config()
     assert config.default_agents == ('agent1', 'agent2', 'agent3')
     assert config.cmd_enabled is True
-    written = ensure_default_project_config(project_root)
-    assert written.exists()
-    assert written.read_text(encoding='utf-8') == render_default_project_config_text()
     loaded = load_project_config(project_root)
+    assert loaded.source_path is None
+    assert loaded.used_default is True
     assert loaded.config.default_agents == ('agent1', 'agent2', 'agent3')
     assert loaded.config.cmd_enabled is True
     assert set(loaded.config.agents) == {'agent1', 'agent2', 'agent3'}
@@ -110,48 +106,34 @@ def test_build_and_ensure_default_project_config(tmp_path: Path) -> None:
     assert loaded.config.agents['agent1'].runtime_mode is RuntimeMode.PANE_BACKED
 
 
+def test_ensure_default_project_config_creates_anchor_without_writing_config(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+
+    config_path = ensure_default_project_config(project_root)
+
+    assert config_path == project_root.resolve() / '.ccb' / 'ccb.config'
+    assert config_path.parent.is_dir()
+    assert config_path.exists() is False
+
+
 def test_ensure_bootstrap_project_config_allows_empty_anchor(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-empty-anchor'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
 
-    written = ensure_bootstrap_project_config(project_root)
+    config_path = ensure_bootstrap_project_config(project_root)
 
-    assert written.exists()
-    assert written.read_text(encoding='utf-8') == render_default_project_config_text()
+    assert config_path == project_root.resolve() / '.ccb' / 'ccb.config'
+    assert config_path.exists() is False
 
 
-def test_ensure_bootstrap_project_config_rejects_persisted_state_without_config(tmp_path: Path) -> None:
+def test_ensure_bootstrap_project_config_allows_persisted_state_without_writing_config(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-missing-config-with-state'
     runtime_path = project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json'
     _write(runtime_path, '{"agent_name":"demo"}\n')
 
-    with pytest.raises(ConfigValidationError, match='persisted state'):
-        ensure_bootstrap_project_config(project_root)
+    config_path = ensure_bootstrap_project_config(project_root)
 
-
-def test_ensure_bootstrap_project_config_recovers_from_agent_specs(tmp_path: Path) -> None:
-    project_root = tmp_path / 'repo-recover-config'
-    layout = PathLayout(project_root)
-    spec_store = AgentSpecStore(layout)
-    for name, provider in (('agent1', 'codex'), ('agent2', 'codex'), ('agent3', 'claude')):
-        spec_store.save(
-            AgentSpec(
-                name=name,
-                provider=provider,
-                target='.',
-                workspace_mode=WorkspaceMode.INPLACE,
-                workspace_root=None,
-                runtime_mode=RuntimeMode.PANE_BACKED,
-                restore_default=RestoreMode.AUTO,
-                permission_default=PermissionMode.MANUAL,
-                queue_policy=QueuePolicy.SERIAL_PER_AGENT,
-            )
-        )
-
-    written = ensure_bootstrap_project_config(project_root)
-
-    assert written.exists()
-    assert written.read_text(encoding='utf-8') == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert config_path.exists() is False
 
 
 def test_load_project_config_supports_explicit_worktree_suffix_in_compact_config(tmp_path: Path) -> None:
@@ -166,15 +148,14 @@ def test_load_project_config_supports_explicit_worktree_suffix_in_compact_config
     assert result.config.layout_spec == 'cmd; agent1:codex(worktree), agent2:claude'
 
 
-def test_ensure_bootstrap_project_config_ignores_session_residue_for_default_bootstrap(tmp_path: Path) -> None:
+def test_ensure_bootstrap_project_config_ignores_session_residue_without_writing_config(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-session-residue'
     _write(project_root / '.ccb' / '.codex-agent1-session', '{}\n')
     _write(project_root / '.ccb' / '.claude-agent3-session', '{}\n')
 
-    written = ensure_bootstrap_project_config(project_root)
+    config_path = ensure_bootstrap_project_config(project_root)
 
-    assert written.exists()
-    assert written.read_text(encoding='utf-8') == render_default_project_config_text()
+    assert config_path.exists() is False
 
 
 def test_load_project_config_rejects_invalid_token(tmp_path: Path) -> None:
@@ -221,8 +202,14 @@ def test_load_project_config_requires_project_local_file_even_when_home_has_conf
     monkeypatch.setenv('HOME', str(home))
     _write(global_config, 'agent1:claude\n')
 
-    with pytest.raises(ConfigValidationError, match='config not found'):
-        load_project_config(project_root)
+    result = load_project_config(project_root)
+
+    assert result.source_path is None
+    assert result.used_default is True
+    assert result.config.default_agents == ('agent1', 'agent2', 'agent3')
+    assert result.config.agents['agent1'].provider == 'codex'
+    assert result.config.agents['agent2'].provider == 'codex'
+    assert result.config.agents['agent3'].provider == 'claude'
 
 
 

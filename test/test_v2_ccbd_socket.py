@@ -75,13 +75,21 @@ def _runtime(agent_name: str, *, project_id: str, workspace_path: str, pid: int)
     )
 
 
-def _wait_for(path: Path, timeout: float = 2.0) -> None:
+def _wait_for(path: Path, timeout: float = 10.0) -> None:
     deadline = time.time() + timeout
+    last_error: str | None = None
     while time.time() < deadline:
         if path.exists():
-            return
-        time.sleep(0.02)
-    raise AssertionError(f'timed out waiting for {path}')
+            if path.suffix != '.sock':
+                return
+            try:
+                CcbdClient(path, timeout_s=1.0).ping('ccbd')
+                return
+            except CcbdClientError as exc:
+                last_error = str(exc)
+        time.sleep(0.05)
+    suffix = f' last_error={last_error!r}' if last_error else ''
+    raise AssertionError(f'timed out waiting for {path}{suffix}')
 
 
 def _wait_for_job_status(client: CcbdClient, job_id: str, expected: str, *, timeout: float = 3.0) -> dict:
@@ -211,6 +219,31 @@ def test_ccbd_socket_roundtrip_and_shutdown(tmp_path: Path) -> None:
     assert app.mount_manager.load_state().mount_state.value == 'unmounted'
 
 
+def test_ccbd_socket_bad_client_does_not_block_later_ping(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-bad-client'
+    _prepare_project(project_root, _single_agent_config_text('demo', 'fake'))
+    app = CcbdApp(project_root)
+
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for(app.paths.ccbd_socket_path)
+
+    bad = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        bad.connect(str(app.paths.ccbd_socket_path))
+        time.sleep(0.1)
+
+        ping = CcbdClient(app.paths.ccbd_socket_path, timeout_s=1.5).ping('ccbd')
+
+        assert ping['project_id'] == app.project_id
+    finally:
+        bad.close()
+        app.request_shutdown()
+        thread.join(timeout=2)
+
+    assert not thread.is_alive()
+
+
 def test_ccbd_socket_shutdown_does_not_remove_replaced_socket_path(tmp_path: Path) -> None:
     with tempfile.TemporaryDirectory(prefix='ccb-sock-', dir=str(Path(tempfile.gettempdir()))) as temp_dir:
         socket_path = Path(temp_dir) / f'ccbd-{os.getpid()}.sock'
@@ -233,6 +266,33 @@ def test_ccbd_socket_shutdown_does_not_remove_replaced_socket_path(tmp_path: Pat
 
         new_server.shutdown()
         assert not socket_path.exists()
+
+
+def test_socket_server_uses_larger_listen_backlog(tmp_path: Path, monkeypatch) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    listen_backlogs: list[int] = []
+
+    class _FakeSocket:
+        def bind(self, path: str) -> None:
+            assert path == str(socket_path)
+
+        def listen(self, backlog: int) -> None:
+            listen_backlogs.append(backlog)
+
+        def settimeout(self, timeout: float) -> None:
+            del timeout
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle.socket.socket', lambda *args, **kwargs: _FakeSocket())
+    monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle._bound_socket_stat', lambda path: None)
+
+    server = CcbdSocketServer(socket_path)
+    server.listen()
+    server.shutdown()
+
+    assert listen_backlogs == [128]
 
 
 def test_socket_server_timeout_after_shutdown_does_not_run_tick(tmp_path: Path) -> None:
@@ -258,6 +318,22 @@ def test_socket_server_timeout_after_shutdown_does_not_run_tick(tmp_path: Path) 
     server.serve_forever(poll_interval=0.05, on_tick=lambda: tick_calls.append('tick'))
 
     assert tick_calls == []
+
+
+def test_socket_server_propagates_worker_tick_errors() -> None:
+    with tempfile.TemporaryDirectory(prefix='ccb-sock-', dir=str(Path(tempfile.gettempdir()))) as temp_dir:
+        server = CcbdSocketServer(Path(temp_dir) / 'ccbd.sock')
+
+        try:
+            with pytest.raises(RuntimeError, match='tick boom'):
+                server.serve_forever(
+                    poll_interval=0.01,
+                    on_tick=lambda: (_ for _ in ()).throw(RuntimeError('tick boom')),
+                )
+        finally:
+            server.shutdown()
+
+        assert server._worker_thread is None
 
 
 def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> None:

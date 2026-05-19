@@ -14,6 +14,7 @@ class ClaudeHomeLayout:
     trust_path: Path
     settings_path: Path
     auth_path: Path
+    credentials_path: Path
 
 
 def claude_layout_for_home(home_root: Path) -> ClaudeHomeLayout:
@@ -27,6 +28,7 @@ def claude_layout_for_home(home_root: Path) -> ClaudeHomeLayout:
         trust_path=root / '.claude.json',
         settings_path=claude_dir / 'settings.json',
         auth_path=root / '.config' / 'claude-code' / 'auth.json',
+        credentials_path=claude_dir / '.credentials.json',
     )
 
 

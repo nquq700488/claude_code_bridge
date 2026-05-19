@@ -24,7 +24,7 @@ def find_opencode_session_file(
 
 
 def load_opencode_session_info(*, session_finder: Callable[[], Optional[Path]]) -> Optional[dict]:
-    if "CCB_SESSION_ID" in os.environ:
+    if env_session_available():
         result = env_session_info()
         session_file = session_finder()
         if session_file:
@@ -90,6 +90,10 @@ def env_session_info() -> dict[str, object]:
         "pane_id": os.environ.get("OPENCODE_TMUX_SESSION", ""),
         "_session_file": None,
     }
+
+
+def env_session_available() -> bool:
+    return bool(os.environ.get("CCB_SESSION_ID") and os.environ.get("OPENCODE_RUNTIME_DIR"))
 
 
 def merge_session_file_data(result: dict[str, object], session_file: Path) -> None:

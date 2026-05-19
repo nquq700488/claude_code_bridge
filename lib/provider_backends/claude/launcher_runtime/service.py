@@ -3,7 +3,12 @@ from __future__ import annotations
 from pathlib import Path
 import shlex
 
-from provider_core.caller_env import caller_context_env, export_env_clause, join_env_prefix
+from provider_core.caller_env import (
+    caller_context_env,
+    export_env_clause,
+    join_env_prefix,
+    provider_user_session_env,
+)
 from provider_core.contracts import ProviderRuntimeLauncher
 
 
@@ -47,8 +52,11 @@ def build_start_cmd(
     settings_path = write_settings_overlay_fn(runtime_dir, profile=profile)
     env_prefix = join_env_prefix(
         build_env_prefix_fn(profile=profile, extra_env=spec.env),
+        export_env_clause(provider_user_session_env()),
         export_env_clause(home_overrides),
-        export_env_clause(caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)),
+        export_env_clause(
+            caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
+        ),
     )
     restore_target = resolve_restore_target_fn(spec=spec, runtime_dir=runtime_dir, restore=command.restore)
 

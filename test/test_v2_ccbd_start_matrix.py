@@ -74,25 +74,43 @@ def test_phase2_start_initializes_empty_existing_anchor(monkeypatch, tmp_path: P
     assert code == 0, stderr
     assert seen['source'] == 'anchor'
     assert seen['project_root'] == project_root.resolve()
-    assert (project_root / '.ccb' / 'ccb.config').is_file()
-    assert (project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8') == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False
     assert 'start_status: ok' in stdout
     assert 'agents: agent1, agent2, agent3' in stdout
 
 
-def test_phase2_start_rejects_missing_config_when_anchor_has_persisted_state(tmp_path: Path) -> None:
+def test_phase2_start_uses_builtin_default_when_anchor_has_persisted_state_without_config(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
     project_root = tmp_path / 'repo-missing-config-with-state'
     runtime_path = project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json'
     runtime_path.parent.mkdir(parents=True, exist_ok=True)
     runtime_path.write_text('{"agent_name":"demo","provider":"fake"}\n', encoding='utf-8')
+    seen: dict[str, object] = {}
+
+    def _fake_start(context, command):
+        del command
+        seen['source'] = context.project.source
+        seen['project_root'] = context.project.project_root
+        return SimpleNamespace(
+            project_root=str(context.project.project_root),
+            project_id=context.project.project_id,
+            started=('agent1', 'agent2', 'agent3'),
+            daemon_started=False,
+            socket_path=str(context.paths.ccbd_socket_path),
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
 
     code, stdout, stderr = _run_phase2_local([], cwd=project_root)
 
-    assert code == 1
-    assert stdout == ''
+    assert code == 0, stderr
+    assert seen['source'] == 'anchor'
+    assert seen['project_root'] == project_root.resolve()
     assert (project_root / '.ccb' / 'ccb.config').exists() is False
-    assert 'missing config for existing .ccb anchor with persisted state' in stderr
-    assert 'agents/demo/runtime.json' in stderr
+    assert 'start_status: ok' in stdout
+    assert 'agents: agent1, agent2, agent3' in stdout
 
 
 @pytest.mark.ccb_lifecycle_smoke

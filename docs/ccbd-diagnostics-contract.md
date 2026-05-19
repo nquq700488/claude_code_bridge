@@ -36,7 +36,8 @@ That means the diagnostics surface must answer at least:
 ### 3.1 Project Scope
 
 - Diagnostics are scoped to one `.ccb` anchor.
-- All project diagnostics records must live under that anchor's `.ccb/ccbd/`, except for provider session files that may live outside the project and are referenced as evidence.
+- All project diagnostics records must live under that anchor's logical `.ccb/ccbd/`, even when the physical runtime state root is relocated on WSL mounted-drive projects.
+- Runtime-root marker and reference files are part of the project diagnostics evidence chain and must be mapped back into the logical `.ccb` archive path in support bundles.
 - Project-local provider state under `.ccb/agents/<agent>/provider-state/` is diagnostics evidence and should be exported when it is relevant to session isolation or binding analysis.
 - Diagnostics export must never merge multiple project anchors into one bundle.
 
@@ -70,6 +71,7 @@ Rules:
 - daemon boot must write a startup report
 - foreground `start` must overwrite it with the more specific `start_command` report
 - startup report write failure must not replace the original startup error with a diagnostics-only error
+- when project tmux preparation fails, `failure_reason` must preserve the user-facing startup failure plus tmux command context, the effective tmux socket path, socket path byte length when known, and original tmux stderr/stdout detail when available
 
 ### 3.3 Shutdown Report
 
@@ -131,6 +133,7 @@ Rules:
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
 - `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
+- `doctor` must also surface preferred/effective socket path byte lengths and an equivalent `tmux -S <effective-socket> start-server` command when a project tmux socket path is known, so macOS and WSL socket pathname failures can be diagnosed from one report
 - malformed namespace diagnostics must surface as diagnostics errors, not silently disappear
 
 ### 3.6 Doctor Read Path
@@ -141,6 +144,11 @@ Rules:
 
 - it must summarize current backend inspection plus latest persisted reports
 - agent binding diagnostics must include both `tmux_socket_name` and `tmux_socket_path` when known so project-scoped namespace bugs can be diagnosed from logs alone
+- startup failure diagnostics must retain chained cause detail in CLI output and in `ccbd_startup_last_failure_reason` when the backend recorded it
+- Codex agent diagnostics should surface managed in-pane session-switch state
+  when `.ccb/agents/<agent>/provider-runtime/codex/session-switch.json`
+  exists, including state, reason, commit status, and candidate session
+  identity
 - it must not crash only because one diagnostics artifact is missing or malformed
 - malformed diagnostics files must surface as diagnostics errors, not silent omission
 
@@ -177,7 +185,8 @@ Rules:
 - bundle export must be project-local and deterministic enough for support usage
 - provider-state export must exclude credential material such as copied auth
   tokens and provider-managed credential files like `auth.json` or
-  `oauth_creds.json`
+  `oauth_creds.json`; Gemini projected auth artifacts such as `.env` and
+  `google_accounts.json` must also be excluded
 - Codex managed-home violations must remain visible as diagnostics evidence; bundle export must not hide them by silently replacing the managed reader source with global `~/.codex/sessions`
 
 ### 3.8 Keeper Child Reaping

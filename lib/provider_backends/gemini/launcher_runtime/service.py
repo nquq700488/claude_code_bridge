@@ -7,7 +7,12 @@ from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_core.contracts import ProviderRuntimeLauncher
-from provider_core.caller_env import caller_context_env, export_env_clause, join_env_prefix
+from provider_core.caller_env import (
+    caller_context_env,
+    export_env_clause,
+    join_env_prefix,
+    provider_user_session_env,
+)
 from provider_core.runtime_shared import provider_start_parts
 from provider_profiles import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
@@ -56,8 +61,11 @@ def build_start_cmd(
     cmd = " ".join(shlex.quote(str(part)) for part in cmd_parts)
     env_prefix = join_env_prefix(
         build_gemini_env_prefix(profile=profile, extra_env=spec.env),
+        export_env_clause(provider_user_session_env()),
         export_env_clause(home_overrides),
-        export_env_clause(caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)),
+        export_env_clause(
+            caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
+        ),
     )
     if env_prefix:
         return f"{env_prefix}; {cmd}"

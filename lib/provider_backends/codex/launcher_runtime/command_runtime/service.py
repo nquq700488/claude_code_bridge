@@ -5,7 +5,7 @@ import shlex
 from pathlib import Path
 from typing import Callable
 
-from provider_core.caller_env import caller_context_env
+from provider_core.caller_env import caller_context_env, provider_user_session_env
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
 from provider_profiles.codex_home_config import codex_api_authority
 
@@ -88,6 +88,7 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
         explicit_env.pop('OPENAI_BASE_URL', None)
         explicit_env.pop('OPENAI_API_BASE', None)
     return {
+        **provider_user_session_env(),
         **inherited_api_env,
         **explicit_env,
         'CODEX_RUNTIME_DIR': str(runtime_dir),

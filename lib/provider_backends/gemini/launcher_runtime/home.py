@@ -4,10 +4,13 @@ import json
 from pathlib import Path
 import shutil
 
+from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
 
 from ..home_layout import GeminiHomeLayout, gemini_layout_for_home, gemini_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
+
+_GEMINI_LOGIN_AUTH_FILENAMES = ('oauth_creds.json', 'google_accounts.json')
 
 
 def resolve_gemini_home_layout(runtime_dir: Path, profile) -> GeminiHomeLayout:
@@ -28,6 +31,7 @@ def prepare_gemini_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
     materialize_gemini_home_config(layout.home_root, profile=profile)
     return {
         'HOME': str(layout.home_root),
+        'GEMINI_CLI_HOME': str(layout.home_root),
         'GEMINI_ROOT': str(layout.tmp_root),
     }
 
@@ -102,6 +106,7 @@ def materialize_gemini_home_config(target_home: Path, *, profile=None, source_ho
     source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
     if layout.home_root != source_root:
         _materialize_settings(source_root, layout, profile=profile)
+        _materialize_env_file(source_root, layout, profile=profile)
         _materialize_trusted_folders(source_root, layout)
         _materialize_auth(source_root, layout, profile=profile)
     return layout
@@ -125,12 +130,22 @@ def _materialize_trusted_folders(source_home: Path, layout: GeminiHomeLayout) ->
     _write_json_object(layout.trusted_folders_path, merged)
 
 
-def _materialize_auth(source_home: Path, layout: GeminiHomeLayout, *, profile) -> None:
-    target_auth = layout.gemini_dir / 'oauth_creds.json'
-    if not _should_project_oauth_credentials(source_home / '.gemini' / 'settings.json', profile=profile):
-        _remove_file(target_auth)
+def _materialize_env_file(source_home: Path, layout: GeminiHomeLayout, *, profile) -> None:
+    target_env = layout.gemini_dir / '.env'
+    env_payload = _projected_dotenv_payload(source_home / '.gemini' / '.env', profile=profile)
+    if not env_payload:
+        _remove_file(target_env)
         return
-    _sync_file(source_home / '.gemini' / 'oauth_creds.json', target_auth)
+    _write_env_file(target_env, env_payload)
+
+
+def _materialize_auth(source_home: Path, layout: GeminiHomeLayout, *, profile) -> None:
+    if not _should_project_login_auth(source_home / '.gemini' / 'settings.json', profile=profile):
+        for filename in _GEMINI_LOGIN_AUTH_FILENAMES:
+            _remove_file(layout.gemini_dir / filename)
+        return
+    for filename in _GEMINI_LOGIN_AUTH_FILENAMES:
+        _sync_file(source_home / '.gemini' / filename, layout.gemini_dir / filename)
 
 
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
@@ -205,6 +220,78 @@ def _write_json_object(path: Path, payload: dict[str, object]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
 
 
+def _projected_dotenv_payload(source_env_path: Path, *, profile) -> dict[str, str]:
+    if not _inherits_api(profile):
+        return {}
+    source_payload = _read_env_file(source_env_path)
+    if not source_payload:
+        return {}
+    allowed = provider_api_env_keys('gemini')
+    return {
+        key: value
+        for key, value in source_payload.items()
+        if key in allowed and str(value).strip()
+    }
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except Exception:
+        return {}
+    payload: dict[str, str] = {}
+    for line in lines:
+        parsed = _parse_env_line(line)
+        if parsed is None:
+            continue
+        key, value = parsed
+        payload[key] = value
+    return payload
+
+
+def _parse_env_line(line: str) -> tuple[str, str] | None:
+    raw = str(line or '').strip()
+    if not raw or raw.startswith('#'):
+        return None
+    if raw.startswith('export '):
+        raw = raw[len('export ') :].lstrip()
+    if '=' not in raw:
+        return None
+    key, value = raw.split('=', 1)
+    key = key.strip()
+    if not _is_env_key(key):
+        return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+        value = value[1:-1]
+    return key, value
+
+
+def _is_env_key(value: str) -> bool:
+    if not value:
+        return False
+    first = value[0]
+    if not (first == '_' or first.isalpha()):
+        return False
+    return all(ch == '_' or ch.isalnum() for ch in value)
+
+
+def _write_env_file(path: Path, payload: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [f'{key}={_quote_env_value(value)}' for key, value in sorted(payload.items())]
+    path.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+    try:
+        path.chmod(0o600)
+    except Exception:
+        pass
+
+
+def _quote_env_value(value: object) -> str:
+    raw = str(value)
+    escaped = raw.replace('\\', '\\\\').replace('"', '\\"').replace('\n', '\\n')
+    return f'"{escaped}"'
+
+
 def _needs_settings_stub(profile) -> bool:
     return bool(_inherits_api(profile) or _inherits_auth(profile) or _inherits_config(profile))
 
@@ -221,7 +308,7 @@ def _inherits_config(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_config', True))
 
 
-def _should_project_oauth_credentials(source_settings_path: Path, *, profile) -> bool:
+def _should_project_login_auth(source_settings_path: Path, *, profile) -> bool:
     if not _inherits_auth(profile):
         return False
     selected_type = _selected_auth_type(_read_json_object(source_settings_path))
@@ -302,7 +389,7 @@ def _remove_file(path: Path) -> None:
 
 
 def _system_home_root() -> Path:
-    return Path.home().expanduser()
+    return current_provider_source_home()
 
 
 __all__ = [

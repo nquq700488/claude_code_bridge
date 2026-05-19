@@ -72,12 +72,12 @@ def test_resolve_ignores_home_anchor_when_searching_from_subdirectory(
         ProjectResolver().resolve(worktree)
 
 
-def test_bootstrap_project_creates_anchor(tmp_path: Path) -> None:
+def test_bootstrap_project_creates_anchor_without_project_config(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     project_root.mkdir()
     context = bootstrap_project(project_root)
     assert (project_root / '.ccb').is_dir()
-    assert (project_root / '.ccb' / 'ccb.config').is_file()
+    assert not (project_root / '.ccb' / 'ccb.config').exists()
     assert context.source == 'bootstrapped'
 
 

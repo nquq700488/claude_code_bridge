@@ -72,7 +72,7 @@ def test_ccb_config_validate_reports_invalid_token(tmp_path: Path) -> None:
     proc = _run_ccb(['config', 'validate'], cwd=project_root)
     assert proc.returncode == 1
     assert 'config_status: invalid' in proc.stderr
-    assert 'invalid TOML config' in proc.stderr
+    assert 'invalid TOML config' in proc.stderr or 'rich TOML config requires Python 3.11+' in proc.stderr
 
 
 def test_ccb_config_validate_rejects_cmd_agent_name(tmp_path: Path) -> None:

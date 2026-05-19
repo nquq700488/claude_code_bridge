@@ -1837,6 +1837,34 @@ def test_codex_launcher_build_start_cmd_exports_inherited_api_env(monkeypatch, t
     assert f'OPENAI_BASE_URL={shlex.quote("https://api.example.test/v1")}' in cmd
 
 
+def test_codex_launcher_build_start_cmd_exports_user_session_transport_without_runtime_leaks(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    ambient_runtime = tmp_path / 'ambient-codex-runtime'
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:7890')
+    monkeypatch.setenv('NO_PROXY', 'localhost,127.0.0.1')
+    monkeypatch.setenv('CODEX_CA_CERTIFICATE', '/tmp/codex-ca.pem')
+    monkeypatch.setenv('WSL_INTEROP', '/run/WSL/1234_interop')
+    monkeypatch.setenv('CODEX_RUNTIME_DIR', str(ambient_runtime))
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=False)
+
+    cmd = codex_launcher.build_start_cmd(command, spec, runtime_dir, 'sess-transport')
+
+    assert f'HTTPS_PROXY={shlex.quote("http://127.0.0.1:7890")}' in cmd
+    assert f'NO_PROXY={shlex.quote("localhost,127.0.0.1")}' in cmd
+    assert f'CODEX_CA_CERTIFICATE={shlex.quote("/tmp/codex-ca.pem")}' in cmd
+    assert f'WSL_INTEROP={shlex.quote("/run/WSL/1234_interop")}' in cmd
+    assert f'CODEX_RUNTIME_DIR={shlex.quote(str(runtime_dir))}' in cmd
+    assert str(ambient_runtime) not in cmd
+    assert 'CCB_CALLER_ACTOR=stale-agent' not in cmd
+
+
 def test_codex_launcher_build_start_cmd_refreshes_managed_home_projection(monkeypatch, tmp_path: Path) -> None:
     runtime_dir = tmp_path / 'runtime'
     runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -2087,6 +2115,42 @@ def test_claude_launcher_build_start_cmd_uses_materialized_profile_home(monkeypa
     assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(profile_home / ".claude" / "projects"))}' in start_cmd
 
 
+def test_claude_launcher_build_start_cmd_exports_user_session_transport_without_runtime_leaks(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-claude-transport'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    source_home = tmp_path / 'source-home'
+    (source_home / '.claude').mkdir(parents=True, exist_ok=True)
+    ambient_projects = tmp_path / 'ambient-claude-projects'
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:7890')
+    monkeypatch.setenv('NODE_EXTRA_CA_CERTS', '/tmp/node-ca.pem')
+    monkeypatch.setenv('WSL_INTEROP', '/run/WSL/1234_interop')
+    monkeypatch.setenv('CLAUDE_PROJECTS_ROOT', str(ambient_projects))
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
+    monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: source_home)
+    monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: source_home)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    start_cmd = claude_launcher.build_start_cmd(command, spec, runtime_dir, 'claude-sess-transport')
+
+    managed_projects = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home' / '.claude' / 'projects'
+    assert f'HTTPS_PROXY={shlex.quote("http://127.0.0.1:7890")}' in start_cmd
+    assert f'NODE_EXTRA_CA_CERTS={shlex.quote("/tmp/node-ca.pem")}' in start_cmd
+    assert f'WSL_INTEROP={shlex.quote("/run/WSL/1234_interop")}' in start_cmd
+    assert f'CLAUDE_PROJECTS_ROOT={shlex.quote(str(managed_projects))}' in start_cmd
+    assert str(ambient_projects) not in start_cmd
+    assert 'CCB_CALLER_ACTOR=stale-agent' not in start_cmd
+
+
 def test_claude_launcher_build_start_cmd_refreshes_managed_home_projection(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-claude-refresh'
     runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
@@ -2104,6 +2168,7 @@ def test_claude_launcher_build_start_cmd_refreshes_managed_home_projection(monke
 
     monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: home_dir)
     monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: home_dir)
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(home_dir))
     monkeypatch.setattr(
         claude_launcher,
         '_resolve_claude_restore_target',
@@ -2172,6 +2237,7 @@ def test_claude_launcher_build_start_cmd_preserves_managed_auth_when_system_home
 
     monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: home_dir)
     monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: home_dir)
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(home_dir))
     monkeypatch.setattr(
         claude_launcher,
         '_resolve_claude_restore_target',
@@ -2195,10 +2261,10 @@ def test_claude_launcher_build_start_cmd_projects_official_login_auth_into_manag
     runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'claude'
     runtime_dir.mkdir(parents=True, exist_ok=True)
     home_dir = tmp_path / 'home'
-    source_auth = home_dir / '.config' / 'claude-code' / 'auth.json'
-    source_auth.parent.mkdir(parents=True, exist_ok=True)
-    source_auth.write_text(
-        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+    source_credentials = home_dir / '.claude' / '.credentials.json'
+    source_credentials.parent.mkdir(parents=True, exist_ok=True)
+    source_credentials.write_text(
+        json.dumps({'claudeAiOauth': {'refreshToken': 'system-refresh-token'}}, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
 
@@ -2207,6 +2273,7 @@ def test_claude_launcher_build_start_cmd_projects_official_login_auth_into_manag
 
     monkeypatch.setattr('provider_backends.claude.launcher.Path.home', lambda: home_dir)
     monkeypatch.setattr('provider_backends.claude.launcher_runtime.home.Path.home', lambda: home_dir)
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(home_dir))
     monkeypatch.setattr(
         claude_launcher,
         '_resolve_claude_restore_target',
@@ -2223,11 +2290,10 @@ def test_claude_launcher_build_start_cmd_projects_official_login_auth_into_manag
         / 'provider-state'
         / 'claude'
         / 'home'
-        / '.config'
-        / 'claude-code'
-        / 'auth.json'
+        / '.claude'
+        / '.credentials.json'
     )
-    assert json.loads(managed_auth.read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+    assert json.loads(managed_auth.read_text(encoding='utf-8'))['claudeAiOauth']['refreshToken'] == 'system-refresh-token'
 
 
 def test_gemini_launcher_build_start_cmd_uses_isolated_profile_api_env(tmp_path: Path) -> None:
@@ -2252,3 +2318,31 @@ def test_gemini_launcher_build_start_cmd_uses_isolated_profile_api_env(tmp_path:
     assert 'unset GEMINI_API_KEY' in start_cmd
     assert f'GEMINI_API_KEY={shlex.quote("gemini-key")}' in start_cmd
     assert start_cmd.endswith('gemini')
+
+
+def test_gemini_launcher_build_start_cmd_exports_user_session_transport_without_runtime_leaks(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-gemini-transport'
+    runtime_dir = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-runtime' / 'gemini'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    ambient_root = tmp_path / 'ambient-gemini-root'
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:7890')
+    monkeypatch.setenv('REQUESTS_CA_BUNDLE', '/tmp/requests-ca.pem')
+    monkeypatch.setenv('WSL_INTEROP', '/run/WSL/1234_interop')
+    monkeypatch.setenv('GEMINI_ROOT', str(ambient_root))
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
+    spec = _spec('reviewer', provider='gemini')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    start_cmd = gemini_launcher.build_start_cmd(command, spec, runtime_dir, 'gemini-sess-transport')
+
+    managed_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'gemini' / 'home'
+    managed_root = managed_home / '.gemini' / 'tmp'
+    assert f'HTTPS_PROXY={shlex.quote("http://127.0.0.1:7890")}' in start_cmd
+    assert f'REQUESTS_CA_BUNDLE={shlex.quote("/tmp/requests-ca.pem")}' in start_cmd
+    assert f'WSL_INTEROP={shlex.quote("/run/WSL/1234_interop")}' in start_cmd
+    assert f'GEMINI_ROOT={shlex.quote(str(managed_root))}' in start_cmd
+    assert str(ambient_root) not in start_cmd
+    assert 'CCB_CALLER_ACTOR=stale-agent' not in start_cmd

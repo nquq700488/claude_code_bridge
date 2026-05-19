@@ -13,6 +13,7 @@ from cli.context import CliContext
 from cli.models import ParsedStartCommand
 import cli.services.daemon as daemon_service
 import ccbd.keeper as keeper_module
+import ccbd.keeper_runtime.loop as keeper_loop
 from project.resolver import bootstrap_project
 from storage.paths import PathLayout
 
@@ -345,6 +346,37 @@ def test_project_keeper_keeps_mounted_phase_when_config_check_times_out(tmp_path
     assert lifecycle.last_failure_reason == 'config_check_failed:ping timeout'
 
 
+def test_project_keeper_config_probe_uses_shared_control_plane_timeout(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-keeper-probe-timeout'
+    ctx = _context(project_root, 'agent1:codex\n')
+    expected = project_config_identity_payload(load_project_config(project_root).config)
+    captured: list[float | None] = []
+
+    class _FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None) -> None:
+            assert socket_path == ctx.paths.ccbd_socket_path
+            captured.append(timeout_s)
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            return {'config_signature': expected['config_signature']}
+
+        def stop_all(self, *, force: bool = False) -> dict[str, object]:
+            assert force is False
+            return {'ok': True}
+
+    keeper = ProjectKeeper(project_root, pid=892)
+    monkeypatch.setattr(keeper_loop, 'CcbdClient', _FakeClient)
+
+    assert keeper_loop.daemon_matches_project_config(keeper) is True
+    keeper_loop.request_shutdown(keeper)
+
+    assert captured == [
+        keeper_loop.CONTROL_PLANE_RPC_TIMEOUT_S,
+        keeper_loop.CONTROL_PLANE_RPC_TIMEOUT_S,
+    ]
+
+
 def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-stop'
     ctx = _context(project_root, 'agent1:codex\n')
@@ -372,25 +404,64 @@ def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> Non
     assert state.state == 'stopped'
 
 
-def test_project_keeper_exits_and_cleans_keeper_residue_when_config_missing(tmp_path: Path) -> None:
+def test_project_keeper_uses_builtin_default_when_config_missing(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-missing-config'
     _context(project_root, 'agent1:codex\n')
     config_path = project_root / '.ccb' / 'ccb.config'
     config_path.unlink()
+    ctx = CliContext(
+        command=ParsedStartCommand(project=None, agent_names=(), restore=False, auto_permission=False),
+        cwd=project_root,
+        project=bootstrap_project(project_root),
+        paths=PathLayout(project_root),
+    )
+    spawn_calls: list[dict] = []
 
     keeper = ProjectKeeper(
         project_root,
         pid=1001,
-        sleep_fn=lambda _seconds: (_ for _ in ()).throw(AssertionError('keeper should exit before sleeping')),
-        spawn_ccbd_process_fn=lambda **kwargs: (_ for _ in ()).throw(AssertionError('keeper should not spawn')),
+        spawn_ccbd_process_fn=lambda **kwargs: spawn_calls.append(dict(kwargs)),
+    )
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.MISSING,
+            socket_connectable=False,
+            pid_alive=False,
+            heartbeat_fresh=False,
+            reason='lease_missing',
+        )
+    )
+    CcbdLifecycleStore(keeper.paths).save(
+        build_lifecycle(
+            project_id=ctx.project.project_id,
+            occurred_at='2026-04-02T00:00:00Z',
+            desired_state='running',
+            phase='unmounted',
+            generation=0,
+            keeper_pid=1001,
+            socket_path=ctx.paths.ccbd_socket_path,
+        )
+    )
+    state = KeeperState(
+        project_id=ctx.project.project_id,
+        keeper_pid=1001,
+        started_at='2026-04-02T00:00:00Z',
+        last_check_at='2026-04-02T00:00:00Z',
+        state='running',
     )
 
-    code = keeper.run_forever(poll_interval=0.1, start_timeout_s=0.1)
+    next_state = keeper._reconcile_once(state=state, start_timeout_s=0.1)
 
-    assert code == 0
-    assert (project_root / '.ccb' / 'ccbd' / 'keeper.json').exists() is False
-    assert (project_root / '.ccb' / 'ccbd' / 'keeper.lock').exists() is False
-    assert (project_root / '.ccb').exists() is False
+    loaded_config = load_project_config(project_root)
+    assert loaded_config.source_path is None
+    assert loaded_config.used_default is True
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False
+    assert len(spawn_calls) == 1
+    assert spawn_calls[0]['project_root'] == project_root
+    assert spawn_calls[0]['keeper_pid'] == 1001
+    assert next_state.restart_count == 1
+    assert next_state.last_failure_reason is None
 
 
 def test_reap_child_processes_drains_exited_children() -> None:

@@ -18,6 +18,7 @@ import pytest
 from ccbd.app import CcbdApp
 from ccbd.socket_client import CcbdClient, CcbdClientError
 from ccbd.services.health import HealthMonitor
+from cli.services.start_runtime import StartSummary
 import cli.phase2 as phase2_module
 from cli.phase2 import maybe_handle_phase2
 from storage.paths import PathLayout
@@ -110,11 +111,40 @@ def _wait_for_ccbd_execution_summary(
     raise AssertionError(f'expected execution summary; last stdout={last.stdout!r} stderr={last.stderr!r}')
 
 
-def _run_phase2_local(args: list[str], *, cwd: Path) -> tuple[int, str, str]:
+def _run_phase2_local(args: list[str], *, cwd: Path, start_app: CcbdApp | None = None) -> tuple[int, str, str]:
     stdout = StringIO()
     stderr = StringIO()
-    code = maybe_handle_phase2(args, cwd=cwd, stdout=stdout, stderr=stderr)
+    if start_app is None or args:
+        code = maybe_handle_phase2(args, cwd=cwd, stdout=stdout, stderr=stderr)
+        return code, stdout.getvalue(), stderr.getvalue()
+    original_start_agents = phase2_module.start_agents
+    try:
+        phase2_module.start_agents = _phase2_start_against_app(start_app)
+        code = maybe_handle_phase2(args, cwd=cwd, stdout=stdout, stderr=stderr)
+    finally:
+        phase2_module.start_agents = original_start_agents
     return code, stdout.getvalue(), stderr.getvalue()
+
+
+def _phase2_start_against_app(app: CcbdApp):
+    # In-process app tests own the daemon lifecycle; starting keeper here races the fixture.
+    def _start(context, command, *, terminal_size=None):
+        assert context.project.project_root == app.project_root
+        payload = CcbdClient(app.paths.ccbd_socket_path).start(
+            agent_names=command.agent_names,
+            restore=command.restore,
+            auto_permission=command.auto_permission,
+            terminal_size=terminal_size,
+        )
+        return StartSummary(
+            project_root=str(payload.get("project_root") or context.project.project_root),
+            project_id=str(payload.get("project_id") or context.project.project_id),
+            started=tuple(str(item) for item in (payload.get("started") or ())),
+            daemon_started=False,
+            socket_path=str(payload.get("socket_path") or context.paths.ccbd_socket_path),
+        )
+
+    return _start
 
 
 def _extract_accepted_job_id(stdout: str, *, target: str) -> str:
@@ -156,7 +186,7 @@ def _disable_health_monitor_in_phase2_blackbox_tests(monkeypatch) -> None:
     monkeypatch.setattr(HealthMonitor, 'check_all', lambda self: {})
 
 
-def test_phase2_start_bootstraps_missing_project_and_default_config(monkeypatch, tmp_path: Path) -> None:
+def test_phase2_start_bootstraps_missing_project_without_writing_config(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-bootstrap'
     project_root.mkdir()
     seen: dict[str, object] = {}
@@ -181,8 +211,7 @@ def test_phase2_start_bootstraps_missing_project_and_default_config(monkeypatch,
     assert seen['source'] == 'bootstrapped'
     assert seen['project_root'] == project_root.resolve()
     assert (project_root / '.ccb').is_dir()
-    assert (project_root / '.ccb' / 'ccb.config').is_file()
-    assert (project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8') == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False
     assert 'start_status: ok' in stdout
     assert 'agents: codex, claude' in stdout
 
@@ -201,18 +230,33 @@ def test_ccb_kill_without_anchor_is_noop_and_does_not_bootstrap(tmp_path: Path) 
     assert not (project_root / '.ccb').exists()
 
 
-def test_phase2_missing_config_with_persisted_state_reports_reset_guidance(tmp_path: Path) -> None:
+def test_phase2_missing_config_with_persisted_state_uses_builtin_default(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-missing-config-guidance'
     _write(project_root / '.ccb' / 'agents' / 'demo' / 'runtime.json', '{"agent_name":"demo"}\n')
+    seen: dict[str, object] = {}
+
+    def _fake_start(context, command):
+        del command
+        seen['source'] = context.project.source
+        seen['project_root'] = context.project.project_root
+        return SimpleNamespace(
+            project_root=str(context.project.project_root),
+            project_id=context.project.project_id,
+            started=('agent1', 'agent2', 'agent3'),
+            daemon_started=False,
+            socket_path=str(context.paths.ccbd_socket_path),
+        )
+
+    monkeypatch.setattr(phase2_module, 'start_agents', _fake_start)
 
     code, stdout, stderr = _run_phase2_local([], cwd=project_root)
 
-    assert code == 1
-    assert stdout == ''
-    assert 'missing config for existing .ccb anchor with persisted state' in stderr
-    assert 'restore .ccb/ccb.config' in stderr
-    assert 'ccb -n' in stderr
-    assert 'interactive terminal' in stderr
+    assert code == 0, stderr
+    assert seen['source'] == 'anchor'
+    assert seen['project_root'] == project_root.resolve()
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False
+    assert 'start_status: ok' in stdout
+    assert 'agents: agent1, agent2, agent3' in stdout
 
 
 def test_ccb_kill_succeeds_with_persisted_state_without_config(tmp_path: Path) -> None:
@@ -372,7 +416,7 @@ def test_phase2_start_with_new_context_rebuilds_stale_anchor_before_bootstrap(mo
     seen: dict[str, object] = {}
 
     def _fake_start(context, command):
-        seen['config_text'] = (context.project.project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8')
+        seen['config_exists'] = (context.project.project_root / '.ccb' / 'ccb.config').exists()
         seen['ghost_exists'] = (context.project.project_root / '.ccb' / 'agents' / 'ghost').exists()
         seen['restore'] = command.restore
         return SimpleNamespace(
@@ -392,7 +436,7 @@ def test_phase2_start_with_new_context_rebuilds_stale_anchor_before_bootstrap(mo
 
     assert code == 0, stderr.getvalue()
     assert seen['ghost_exists'] is False
-    assert seen['config_text'] == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert seen['config_exists'] is False
     assert seen['restore'] is False
     assert 'start_status: ok' in stdout.getvalue()
 
@@ -408,7 +452,7 @@ def test_phase2_start_with_new_context_rebuilds_after_kill_when_config_missing(m
     seen: dict[str, object] = {}
 
     def _fake_start(context, command):
-        seen['config_text'] = (context.project.project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8')
+        seen['config_exists'] = (context.project.project_root / '.ccb' / 'ccb.config').exists()
         seen['demo_exists'] = (context.project.project_root / '.ccb' / 'agents' / 'demo').exists()
         seen['restore'] = command.restore
         return SimpleNamespace(
@@ -429,7 +473,7 @@ def test_phase2_start_with_new_context_rebuilds_after_kill_when_config_missing(m
     assert code == 0, stderr.getvalue()
     assert seen['restore'] is False
     assert seen['demo_exists'] is False
-    assert seen['config_text'] == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert seen['config_exists'] is False
     assert 'start_status: ok' in stdout.getvalue()
 
 
@@ -488,6 +532,31 @@ def test_phase2_reports_subprocess_failure_without_traceback(monkeypatch, tmp_pa
     assert stdout.getvalue() == ''
     assert 'command_status: failed' in stderr
     assert 'returned non-zero exit status 1' in stderr
+    assert 'Traceback' not in stderr
+
+
+def test_phase2_reports_exception_cause_without_traceback(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-cause'
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex\n')
+
+    def _raise_wrapped_error(context):
+        del context
+        cause = RuntimeError('tmux detail: socket path too long')
+        raise RuntimeError('failed to prepare tmux server') from cause
+
+    monkeypatch.setattr('cli.phase2_runtime.handlers_start.attach_started_project_namespace', _raise_wrapped_error)
+    monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
+
+    stdout = _TtyStringIO()
+    stderr_io = StringIO()
+    code = maybe_handle_phase2([], cwd=project_root, stdout=stdout, stderr=stderr_io)
+    stderr = stderr_io.getvalue()
+
+    assert code == 1
+    assert stdout.getvalue() == ''
+    assert 'command_status: failed' in stderr
+    assert 'error: failed to prepare tmux server' in stderr
+    assert 'error_cause: tmux detail: socket path too long' in stderr
     assert 'Traceback' not in stderr
 
 
@@ -1363,6 +1432,7 @@ def test_ccb_doctor_and_ping_expose_opencode_restore_degradation(tmp_path: Path)
     assert kill.returncode == 0, kill.stderr
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
@@ -1407,7 +1477,7 @@ def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello opencode dead'], cwd=project_root)
@@ -1430,6 +1500,7 @@ def test_ccb_opencode_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_opencode_real_adapter_blackbox_completed_reply_without_done_marker(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
@@ -1484,7 +1555,7 @@ def test_ccb_opencode_real_adapter_blackbox_completed_reply_without_done_marker(
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello opencode'], cwd=project_root)
@@ -1507,6 +1578,7 @@ def test_ccb_opencode_real_adapter_blackbox_completed_reply_without_done_marker(
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import opencode as opencode_adapter_module
 
@@ -1576,7 +1648,7 @@ def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monke
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello opencode cancel'], cwd=project_root)
@@ -1608,6 +1680,7 @@ def test_ccb_opencode_real_adapter_blackbox_cancel_stops_legacy_completion(monke
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import droid as droid_adapter_module
 
@@ -1672,7 +1745,7 @@ def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, t
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello droid dead'], cwd=project_root)
@@ -1695,6 +1768,7 @@ def test_ccb_droid_real_adapter_blackbox_pane_dead_fails_degraded(monkeypatch, t
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_droid_real_adapter_blackbox_terminal_done_marker_completion(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import droid as droid_adapter_module
 
@@ -1768,7 +1842,7 @@ def test_ccb_droid_real_adapter_blackbox_terminal_done_marker_completion(monkeyp
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello droid'], cwd=project_root)
@@ -1791,6 +1865,7 @@ def test_ccb_droid_real_adapter_blackbox_terminal_done_marker_completion(monkeyp
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_droid_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import droid as droid_adapter_module
 
@@ -1868,7 +1943,7 @@ def test_ccb_droid_real_adapter_blackbox_cancel_stops_legacy_completion(monkeypa
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello droid cancel'], cwd=project_root)
@@ -2172,6 +2247,7 @@ def test_ccb_fake_codex_provider_blackbox_watch_chain(tmp_path: Path) -> None:
     assert kill.returncode == 0, kill.stderr
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_codex_real_adapter_blackbox_watch_chain_without_done_marker(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import codex as codex_adapter_module
 
@@ -2274,7 +2350,7 @@ def test_ccb_codex_real_adapter_blackbox_watch_chain_without_done_marker(monkeyp
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'start_status: ok' in stdout
 
@@ -2311,6 +2387,7 @@ def test_ccb_codex_real_adapter_blackbox_watch_chain_without_done_marker(monkeyp
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import codex as codex_adapter_module
 
@@ -2401,7 +2478,7 @@ def test_ccb_codex_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pat
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume codex'], cwd=project_root)
@@ -2600,7 +2677,7 @@ def test_ccb_two_named_codex_agents_concurrent_ask_isolated(monkeypatch, tmp_pat
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'agents: agent1, agent2' in stdout
 
@@ -2821,7 +2898,7 @@ def test_ccb_two_named_codex_agents_recover_after_ccbd_restart(monkeypatch, tmp_
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
         assert 'agents: agent1, agent2' in stdout
 
@@ -3012,7 +3089,7 @@ def test_ccb_two_named_claude_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'agents: agent1, agent2' in stdout
 
@@ -3195,7 +3272,7 @@ def test_ccb_two_named_gemini_agents_concurrent_ask_isolated(monkeypatch, tmp_pa
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'agents: agent1, agent2' in stdout
 
@@ -3360,7 +3437,7 @@ def test_ccb_two_named_opencode_agents_concurrent_ask_isolated(monkeypatch, tmp_
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'agents: agent1, agent2' in stdout
 
@@ -3421,6 +3498,7 @@ def test_ccb_two_named_opencode_agents_concurrent_ask_isolated(monkeypatch, tmp_
         _assert_phase2_app_shutdown_clean(project_root, app, thread)
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_stale_preview(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -3526,7 +3604,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_rotate_clears_s
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini and rotate'], cwd=project_root)
@@ -3688,6 +3766,7 @@ def test_ccb_fake_legacy_provider_degraded_done_marker_completion(tmp_path: Path
     assert kill.returncode == 0, kill.stderr
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import claude as claude_adapter_module
 
@@ -3757,7 +3836,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'start_status: ok' in stdout
 
@@ -3791,6 +3870,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import claude as claude_adapter_module
 
@@ -3860,7 +3940,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkey
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello claude'], cwd=project_root)
@@ -3883,6 +3963,7 @@ def test_ccb_claude_real_adapter_blackbox_watch_chain_without_done_marker(monkey
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import claude as claude_adapter_module
 
@@ -3957,7 +4038,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume claude'], cwd=project_root)
@@ -4000,6 +4081,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
             assert not thread1.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boundary_completes(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -4131,7 +4213,7 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello claude rotate'], cwd=project_root)
@@ -4168,6 +4250,7 @@ def test_ccb_claude_real_adapter_blackbox_rotate_and_subagent_only_new_main_boun
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent_only_new_main_boundary_completes(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -4292,7 +4375,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume claude rotate'], cwd=project_root)
@@ -4338,6 +4421,7 @@ def test_ccb_claude_real_adapter_recovers_after_ccbd_restart_rotate_and_subagent
             assert not thread1.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import gemini as gemini_adapter_module
 
@@ -4410,7 +4494,7 @@ def test_ccb_gemini_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
         assert 'start_status: ok' in stdout
 
@@ -4442,6 +4526,7 @@ def test_ccb_gemini_real_adapter_blackbox_watch_chain(monkeypatch, tmp_path: Pat
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_settle(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -4535,7 +4620,7 @@ def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_se
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini mutate'], cwd=project_root)
@@ -4571,6 +4656,7 @@ def test_ccb_gemini_real_adapter_blackbox_waits_for_last_snapshot_mutation_to_se
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import gemini as gemini_adapter_module
 
@@ -4644,7 +4730,7 @@ def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkey
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini rotate'], cwd=project_root)
@@ -4672,6 +4758,7 @@ def test_ccb_gemini_real_adapter_blackbox_handles_long_silence_and_rotate(monkey
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotate(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import gemini as gemini_adapter_module
 
@@ -4755,7 +4842,7 @@ def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotat
     _wait_for_path(app.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'hello gemini preview reset'], cwd=project_root)
@@ -4780,6 +4867,7 @@ def test_ccb_gemini_real_adapter_blackbox_clears_stale_reply_preview_after_rotat
         assert not thread.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_path: Path) -> None:
     from provider_execution import gemini as gemini_adapter_module
 
@@ -4866,7 +4954,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini'], cwd=project_root)
@@ -4909,6 +4997,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart(monkeypatch, tmp_pa
             assert not thread1.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_restart_mutation_settle(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -5008,7 +5097,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini mutate'], cwd=project_root)
@@ -5066,6 +5155,7 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
             assert not thread1.is_alive()
 
 
+@pytest.mark.provider_blackbox
 def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new_session_mutation_settle(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -5191,7 +5281,7 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
     _wait_for_path(app1.paths.ccbd_socket_path)
 
     try:
-        code, stdout, stderr = _run_phase2_local([], cwd=project_root)
+        code, stdout, stderr = _run_phase2_local([], cwd=project_root, start_app=app1)
         assert code == 0, stderr
 
         code, stdout, stderr = _run_phase2_local(['ask', 'demo', 'from', 'user', 'resume gemini rotate mutate'], cwd=project_root)

@@ -28,6 +28,8 @@ def test_opencode_comm_load_session_info_backfills_project_fields(tmp_path: Path
 
     comm = OpenCodeCommunicator.__new__(OpenCodeCommunicator)
     monkeypatch.setattr(OpenCodeCommunicator, "_find_session_file", lambda self: session_file)
+    monkeypatch.setenv("CCB_SESSION_ID", "ambient-non-opencode-session")
+    monkeypatch.delenv("OPENCODE_RUNTIME_DIR", raising=False)
 
     data = comm._load_session_info()
 

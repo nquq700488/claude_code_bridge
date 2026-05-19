@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+from runtime_env.user_session import USER_SESSION_TRANSPORT_ENV_KEYS
+
 
 _CONTROL_PLANE_ALLOWLIST = {
     'ANTHROPIC_API_KEY',
@@ -89,7 +91,7 @@ def control_plane_env(*, extra: dict[str, str] | None = None) -> dict[str, str]:
     for key, value in os.environ.items():
         if key in _CONTROL_PLANE_BLOCKED_EXACT:
             continue
-        if key in _CONTROL_PLANE_ALLOWLIST:
+        if key in _CONTROL_PLANE_ALLOWLIST or key in USER_SESSION_TRANSPORT_ENV_KEYS:
             env[key] = value
             continue
         if any(key.startswith(prefix) for prefix in _CONTROL_PLANE_BLOCKED_PREFIXES):

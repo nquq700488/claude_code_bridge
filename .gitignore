@@ -6,11 +6,12 @@ __pycache__/
 docs/
 !docs/
 !docs/**/*.md
+docs/ppt_materials/
 tests/
 test/dir1/.ccb/
 .ccb_config/
 .ccb/*
-!.ccb/ccb.config
+.ccb/ccb.config
 .codex
 .codex-session
 .gemini-session

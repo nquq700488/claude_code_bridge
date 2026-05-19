@@ -64,7 +64,7 @@ def test_cli_context_bootstraps_missing_project_when_requested(tmp_path: Path) -
     assert context.project.project_root == project_root.resolve()
     assert context.project.source == 'bootstrapped'
     assert (project_root / '.ccb').is_dir()
-    assert (project_root / '.ccb' / 'ccb.config').is_file()
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False
 
 
 def test_cli_context_bootstrap_rejects_nested_project_under_parent_anchor(tmp_path: Path) -> None:
@@ -132,5 +132,5 @@ def test_cli_context_bootstraps_local_project_instead_of_reusing_home_anchor(
     )
     assert context.project.project_root == project_root.resolve()
     assert context.project.source == 'bootstrapped'
-    rendered = (project_root / '.ccb' / 'ccb.config').read_text(encoding='utf-8')
-    assert rendered == 'cmd, agent1:codex; agent2:codex, agent3:claude\n'
+    assert (project_root / '.ccb').is_dir()
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False

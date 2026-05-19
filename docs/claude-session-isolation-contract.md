@@ -59,12 +59,20 @@ Inside that home, the managed Claude state is:
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/projects/`
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/session-env/`
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/settings.json`
-- `.ccb/agents/<agent>/provider-state/claude/home/.config/claude-code/auth.json`
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/.credentials.json`
   - only when inherited Claude Code login auth is projected into the managed home
+  - on macOS, this may be materialized from the user's Claude Code Keychain
+    entry when that entry can be read during startup
+- `.ccb/agents/<agent>/provider-state/claude/home/.config/claude-code/auth.json`
+  - copied only for compatibility with older or alternate Claude Code login
+    cache layouts
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/skills/` when skill inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/commands/` when command inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/CLAUDE.md` when Claude prompt inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude.json`
+  - contains managed workspace trust plus selected inherited Claude account
+    metadata required for official login reuse; it is not a provider
+    conversation identity
 
 If the effective Claude home is explicitly overridden by a provider profile, the
 effective projects root and session-env root must still be derived from that
@@ -92,6 +100,12 @@ the user's source Claude auth/config into the private managed home so the
 provider can authenticate, but projected secret material must not be exported by
 diagnostics.
 
+The user's source Claude home must be the real account home, or an explicit
+`CCB_SOURCE_HOME` override. A managed provider home under
+`.ccb/agents/<agent>/provider-state/<provider>/home` is runtime state and must
+not be treated as the source home for inherited Claude config or login
+credentials.
+
 ## 4. Startup Contract
 
 When `ccb` starts a managed Claude agent:
@@ -103,6 +117,9 @@ When `ccb` starts a managed Claude agent:
   launching Claude
 - it must materialize required Claude auth/config projections into the managed
   home without treating them as conversation identity
+- it must not use an existing managed provider home as the inherited source
+  home; if the current process `HOME` is a CCB provider-state home, startup must
+  fall back to the real account home or an explicit source-home override
 - managed Claude home materialization is part of startup preparation, before
   hook/trust installation and before launcher command assembly
 - managed `settings.json` projection must treat inherited system settings as the
@@ -113,7 +130,22 @@ When `ccb` starts a managed Claude agent:
   config
 - managed login-auth projection must synchronize Claude Code credential cache
   artifacts required for non-interactive reuse, such as
-  `.config/claude-code/auth.json`, when official login auth inheritance is enabled
+  `.claude/.credentials.json`, when official login auth inheritance is enabled
+- on macOS, where official Claude Code login secrets may live in macOS
+  Keychain instead of a source-home file, managed login-auth projection may
+  read the user's Claude Code Keychain item and materialize the equivalent
+  managed `.claude/.credentials.json` cache; projected secret material remains
+  provider state and must be excluded from diagnostics
+- managed login-auth projection may also synchronize older or alternate Claude
+  Code credential cache artifacts such as `.config/claude-code/auth.json` when
+  they exist in the source home
+- managed `.claude.json` projection must refresh inherited Claude account
+  metadata such as `oauthAccount` and onboarding state from the source
+  `.claude.json` on each launch, while preserving managed workspace trust
+  records already written under the private managed home
+- managed `.claude.json` projection must not copy source workspace trust records
+  as conversation authority, and must not copy source API-key secrets such as
+  `primaryApiKey`
 - when source-home auth inheritance is enabled and the source Claude settings
   still provide auth env keys, startup must refresh those source auth values
   into the managed home on each managed launch
@@ -129,10 +161,25 @@ When `ccb` starts a managed Claude agent:
   Claude re-login to survive restart after the global Claude home has been
   logged out
 - when auth inheritance is disabled, startup must not silently keep stale
-  managed Claude auth env state or stale copied login credential artifacts
+  managed Claude auth env state, stale copied login credential artifacts, or
+  stale inherited Claude account metadata in `.claude.json`
 - when inheritance is enabled, it must refresh inherited Claude `skills/`,
   `commands/`, and `.claude/CLAUDE.md` projections into the managed home on
   each managed launch so source-home updates become visible after restart
+- when inherited Claude hooks reference allowlisted source-home hook assets
+  through home-relative paths such as `$HOME/.codeisland/...`, startup may copy
+  those referenced assets into the managed home so the inherited hook command
+  remains executable under the isolated `HOME`; those copied assets remain
+  provider-state and must be excluded from diagnostics
+- it may inherit user-session transport variables required for official-login
+  connectivity, proxy routing, custom trust stores, browser launch, and WSL
+  interop; examples include `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY`,
+  `SSL_CERT_FILE`, `NODE_EXTRA_CA_CERTS`, `BROWSER`, `WSL_INTEROP`, and
+  `WSL_DISTRO_NAME`
+- user-session transport inheritance is not Claude session authority and must
+  not allow caller-global runtime variables such as `HOME`,
+  `CLAUDE_PROJECTS_ROOT`, `CLAUDE_PROJECT_ROOT`, `CLAUDE_*`, or
+  `CCB_CALLER_*` to override the managed launcher's agent-scoped values
 - it must install Claude hook/trust state only inside that managed home
 - it must write the effective `claude_home`, `claude_projects_root`, and
   `claude_session_env_root` into the agent session file
@@ -226,4 +273,4 @@ Diagnostics export should include:
   home
 
 Diagnostics export must exclude copied credential files and projected trust/auth
-state such as `.config/claude-code/auth.json`.
+state such as `.claude/.credentials.json` and `.config/claude-code/auth.json`.

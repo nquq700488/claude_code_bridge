@@ -5,10 +5,12 @@ import time
 from typing import Callable
 
 from terminal_runtime.tmux_readiness import (
+    TmuxCommandError,
     TmuxTransientServerUnavailable,
     is_tmux_absent_server_text,
     is_tmux_missing_session_text,
     is_tmux_transient_server_error_text,
+    tmux_command_failure_message,
     tmux_object_ready_poll_interval_s,
     tmux_object_ready_timeout_s,
     tmux_failure_detail,
@@ -325,9 +327,29 @@ def _tmux_run_checked(backend, args: list[str]):
     if int(getattr(result, 'returncode', 1) or 0) == 0:
         return result
     detail = tmux_failure_detail(result, args)
+    socket_path = str(getattr(backend, '_socket_path', '') or getattr(backend, 'socket_path', '') or '').strip() or None
+    command = None
+    tmux_base = getattr(backend, '_tmux_base', None)
+    if callable(tmux_base):
+        try:
+            command = [*tmux_base(), *args]
+        except Exception:
+            command = None
     if is_tmux_transient_server_error_text(detail):
-        raise TmuxTransientServerUnavailable(detail)
-    raise RuntimeError(detail)
+        raise TmuxTransientServerUnavailable(
+            'tmux server unavailable',
+            args=args,
+            detail=detail,
+            socket_path=socket_path,
+            command=command,
+        )
+    raise TmuxCommandError(
+        detail,
+        args=args,
+        detail=detail,
+        socket_path=socket_path,
+        command=command,
+    )
 
 
 def _wait_until(
@@ -365,9 +387,24 @@ def _wait_until_ready(action: Callable[[], object], *, failure_message: str, tim
             break
         time.sleep(_tmux_object_ready_poll_interval_s())
     if last_error is not None:
+        detail = getattr(last_error, 'detail', None) or str(last_error)
         if isinstance(last_error, TmuxTransientServerUnavailable):
-            raise TmuxTransientServerUnavailable(failure_message) from last_error
-        raise RuntimeError(failure_message) from last_error
+            raise TmuxTransientServerUnavailable(
+                failure_message,
+                detail=detail,
+                socket_path=getattr(last_error, 'socket_path', None),
+                command=getattr(last_error, 'command', None),
+                args=getattr(last_error, 'tmux_args', None),
+            ) from last_error
+        raise RuntimeError(
+            tmux_command_failure_message(
+                failure_message,
+                detail=detail,
+                socket_path=getattr(last_error, 'socket_path', None),
+                command=getattr(last_error, 'command', None),
+                args=getattr(last_error, 'tmux_args', None),
+            )
+        ) from last_error
     raise RuntimeError(failure_message)
 
 
@@ -415,6 +452,7 @@ __all__ = [
     'session_root_pane',
     'session_window_target',
     'select_window',
+    'TmuxCommandError',
     'TmuxTransientServerUnavailable',
     'TmuxWindowRecord',
     'wait_for_root_pane',

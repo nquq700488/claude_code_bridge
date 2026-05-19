@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 
 from agents.models import AgentSpec, PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
+import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
 import provider_profiles.codex_home_config as codex_home_config
@@ -420,16 +421,147 @@ def test_materialize_claude_home_config_projects_system_settings_into_managed_ho
 def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
-    source_auth = source_home / '.config' / 'claude-code' / 'auth.json'
-    source_auth.parent.mkdir(parents=True, exist_ok=True)
-    source_auth.write_text(
-        json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
+    source_credentials = source_home / '.claude' / '.credentials.json'
+    source_legacy_auth = source_home / '.config' / 'claude-code' / 'auth.json'
+    source_credentials.parent.mkdir(parents=True, exist_ok=True)
+    source_legacy_auth.parent.mkdir(parents=True, exist_ok=True)
+    source_credentials.write_text(
+        json.dumps({'claudeAiOauth': {'refreshToken': 'system-refresh-token'}}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
+    source_legacy_auth.write_text(
+        json.dumps({'refresh_token': 'legacy-system-refresh-token'}, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
 
     layout = materialize_claude_home_config(target_home, source_home=source_home)
 
-    assert json.loads(layout.auth_path.read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+    assert json.loads(layout.credentials_path.read_text(encoding='utf-8'))['claudeAiOauth']['refreshToken'] == 'system-refresh-token'
+    assert json.loads(layout.auth_path.read_text(encoding='utf-8'))['refresh_token'] == 'legacy-system-refresh-token'
+
+
+def test_materialize_claude_home_config_refreshes_login_metadata_without_replacing_trust(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_trust = source_home / '.claude.json'
+    target_trust = target_home / '.claude.json'
+    source_trust.parent.mkdir(parents=True, exist_ok=True)
+    target_trust.parent.mkdir(parents=True, exist_ok=True)
+    source_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {
+                    'emailAddress': 'user@example.test',
+                    'organizationUuid': 'org-source',
+                },
+                'hasCompletedOnboarding': True,
+                'lastOnboardingVersion': '2.1.97',
+                '/source/workspace': {'hasTrustDialogAccepted': True},
+                'primaryApiKey': 'must-not-project',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'stale@example.test'},
+                'primaryApiKey': 'stale-key',
+                '/managed/workspace': {'hasTrustDialogAccepted': True},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert payload['oauthAccount']['emailAddress'] == 'user@example.test'
+    assert payload['oauthAccount']['organizationUuid'] == 'org-source'
+    assert payload['hasCompletedOnboarding'] is True
+    assert payload['lastOnboardingVersion'] == '2.1.97'
+    assert payload['/managed/workspace']['hasTrustDialogAccepted'] is True
+    assert '/source/workspace' not in payload
+    assert 'primaryApiKey' not in payload
+
+
+def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inherited(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    target_trust = target_home / '.claude.json'
+    target_trust.parent.mkdir(parents=True, exist_ok=True)
+    target_trust.write_text(
+        json.dumps(
+            {
+                'oauthAccount': {'emailAddress': 'stale@example.test'},
+                'primaryApiKey': 'stale-key',
+                '/managed/workspace': {'hasTrustDialogAccepted': True},
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    (source_home / '.claude.json').parent.mkdir(parents=True, exist_ok=True)
+    (source_home / '.claude.json').write_text('{"oauthAccount":{"emailAddress":"source@example.test"}}\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert 'oauthAccount' not in payload
+    assert 'primaryApiKey' not in payload
+    assert payload['/managed/workspace']['hasTrustDialogAccepted'] is True
+
+
+def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    calls: list[list[str]] = []
+
+    class Result:
+        returncode = 0
+        stdout = json.dumps({'claudeAiOauth': {'refreshToken': 'keychain-refresh-token'}})
+
+    def fake_run(argv, **kwargs):
+        calls.append([str(part) for part in argv])
+        assert kwargs['capture_output'] is True
+        assert kwargs['text'] is True
+        return Result()
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
+    assert payload['claudeAiOauth']['refreshToken'] == 'keychain-refresh-token'
+    assert calls[0] == [
+        '/usr/bin/security',
+        'find-generic-password',
+        '-a',
+        'mac-user',
+        '-s',
+        'Claude Code',
+        '-w',
+    ]
 
 
 def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(tmp_path: Path) -> None:
@@ -496,6 +628,69 @@ def test_materialize_claude_home_config_refreshes_inherited_skill_assets(tmp_pat
     assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v2\n'
     assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v2\n'
     assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v2\n'
+
+
+def test_materialize_claude_home_config_projects_referenced_home_hook_assets(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_hook = source_home / '.codeisland' / 'codeisland-hook.sh'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_hook.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'Stop': [
+                        {
+                            'hooks': [
+                                {
+                                    'type': 'command',
+                                    'command': '$HOME/.codeisland/codeisland-hook.sh',
+                                }
+                            ]
+                        }
+                    ]
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    source_hook.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert (layout.home_root / '.codeisland' / 'codeisland-hook.sh').read_text(encoding='utf-8') == '#!/bin/sh\nexit 0\n'
+
+
+def test_materialize_claude_home_config_does_not_project_home_hook_assets_without_config_inheritance(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_hook = source_home / '.codeisland' / 'codeisland-hook.sh'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_hook.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {'hooks': {'Stop': [{'hooks': [{'type': 'command', 'command': '${HOME}/.codeisland/codeisland-hook.sh'}]}]}},
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    source_hook.write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        source_home=source_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+    )
+
+    assert not (layout.home_root / '.codeisland').exists()
 
 
 def test_materialize_claude_home_config_respects_inherit_skills_flag(tmp_path: Path) -> None:
@@ -616,6 +811,7 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     target_home = tmp_path / 'managed-home'
     target_settings = target_home / '.claude' / 'settings.json'
     target_auth = target_home / '.config' / 'claude-code' / 'auth.json'
+    target_credentials = target_home / '.claude' / '.credentials.json'
     target_settings.parent.mkdir(parents=True, exist_ok=True)
     target_settings.write_text(
         json.dumps(
@@ -630,6 +826,7 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     )
     target_auth.parent.mkdir(parents=True, exist_ok=True)
     target_auth.write_text('{"refresh_token":"stale-token"}\n', encoding='utf-8')
+    target_credentials.write_text('{"claudeAiOauth":{"refreshToken":"stale-token"}}\n', encoding='utf-8')
 
     layout = materialize_claude_home_config(
         target_home,
@@ -640,6 +837,7 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
     assert payload == {}
     assert not layout.auth_path.exists()
+    assert not layout.credentials_path.exists()
 
 
 def test_materialize_claude_home_config_preserves_managed_official_login_when_source_is_logged_out(tmp_path: Path) -> None:
@@ -657,13 +855,13 @@ def test_materialize_claude_home_config_preserves_managed_official_login_when_so
         ),
         encoding='utf-8',
     )
-    target_auth = target_home / '.config' / 'claude-code' / 'auth.json'
-    target_auth.parent.mkdir(parents=True, exist_ok=True)
-    target_auth.write_text('{"refresh_token":"managed-refresh-token"}\n', encoding='utf-8')
+    target_credentials = target_home / '.claude' / '.credentials.json'
+    target_credentials.parent.mkdir(parents=True, exist_ok=True)
+    target_credentials.write_text('{"claudeAiOauth":{"refreshToken":"managed-refresh-token"}}\n', encoding='utf-8')
 
     layout = materialize_claude_home_config(target_home, source_home=source_home)
 
-    assert json.loads(layout.auth_path.read_text(encoding='utf-8'))['refresh_token'] == 'managed-refresh-token'
+    assert json.loads(layout.credentials_path.read_text(encoding='utf-8'))['claudeAiOauth']['refreshToken'] == 'managed-refresh-token'
 
 
 def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_override(tmp_path: Path) -> None:
@@ -740,11 +938,57 @@ def test_materialize_gemini_home_config_projects_system_settings_into_managed_ho
     assert payload['theme'] == 'Default'
 
 
+def test_materialize_gemini_home_config_projects_dotenv_api_auth_into_managed_home(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_gemini = source_home / '.gemini'
+    source_gemini.mkdir(parents=True, exist_ok=True)
+    (source_gemini / 'settings.json').write_text(
+        json.dumps(
+            {
+                'security': {
+                    'auth': {
+                        'selectedType': 'gemini-api-key',
+                    }
+                }
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    (source_gemini / '.env').write_text(
+        '\n'.join(
+            [
+                'GEMINI_API_KEY=system-gemini-key',
+                'GOOGLE_GEMINI_BASE_URL=https://gemini.example.test',
+                'GOOGLE_GENAI_USE_GCA=true',
+                'GOOGLE_CLOUD_PROJECT=demo-project',
+                'OTHER_SECRET=must-not-copy',
+            ]
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    dotenv = (layout.gemini_dir / '.env').read_text(encoding='utf-8')
+    assert payload['security']['auth']['selectedType'] == 'gemini-api-key'
+    assert 'GEMINI_API_KEY="system-gemini-key"' in dotenv
+    assert 'GOOGLE_GEMINI_BASE_URL="https://gemini.example.test"' in dotenv
+    assert 'GOOGLE_GENAI_USE_GCA="true"' in dotenv
+    assert 'GOOGLE_CLOUD_PROJECT="demo-project"' in dotenv
+    assert 'OTHER_SECRET' not in dotenv
+
+
 def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_auth(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.gemini' / 'settings.json'
     source_oauth = source_home / '.gemini' / 'oauth_creds.json'
+    source_accounts = source_home / '.gemini' / 'google_accounts.json'
     source_settings.parent.mkdir(parents=True, exist_ok=True)
     source_settings.write_text(
         json.dumps(
@@ -765,12 +1009,17 @@ def test_materialize_gemini_home_config_projects_oauth_credentials_for_login_aut
         json.dumps({'refresh_token': 'system-refresh-token'}, ensure_ascii=False, indent=2),
         encoding='utf-8',
     )
+    source_accounts.write_text(
+        json.dumps({'active': 'user@example.test'}, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
 
     layout = materialize_gemini_home_config(target_home, source_home=source_home)
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
     assert payload['security']['auth']['selectedType'] == 'oauth-personal'
     assert json.loads((layout.gemini_dir / 'oauth_creds.json').read_text(encoding='utf-8'))['refresh_token'] == 'system-refresh-token'
+    assert json.loads((layout.gemini_dir / 'google_accounts.json').read_text(encoding='utf-8'))['active'] == 'user@example.test'
 
 
 def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_when_auth_not_inherited(tmp_path: Path) -> None:
@@ -801,6 +1050,8 @@ def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_w
     target_oauth = target_home / '.gemini' / 'oauth_creds.json'
     target_oauth.parent.mkdir(parents=True, exist_ok=True)
     target_oauth.write_text('{"refresh_token":"stale-token"}\n', encoding='utf-8')
+    target_accounts = target_home / '.gemini' / 'google_accounts.json'
+    target_accounts.write_text('{"active":"stale@example.test"}\n', encoding='utf-8')
 
     layout = materialize_gemini_home_config(
         target_home,
@@ -812,6 +1063,7 @@ def test_materialize_gemini_home_config_strips_oauth_selection_and_credentials_w
     assert payload['theme'] == 'Default'
     assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
     assert not (layout.gemini_dir / 'oauth_creds.json').exists()
+    assert not (layout.gemini_dir / 'google_accounts.json').exists()
 
 
 def test_materialize_gemini_home_config_strips_api_auth_selection_when_api_not_inherited(tmp_path: Path) -> None:
@@ -819,6 +1071,7 @@ def test_materialize_gemini_home_config_strips_api_auth_selection_when_api_not_i
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.gemini' / 'settings.json'
     source_settings.parent.mkdir(parents=True, exist_ok=True)
+    (source_home / '.gemini' / '.env').write_text('GEMINI_API_KEY=system-gemini-key\n', encoding='utf-8')
     source_settings.write_text(
         json.dumps(
             {
@@ -846,6 +1099,7 @@ def test_materialize_gemini_home_config_strips_api_auth_selection_when_api_not_i
     assert payload['theme'] == 'Default'
     assert payload.get('env') is None
     assert payload.get('security', {}).get('auth', {}).get('selectedType') is None
+    assert not (layout.gemini_dir / '.env').exists()
 
 
 def test_materialize_gemini_home_config_preserves_runtime_hooks(tmp_path: Path) -> None:

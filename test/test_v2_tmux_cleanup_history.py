@@ -256,6 +256,12 @@ def test_doctor_summary_includes_socket_placement_fields(tmp_path: Path, monkeyp
             desired_state='running',
             health='unmounted',
             generation=4,
+            project_anchor_path=str(context.paths.ccb_dir),
+            runtime_state_root=str(context.paths.runtime_state_root),
+            runtime_root_kind=context.paths.runtime_state_placement.root_kind,
+            runtime_relocation_reason=context.paths.runtime_state_placement.relocation_reason,
+            runtime_filesystem_hint=context.paths.runtime_state_placement.filesystem_hint,
+            runtime_marker_status=context.paths.runtime_marker_status,
             socket_path=None,
             preferred_socket_path='/mnt/e/repo/.ccb/ccbd/ccbd.sock',
             effective_socket_path='/tmp/ccb-runtime/ccbd-proj.sock',
@@ -283,6 +289,11 @@ def test_doctor_summary_includes_socket_placement_fields(tmp_path: Path, monkeyp
 
     assert payload['ccbd']['preferred_socket_path'] == '/mnt/e/repo/.ccb/ccbd/ccbd.sock'
     assert payload['ccbd']['effective_socket_path'] == '/tmp/ccb-runtime/ccbd-proj.sock'
+    assert payload['ccbd']['preferred_socket_path_bytes'] == len('/mnt/e/repo/.ccb/ccbd/ccbd.sock'.encode())
+    assert payload['ccbd']['effective_socket_path_bytes'] == len('/tmp/ccb-runtime/ccbd-proj.sock'.encode())
     assert payload['ccbd']['socket_root_kind'] == 'runtime'
     assert payload['ccbd']['socket_fallback_reason'] == 'unsupported_filesystem'
     assert payload['ccbd']['tmux_effective_socket_path'] == '/tmp/ccb-runtime/tmux-proj.sock'
+    assert payload['ccbd']['tmux_preferred_socket_path_bytes'] == len('/mnt/e/repo/.ccb/ccbd/tmux.sock'.encode())
+    assert payload['ccbd']['tmux_effective_socket_path_bytes'] == len('/tmp/ccb-runtime/tmux-proj.sock'.encode())
+    assert payload['ccbd']['tmux_start_server_command'] == 'tmux -S /tmp/ccb-runtime/tmux-proj.sock start-server'

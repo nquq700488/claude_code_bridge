@@ -6,6 +6,7 @@ from pathlib import Path
 from agents.models import normalize_agent_name, parse_layout_spec
 
 from ..common import ConfigLoadResult, ConfigValidationError
+from ..defaults import build_default_project_config
 from ..parsing import validate_project_config
 from ..paths import project_config_path
 
@@ -239,7 +240,11 @@ def load_project_config(project_root: Path) -> ConfigLoadResult:
             source_path=project_path,
             used_default=False,
         )
-    raise ConfigValidationError(f'config not found for project {project_root}')
+    return ConfigLoadResult(
+        config=build_default_project_config(),
+        source_path=None,
+        used_default=True,
+    )
 
 
 __all__ = ['load_project_config']

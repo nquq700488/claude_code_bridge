@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import getpass
 import json
+import os
+import platform
 from pathlib import Path
 import shutil
+import subprocess
 
+from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
 
 from ..home_layout import ClaudeHomeLayout, claude_layout_for_home, claude_layout_from_session_data
@@ -13,6 +18,16 @@ _CLAUDE_RUNTIME_SETTINGS_KEYS = ('hooks', 'permissions')
 _CLAUDE_AUTH_ENV_KEYS = ('ANTHROPIC_AUTH_TOKEN',)
 _CLAUDE_API_AUTH_ENV_KEYS = ('ANTHROPIC_API_KEY',)
 _CLAUDE_ROUTE_ENV_KEYS = ('ANTHROPIC_BASE_URL',)
+_CLAUDE_HOME_HOOK_ASSET_DIRS = ('.codeisland',)
+_CLAUDE_JSON_AUTH_METADATA_KEYS = ('oauthAccount',)
+_CLAUDE_JSON_AUTH_SECRET_KEYS = ('primaryApiKey',)
+_CLAUDE_JSON_AUTH_COMPANION_KEYS = (
+    'hasCompletedOnboarding',
+    'lastOnboardingVersion',
+    'hasAvailableSubscription',
+    'subscriptionNoticeCount',
+)
+_MACOS_KEYCHAIN_CLAUDE_SERVICES = ('Claude Code', 'Claude Code-custom-oauth')
 
 
 def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
@@ -106,7 +121,7 @@ def _prepare_managed_home(source_home: Path, target_layout: ClaudeHomeLayout, *,
 
     _materialize_settings(source_home, target_layout, profile=profile)
     _materialize_auth(source_home, target_layout, profile=profile)
-    _materialize_trust(source_home, target_layout)
+    _materialize_trust(source_home, target_layout, profile=profile)
     _materialize_inherited_assets(source_home, target_layout, profile=profile)
 
 
@@ -116,6 +131,19 @@ def _materialize_inherited_assets(source_home: Path, target_layout: ClaudeHomeLa
     if _inherits_skills(profile):
         _sync_tree(source_home / '.claude' / 'skills', target_layout.claude_dir / 'skills')
         _sync_file(source_home / '.claude' / 'CLAUDE.md', target_layout.claude_dir / 'CLAUDE.md')
+    _materialize_home_hook_assets(source_home, target_layout, profile=profile)
+
+
+def _materialize_home_hook_assets(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+    if not _inherits_config(profile):
+        return
+    source_settings = _read_json_object(source_home / '.claude' / 'settings.json')
+    hooks_payload = source_settings.get('hooks')
+    if not isinstance(hooks_payload, dict):
+        return
+    for dirname in _CLAUDE_HOME_HOOK_ASSET_DIRS:
+        if _payload_mentions_home_asset(hooks_payload, dirname):
+            _sync_tree(source_home / dirname, target_layout.home_root / dirname)
 
 
 def _materialize_settings(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
@@ -131,21 +159,101 @@ def _materialize_settings(source_home: Path, target_layout: ClaudeHomeLayout, *,
     )
 
 
-def _materialize_trust(source_home: Path, target_layout: ClaudeHomeLayout) -> None:
+def _materialize_trust(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     source_trust = source_home / '.claude.json'
-    if not target_layout.trust_path.exists() and source_trust.is_file():
-        _copy_if_missing(source_trust, target_layout.trust_path)
+    if source_trust.is_file():
+        merged = _projected_claude_json_payload(
+            _read_json_object(source_trust),
+            existing=_read_json_object(target_layout.trust_path),
+            profile=profile,
+        )
+        _write_json_object(target_layout.trust_path, merged)
     _ensure_trust_file(target_layout.trust_path)
 
 
 def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     if not _inherits_auth(profile):
         _remove_file(target_layout.auth_path)
+        _remove_file(target_layout.credentials_path)
         return
 
-    source_auth = _source_auth_path(source_home)
-    if source_auth.is_file():
-        _sync_file(source_auth, target_layout.auth_path)
+    for source_auth, target_auth in _source_auth_paths(source_home, target_layout):
+        if source_auth.is_file():
+            _sync_file(source_auth, target_auth)
+    _materialize_macos_keychain_auth(target_layout)
+
+
+def _projected_claude_json_payload(
+    source_payload: dict[str, object],
+    *,
+    existing: dict[str, object],
+    profile=None,
+) -> dict[str, object]:
+    merged = dict(existing or {})
+    for key in _CLAUDE_JSON_AUTH_SECRET_KEYS:
+        merged.pop(key, None)
+    if not _inherits_auth(profile):
+        for key in _CLAUDE_JSON_AUTH_METADATA_KEYS:
+            merged.pop(key, None)
+        return merged
+
+    for key in (*_CLAUDE_JSON_AUTH_METADATA_KEYS, *_CLAUDE_JSON_AUTH_COMPANION_KEYS):
+        if key in source_payload:
+            merged[key] = source_payload[key]
+    return merged
+
+
+def _materialize_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None:
+    payload = _read_macos_keychain_claude_credentials()
+    if not payload:
+        return
+    _write_json_object(target_layout.credentials_path, payload, mode=0o600)
+
+
+def _read_macos_keychain_claude_credentials() -> dict[str, object] | None:
+    if platform.system() != 'Darwin':
+        return None
+    security = shutil.which('security') or '/usr/bin/security'
+    account = _macos_keychain_account()
+    if not account:
+        return None
+
+    for service in _macos_keychain_services():
+        try:
+            result = subprocess.run(
+                [security, 'find-generic-password', '-a', account, '-s', service, '-w'],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except Exception:
+            continue
+        if result.returncode != 0:
+            continue
+        payload = _json_object_from_text(result.stdout)
+        if isinstance(payload.get('claudeAiOauth'), dict):
+            return payload
+    return None
+
+
+def _macos_keychain_account() -> str:
+    account = str(os.environ.get('USER') or '').strip()
+    if account:
+        return account
+    try:
+        return str(getpass.getuser() or '').strip()
+    except Exception:
+        return ''
+
+
+def _macos_keychain_services() -> tuple[str, ...]:
+    services = list(_MACOS_KEYCHAIN_CLAUDE_SERVICES)
+    custom_service = 'Claude Code-custom-oauth'
+    if os.environ.get('CLAUDE_CODE_CUSTOM_OAUTH_URL') and custom_service in services:
+        services.remove(custom_service)
+        services.insert(0, custom_service)
+    return tuple(services)
 
 
 def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
@@ -279,10 +387,48 @@ def _inherits_commands(profile) -> bool:
 
 def _read_json_object(path: Path) -> dict[str, object]:
     try:
-        data = json.loads(path.read_text(encoding='utf-8'))
+        data = _json_object_from_text(path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+    return data
+
+
+def _json_object_from_text(value: str) -> dict[str, object]:
+    try:
+        data = json.loads(str(value or '').strip())
     except Exception:
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def _write_json_object(path: Path, payload: dict[str, object], *, mode: int | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2) + '\n',
+        encoding='utf-8',
+    )
+    if mode is not None:
+        try:
+            path.chmod(mode)
+        except Exception:
+            pass
+
+
+def _payload_mentions_home_asset(value: object, dirname: str) -> bool:
+    if isinstance(value, str):
+        return any(
+            marker in value
+            for marker in (
+                f'$HOME/{dirname}/',
+                f'${{HOME}}/{dirname}/',
+                f'~/{dirname}/',
+            )
+        )
+    if isinstance(value, dict):
+        return any(_payload_mentions_home_asset(child, dirname) for child in value.values())
+    if isinstance(value, list):
+        return any(_payload_mentions_home_asset(child, dirname) for child in value)
+    return False
 
 
 def _ensure_trust_file(path: Path) -> None:
@@ -321,8 +467,11 @@ def _remove_file(path: Path) -> None:
         pass
 
 
-def _source_auth_path(source_home: Path) -> Path:
-    return source_home / '.config' / 'claude-code' / 'auth.json'
+def _source_auth_paths(source_home: Path, target_layout: ClaudeHomeLayout) -> tuple[tuple[Path, Path], ...]:
+    return (
+        (source_home / '.claude' / '.credentials.json', target_layout.credentials_path),
+        (source_home / '.config' / 'claude-code' / 'auth.json', target_layout.auth_path),
+    )
 
 
 def _sync_tree(source: Path, target: Path) -> None:
@@ -336,7 +485,7 @@ def _sync_tree(source: Path, target: Path) -> None:
 
 
 def _system_home_root() -> Path:
-    return Path.home().expanduser()
+    return current_provider_source_home()
 
 
 __all__ = ['materialize_claude_home_config', 'prepare_claude_home_overrides', 'resolve_claude_home_layout']

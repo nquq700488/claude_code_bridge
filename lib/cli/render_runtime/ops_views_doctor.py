@@ -26,14 +26,25 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'requirement_tmux_path: {requirements.get("tmux_path")}',
         f'ccbd_state: {ccbd["state"]}',
         f'ccbd_socket_path: {ccbd.get("socket_path")}',
+        f'ccbd_project_anchor_path: {ccbd.get("project_anchor_path")}',
+        f'ccbd_runtime_state_root: {ccbd.get("runtime_state_root")}',
+        f'ccbd_runtime_root_kind: {ccbd.get("runtime_root_kind")}',
+        f'ccbd_runtime_relocation_reason: {ccbd.get("runtime_relocation_reason")}',
+        f'ccbd_runtime_filesystem_hint: {ccbd.get("runtime_filesystem_hint")}',
+        f'ccbd_runtime_marker_status: {ccbd.get("runtime_marker_status")}',
         f'ccbd_preferred_socket_path: {ccbd.get("preferred_socket_path")}',
         f'ccbd_effective_socket_path: {ccbd.get("effective_socket_path")}',
+        f'ccbd_preferred_socket_path_bytes: {ccbd.get("preferred_socket_path_bytes")}',
+        f'ccbd_effective_socket_path_bytes: {ccbd.get("effective_socket_path_bytes")}',
         f'ccbd_socket_root_kind: {ccbd.get("socket_root_kind")}',
         f'ccbd_socket_fallback_reason: {ccbd.get("socket_fallback_reason")}',
         f'ccbd_socket_filesystem_hint: {ccbd.get("socket_filesystem_hint")}',
         f'ccbd_tmux_socket_path: {ccbd.get("tmux_socket_path")}',
         f'ccbd_tmux_preferred_socket_path: {ccbd.get("tmux_preferred_socket_path")}',
         f'ccbd_tmux_effective_socket_path: {ccbd.get("tmux_effective_socket_path")}',
+        f'ccbd_tmux_preferred_socket_path_bytes: {ccbd.get("tmux_preferred_socket_path_bytes")}',
+        f'ccbd_tmux_effective_socket_path_bytes: {ccbd.get("tmux_effective_socket_path_bytes")}',
+        f'ccbd_tmux_start_server_command: {ccbd.get("tmux_start_server_command")}',
         f'ccbd_tmux_socket_root_kind: {ccbd.get("tmux_socket_root_kind")}',
         f'ccbd_tmux_socket_fallback_reason: {ccbd.get("tmux_socket_fallback_reason")}',
         f'ccbd_tmux_socket_filesystem_hint: {ccbd.get("tmux_socket_filesystem_hint")}',
@@ -127,6 +138,15 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
             f'restore: supported={agent["execution_resume_supported"]} mode={agent["execution_restore_mode"]} reason={agent["execution_restore_reason"]}'
         )
         lines.append(f'restore_detail: {agent["execution_restore_detail"]}')
+        if agent.get("session_switch_state"):
+            lines.append(
+                'session_switch: '
+                f'state={agent.get("session_switch_state")} '
+                f'reason={agent.get("session_switch_reason")} '
+                f'committed={agent.get("session_switch_committed")} '
+                f'candidate_session={agent.get("session_switch_candidate_id")} '
+                f'candidate_path={agent.get("session_switch_candidate_path")}'
+            )
     return tuple(lines)
 
 

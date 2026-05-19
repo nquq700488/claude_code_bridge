@@ -7,6 +7,7 @@ import tarfile
 from cli.context import CliContextBuilder
 from cli.models import ParsedDoctorCommand
 from cli.services.diagnostics import export_diagnostic_bundle
+from project.ids import compute_project_id
 
 
 def _read_tar_json(bundle_path: Path, member_name: str) -> dict:
@@ -83,6 +84,44 @@ def test_export_diagnostic_bundle_collects_reports_and_log_tails(tmp_path: Path)
     assert any(entry['archive_path'] == 'project/.ccb/agents/demo/runtime.json' for entry in manifest['entries'])
 
 
+def test_export_diagnostic_bundle_includes_relocated_runtime_state_files(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-bundle-relocated'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:codex\n', encoding='utf-8')
+    relocated_root = tmp_path / 'state-root'
+    project_id = compute_project_id(project_root)
+    (project_root / '.ccb' / 'runtime-root-ref.json').write_text(
+        (
+            '{"schema_version":1,"record_type":"ccb_runtime_root_ref","project_id":"'
+            + project_id
+            + '","runtime_state_root":"'
+            + str(relocated_root)
+            + '","created_at":"2026-05-07T00:00:00Z"}\n'
+        ),
+        encoding='utf-8',
+    )
+    context = CliContextBuilder().build(
+        ParsedDoctorCommand(project=None, bundle=True),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+
+    context.paths.ensure_runtime_state_root(created_at='2026-05-07T00:00:00Z')
+    context.paths.ccbd_state_path.parent.mkdir(parents=True, exist_ok=True)
+    context.paths.ccbd_state_path.write_text('{"record_type":"ccbd_project_namespace_state"}\n', encoding='utf-8')
+    context.paths.ccbd_start_policy_path.write_text('{"record_type":"ccbd_start_policy"}\n', encoding='utf-8')
+
+    summary = export_diagnostic_bundle(context, ParsedDoctorCommand(project=None, bundle=True))
+    bundle_path = Path(summary.bundle_path)
+    manifest = _read_tar_json(bundle_path, f'{summary.bundle_id}/manifest.json')
+
+    assert any(entry['archive_path'] == 'project/.ccb/runtime-root-ref.json' for entry in manifest['entries'])
+    assert any(entry['archive_path'] == 'project/.ccb/runtime-root.json' for entry in manifest['entries'])
+    assert any(entry['archive_path'] == 'project/.ccb/ccbd/state.json' for entry in manifest['entries'])
+    assert any(entry['archive_path'] == 'project/.ccb/ccbd/start-policy.json' for entry in manifest['entries'])
+    assert any(entry['source_path'] == str(context.paths.runtime_root_marker_path) for entry in manifest['entries'])
+
+
 def test_export_diagnostic_bundle_survives_corrupt_runtime_and_report_files(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-bundle-corrupt'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
@@ -154,7 +193,7 @@ def test_export_diagnostic_bundle_includes_provider_state_and_excludes_auth(tmp_
     assert f'{summary.bundle_id}/project/.ccb/agents/demo/provider-state/codex/home/auth.json' not in members
 
 
-def test_export_diagnostic_bundle_excludes_gemini_oauth_credentials(tmp_path: Path) -> None:
+def test_export_diagnostic_bundle_excludes_gemini_auth_artifacts(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-bundle-gemini-provider-state'
     (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
     (project_root / '.ccb' / 'ccb.config').write_text('demo:gemini\n', encoding='utf-8')
@@ -168,6 +207,8 @@ def test_export_diagnostic_bundle_excludes_gemini_oauth_credentials(tmp_path: Pa
     managed_home = provider_state_dir / 'home' / '.gemini'
     managed_home.mkdir(parents=True, exist_ok=True)
     (managed_home / 'settings.json').write_text('{"security":{"auth":{"selectedType":"oauth-personal"}}}\n', encoding='utf-8')
+    (managed_home / '.env').write_text('GEMINI_API_KEY=secret\n', encoding='utf-8')
+    (managed_home / 'google_accounts.json').write_text('{"active":"user@example.test"}\n', encoding='utf-8')
     (managed_home / 'oauth_creds.json').write_text('{"refresh_token":"secret"}\n', encoding='utf-8')
 
     summary = export_diagnostic_bundle(context, ParsedDoctorCommand(project=None, bundle=True))
@@ -184,4 +225,79 @@ def test_export_diagnostic_bundle_excludes_gemini_oauth_credentials(tmp_path: Pa
         entry['archive_path'] != 'project/.ccb/agents/demo/provider-state/gemini/home/.gemini/oauth_creds.json'
         for entry in manifest['entries']
     )
+    assert all(
+        entry['archive_path'] != 'project/.ccb/agents/demo/provider-state/gemini/home/.gemini/.env'
+        for entry in manifest['entries']
+    )
+    assert all(
+        entry['archive_path'] != 'project/.ccb/agents/demo/provider-state/gemini/home/.gemini/google_accounts.json'
+        for entry in manifest['entries']
+    )
     assert f'{summary.bundle_id}/project/.ccb/agents/demo/provider-state/gemini/home/.gemini/oauth_creds.json' not in members
+    assert f'{summary.bundle_id}/project/.ccb/agents/demo/provider-state/gemini/home/.gemini/.env' not in members
+    assert f'{summary.bundle_id}/project/.ccb/agents/demo/provider-state/gemini/home/.gemini/google_accounts.json' not in members
+
+
+def test_export_diagnostic_bundle_excludes_claude_credentials(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-bundle-claude-provider-state'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:claude\n', encoding='utf-8')
+    context = CliContextBuilder().build(
+        ParsedDoctorCommand(project=None, bundle=True),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+
+    provider_state_dir = context.paths.agent_provider_state_dir('demo', 'claude')
+    managed_home = provider_state_dir / 'home' / '.claude'
+    managed_home.mkdir(parents=True, exist_ok=True)
+    (managed_home / 'settings.json').write_text('{"theme":"dark"}\n', encoding='utf-8')
+    (managed_home / '.credentials.json').write_text('{"claudeAiOauth":{"refreshToken":"secret"}}\n', encoding='utf-8')
+
+    summary = export_diagnostic_bundle(context, ParsedDoctorCommand(project=None, bundle=True))
+    bundle_path = Path(summary.bundle_path)
+    manifest = _read_tar_json(bundle_path, f'{summary.bundle_id}/manifest.json')
+    members = _archive_members(bundle_path)
+
+    assert any(
+        entry['archive_path'] == 'project/.ccb/agents/demo/provider-state/claude/home/.claude/settings.json'
+        and entry['status'] == 'included'
+        for entry in manifest['entries']
+    )
+    assert all(
+        entry['archive_path'] != 'project/.ccb/agents/demo/provider-state/claude/home/.claude/.credentials.json'
+        for entry in manifest['entries']
+    )
+    assert f'{summary.bundle_id}/project/.ccb/agents/demo/provider-state/claude/home/.claude/.credentials.json' not in members
+
+
+def test_export_diagnostic_bundle_excludes_claude_home_hook_assets(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-bundle-claude-hook-assets'
+    (project_root / '.ccb').mkdir(parents=True, exist_ok=True)
+    (project_root / '.ccb' / 'ccb.config').write_text('demo:claude\n', encoding='utf-8')
+    context = CliContextBuilder().build(
+        ParsedDoctorCommand(project=None, bundle=True),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+
+    provider_state_dir = context.paths.agent_provider_state_dir('demo', 'claude')
+    managed_home = provider_state_dir / 'home'
+    (managed_home / '.claude').mkdir(parents=True, exist_ok=True)
+    (managed_home / '.claude' / 'settings.json').write_text('{"theme":"dark"}\n', encoding='utf-8')
+    (managed_home / '.codeisland').mkdir(parents=True, exist_ok=True)
+    (managed_home / '.codeisland' / 'state.json').write_text('{"secret":"token"}\n', encoding='utf-8')
+    (managed_home / '.codeisland' / 'codeisland-hook.sh').write_text('#!/bin/sh\nexit 0\n', encoding='utf-8')
+
+    summary = export_diagnostic_bundle(context, ParsedDoctorCommand(project=None, bundle=True))
+    bundle_path = Path(summary.bundle_path)
+    manifest = _read_tar_json(bundle_path, f'{summary.bundle_id}/manifest.json')
+    members = _archive_members(bundle_path)
+
+    assert any(
+        entry['archive_path'] == 'project/.ccb/agents/demo/provider-state/claude/home/.claude/settings.json'
+        and entry['status'] == 'included'
+        for entry in manifest['entries']
+    )
+    assert all('/.codeisland/' not in entry['archive_path'] for entry in manifest['entries'])
+    assert all('/.codeisland/' not in member for member in members)

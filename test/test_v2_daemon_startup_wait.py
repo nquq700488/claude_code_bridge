@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+import ccbd.daemon_process as ccbd_daemon_process
+import ccbd.startup_policy as startup_policy
 import cli.services.daemon as daemon_service
 from ccbd.models import LeaseHealth
 from ccbd.services.lifecycle import CcbdLifecycleStore, build_lifecycle
@@ -168,3 +171,41 @@ def test_connect_compatible_daemon_uses_short_control_plane_timeout(monkeypatch,
     assert handle is not None
     assert captured == [daemon_service.CONTROL_PLANE_RPC_TIMEOUT_S, None]
     assert handle.client.timeout_s is None
+
+
+def test_spawned_ccbd_readiness_probe_uses_shared_control_plane_timeout(monkeypatch, tmp_path: Path) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    socket_path.touch()
+    captured: list[float | None] = []
+
+    class FakeClient:
+        def __init__(self, socket_path_arg, *, timeout_s=None) -> None:
+            assert socket_path_arg == socket_path
+            captured.append(timeout_s)
+
+        def ping(self, target: str = 'ccbd') -> dict[str, object]:
+            assert target == 'ccbd'
+            return {'ok': True}
+
+    monkeypatch.setattr(ccbd_daemon_process, 'CcbdClient', FakeClient)
+    process = SimpleNamespace(poll=lambda: None)
+
+    ccbd_daemon_process._wait_for_ccbd_ready(process=process, socket_path=socket_path, timeout_s=1.0)
+
+    assert captured == [ccbd_daemon_process.CONTROL_PLANE_RPC_TIMEOUT_S]
+
+
+def test_startup_policy_clamps_foreground_attach_timeout_to_startup_budget(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_STARTUP_TRANSACTION_TIMEOUT_S', '4.0')
+    monkeypatch.setenv('CCB_FOREGROUND_ATTACH_RPC_TIMEOUT_S', '2.5')
+    monkeypatch.setenv('CCB_FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S', '10.0')
+
+    reloaded = importlib.reload(startup_policy)
+
+    assert reloaded.FOREGROUND_ATTACH_RPC_TIMEOUT_S == 2.5
+    assert reloaded.FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S == 4.0
+
+    monkeypatch.delenv('CCB_STARTUP_TRANSACTION_TIMEOUT_S', raising=False)
+    monkeypatch.delenv('CCB_FOREGROUND_ATTACH_RPC_TIMEOUT_S', raising=False)
+    monkeypatch.delenv('CCB_FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S', raising=False)
+    importlib.reload(startup_policy)

@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from ccbd.services.project_namespace import ProjectNamespaceController
+from ccbd.services.project_namespace_runtime.backend import prepare_server
 from ccbd.services.project_namespace_state import (
     ProjectNamespaceEvent,
     ProjectNamespaceEventStore,
@@ -295,6 +296,50 @@ def test_project_namespace_controller_creates_state_and_lifecycle_event(tmp_path
     assert latest_event.event_kind == 'namespace_created'
     assert latest_event.details['recreated'] is False
     assert latest_event.details['reason'] == 'initial_create'
+
+
+def test_prepare_server_preserves_tmux_failure_detail_for_diagnostics(tmp_path: Path) -> None:
+    socket_path = tmp_path / 'repo' / '.ccb' / 'ccbd' / 'tmux.sock'
+
+    class _FailingStartServerBackend(_FakeTmuxBackend):
+        def __init__(self) -> None:
+            super().__init__(socket_path=str(socket_path))
+            self._socket_path = str(socket_path)
+
+        def _tmux_base(self) -> list[str]:
+            return ['tmux', '-S', self._socket_path]
+
+        def _tmux_run(
+            self,
+            args: list[str],
+            *,
+            check: bool = False,
+            capture: bool = False,
+            input_bytes: bytes | None = None,
+            timeout: float | None = None,
+        ):
+            del check, capture, input_bytes, timeout
+            if args[:1] == ['start-server']:
+                return SimpleNamespace(
+                    returncode=1,
+                    stdout='',
+                    stderr='error connecting to /private/tmp/tmux-501/default (No such file or directory)\n',
+                )
+            return super()._tmux_run(args, check=False, capture=True)
+
+    try:
+        prepare_server(_FailingStartServerBackend())
+    except RuntimeError as exc:
+        text = str(exc)
+    else:
+        raise AssertionError('expected prepare_server to fail')
+
+    assert 'failed to prepare tmux server' in text
+    assert f'tmux_socket_path={socket_path}' in text
+    assert 'tmux_socket_path_bytes=' in text
+    assert "tmux_command='tmux -S" in text
+    assert 'start-server' in text
+    assert 'No such file or directory' in text
 
 
 def test_project_namespace_controller_recreates_missing_session_with_new_epoch(tmp_path: Path) -> None:

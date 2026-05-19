@@ -35,3 +35,33 @@ def test_control_plane_env_keeps_user_session_transport_for_cmd_shell(monkeypatc
     assert env['DBUS_SESSION_BUS_ADDRESS'] == 'unix:path=/run/user/1000/bus'
     assert env['XAUTHORITY'] == '/tmp/.Xauthority'
     assert env['SSH_AUTH_SOCK'] == '/tmp/ssh-agent.sock'
+
+
+def test_control_plane_env_keeps_network_transport_without_provider_authority(monkeypatch) -> None:
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:7890')
+    monkeypatch.setenv('NO_PROXY', 'localhost,127.0.0.1')
+    monkeypatch.setenv('CODEX_CA_CERTIFICATE', '/tmp/codex-ca.pem')
+    monkeypatch.setenv('SSL_CERT_FILE', '/tmp/ca.pem')
+    monkeypatch.setenv('WSL_INTEROP', '/run/WSL/1234_interop')
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu-22.04')
+    monkeypatch.setenv('CODEX_HOME', '/tmp/global-codex-home')
+    monkeypatch.setenv('CODEX_SESSION_ROOT', '/tmp/global-codex-sessions')
+    monkeypatch.setenv('GEMINI_ROOT', '/tmp/global-gemini-root')
+    monkeypatch.setenv('CLAUDE_PROJECTS_ROOT', '/tmp/global-claude-projects')
+    monkeypatch.setenv('CCB_SESSION_ID', 'stale-session')
+    monkeypatch.setenv('CCB_CALLER_ACTOR', 'stale-agent')
+
+    env = control_plane_env()
+
+    assert env['HTTPS_PROXY'] == 'http://127.0.0.1:7890'
+    assert env['NO_PROXY'] == 'localhost,127.0.0.1'
+    assert env['CODEX_CA_CERTIFICATE'] == '/tmp/codex-ca.pem'
+    assert env['SSL_CERT_FILE'] == '/tmp/ca.pem'
+    assert env['WSL_INTEROP'] == '/run/WSL/1234_interop'
+    assert env['WSL_DISTRO_NAME'] == 'Ubuntu-22.04'
+    assert 'CODEX_HOME' not in env
+    assert 'CODEX_SESSION_ROOT' not in env
+    assert 'GEMINI_ROOT' not in env
+    assert 'CLAUDE_PROJECTS_ROOT' not in env
+    assert 'CCB_SESSION_ID' not in env
+    assert 'CCB_CALLER_ACTOR' not in env

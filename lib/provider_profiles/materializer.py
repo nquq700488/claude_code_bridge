@@ -27,7 +27,12 @@ _API_ENV_KEYS = {
         'GOOGLE_API_KEY',
         'GOOGLE_API_BASE',
         'GOOGLE_GEMINI_BASE_URL',
+        'GOOGLE_VERTEX_BASE_URL',
         'GOOGLE_GENAI_USE_VERTEXAI',
+        'GOOGLE_GENAI_USE_GCA',
+        'GOOGLE_CLOUD_PROJECT',
+        'GOOGLE_CLOUD_LOCATION',
+        'GOOGLE_APPLICATION_CREDENTIALS',
     },
     'kimi': {
         'MOONSHOT_API_KEY',
@@ -55,7 +60,7 @@ def materialize_provider_profile(
     runtime_dir = layout.agent_provider_runtime_dir(spec.name, spec.provider)
     runtime_dir.mkdir(parents=True, exist_ok=True)
     profile_spec = spec.provider_profile
-    profile_root = _resolve_profile_root(layout.project_root, spec, profile_spec)
+    profile_root = _resolve_profile_root(layout, spec, profile_spec)
 
     if spec.provider == 'codex':
         profile = _materialize_codex_profile(
@@ -200,13 +205,13 @@ def _materialize_claude_profile(
     )
 
 
-def _resolve_profile_root(project_root: Path, spec: AgentSpec, profile_spec: ProviderProfileSpec) -> Path:
+def _resolve_profile_root(layout: PathLayout, spec: AgentSpec, profile_spec: ProviderProfileSpec) -> Path:
     if profile_spec.home:
         raw = Path(profile_spec.home).expanduser()
         if not raw.is_absolute():
-            raw = Path(project_root) / raw
+            raw = layout.project_root / raw
         return raw.resolve()
-    return (Path(project_root) / '.ccb' / 'provider-profiles' / spec.name / spec.provider).resolve()
+    return (layout.provider_profiles_dir / spec.name / spec.provider).resolve()
 
 
 def _write_profile_record(runtime_dir: Path, profile: ResolvedProviderProfile) -> Path:

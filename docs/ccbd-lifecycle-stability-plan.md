@@ -398,9 +398,14 @@ CLI 不再直接 spawn `ccbd`。CLI 只负责：
 - `rpc_probe_timeout_s`
   - 单次 socket connect / ping / config-check 的短超时
   - 应维持 fast-fail 语义，不得被提升到冷启动事务级别
+  - keeper config-check / graceful-shutdown probe 与 spawned ccbd readiness probe 必须共享这层预算，不得再使用私有更短字面量
+  - client 可在这层预算内部重试瞬时 connect 失败；重试只覆盖 `ENOENT` / `ECONNREFUSED` / `EAGAIN`，且不得在请求发送后重试
 - `foreground_attach_timeout_s`
   - 只服务交互式 `ccb` 的 namespace/UI attach 等待
   - 不得影响 `ask`、`ping` 等 control-plane caller
+  - 必须与 `rpc_probe_timeout_s` 使用不同的实现常量；foreground attach 不得复用 daemon config/probe 的 fast-fail timeout
+  - foreground attach 的单次 `ping('ccbd')` 可使用稳定 operational RPC 预算，但 target-ready 总预算仍必须被 `startup_transaction_timeout_s` 夹住
+  - foreground attach 失败必须区分 control-plane ping 不响应和 tmux namespace/window 不可 attach，不能回灌成 daemon startup transaction 失败
 
 默认策略上，`startup_transaction_timeout_s` 应该是冷启动 ceiling，而不是 steady-state latency 目标。
 实现上可以允许 20 到 30 秒的事务上限，但正常路径必须在 ready 后立刻返回，不能把该值表现成每次调用都要等待的固定延迟。
@@ -423,6 +428,7 @@ CLI 不再直接 spawn `ccbd`。CLI 只负责：
 原则：
 
 - mounted 发布只依赖 `bootstrap_core` 完成后的 control-plane readiness
+- socket server 必须把 accept 与请求处理解耦，但 handler、mutating op 后的 tick、periodic heartbeat/reconcile tick 仍在一个串行 worker lane 中执行，避免 runtime authority 文件并发写入
 - 不属于最小 control-plane readiness 的重型工作，不得无界地阻塞 mounted 发布
 - 冷启动 `ask` 允许在 backend mounted 后尽早提交，由 daemon supervision 异步完成后续 runtime 收敛
 
