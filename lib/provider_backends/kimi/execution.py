@@ -9,6 +9,7 @@ from provider_core.protocol import request_anchor_for_job
 from provider_execution.active import prepare_active_poll, prepare_active_start
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import build_item, no_wrap_requested, send_prompt_to_runtime_target
+from provider_execution.reliability import CompletionReliabilityPolicy
 from terminal_runtime import get_backend_for_session
 
 from .comm import KimiLogReader, _is_bound_elsewhere, _list_session_candidates
@@ -18,6 +19,11 @@ from .session import load_project_session as _load_project_session
 
 class KimiProviderAdapter:
     provider = "kimi"
+    completion_reliability_policy = CompletionReliabilityPolicy(
+        provider='kimi',
+        primary_authority='session_snapshot',
+        no_terminal_timeout_s=600.0,
+    )
 
     def restore_diagnostics(self) -> dict[str, object]:
         return {

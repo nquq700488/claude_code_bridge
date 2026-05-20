@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v6.0.x | 最后更新：2026-05
+> 版本：适用于 CCB v6.2.6 | 最后更新：2026-05-20
 
 ---
 
@@ -16,7 +16,8 @@
 8. [卸载](#卸载)
 9. [常见问题排查](#常见问题排查)
 10. [配置文件速查](#配置文件速查)
-11. [架构说明](#架构说明)
+11. [开发工具与实用工具](#开发工具与实用工具)
+12. [架构说明](#架构说明)
 
 ---
 
@@ -104,7 +105,7 @@ cd claude_codex_bridge
 
 > **Windows 用户**：`install.ps1` 仅支持基础安装（不含 tmux 主题、`mmx-daemon`、Codex/Droid/Kimi skills），**推荐在 WSL 中使用 `install.sh` 获得完整功能**。
 
-### 安装脚本会做什么
+### 安装脚本会做什么（v6.2.x）
 
 安装脚本会按顺序执行以下步骤，每步有中文/英文双语提示：
 
@@ -132,21 +133,26 @@ cd claude_codex_bridge
 5. **配置 PATH**
    - 自动将 `~/.local/bin` 添加到 shell 配置文件（`.zshrc` / `.bashrc` / `.bash_profile`）
 
-6. **安装 Skills**
-   - Claude skills → `~/.claude/skills/`（ask, ping, pend, review, all-plan, file-op, autonew, continue, tp, tr）
+6. **安装 Inherited Skills（v6.2.1+）**
+   - 技能源文件从 `inherit_skills/` 目录复制到各 Provider 的 skills 目录
+   - Claude skills → `~/.claude/skills/`（ask, ccb_config 等）
    - Codex skills → `~/.codex/skills/`
    - Droid/Factory skills → `~/.factory/skills/`（若检测到 droid CLI）
    - Kimi skills → `~/.kimi/skills/`（若检测到 kimi CLI）
+   - 安装时会自动清理旧版本的 obsolete skills（如 `ping`、`pend`、`autonew`、`all-plan` 等已废弃的独立 skill）
 
 7. **注入 CCB 配置到 CLAUDE.md**
    - 在 `~/.claude/CLAUDE.md` 中写入 CCB 协作规则
    - 包括角色分配表、Peer Review 框架、Async Guardrail
+   - **v6.2.5+**：managed home 中的 `.claude/CLAUDE.md` 不再复制项目根目录的 `CLAUDE.md`，避免重复加载
 
 8. **配置权限**
    - 在 `~/.claude/settings.json` 中添加 `Bash(ccb ask/ping/pend *)` 权限
 
-9. **配置 tmux**
-   - 追加 CCB 专用 tmux 配置到 `~/.tmux.conf`（或 `~/.tmux.conf.local`）
+9. **配置 tmux（v6.2.6+ 隔离）**
+   - CCB 管理的 tmux 命令默认使用 `tmux -f /dev/null`，**用户的 `~/.tmux.conf` 插件和 hook 不会影响 CCB pane 拓扑**
+   - 如需显式指定 tmux 配置文件，可通过环境变量 `CCB_TMUX_CONFIG=/path/to/custom.conf`
+   - 安装脚本仍会追加 CCB 专用 tmux 配置到 `~/.tmux.conf`（或 `~/.tmux.conf.local`），供手动 attach 时使用
    - 包括 Tokyo Night 主题、vim 风格按键、鼠标支持、剪贴板集成
 
 10. **注册 Droid MCP 委托（可选）**
@@ -173,13 +179,17 @@ cd claude_codex_bridge
         ├── ccb             # Python 入口
         ├── lib/            # Python 核心库
         ├── config/         # 配置模板
-        ├── claude_skills/  # Claude agent 技能
-        ├── codex_skills/   # Codex agent 技能
-        ├── droid_skills/   # Droid agent 技能
-        ├── kimi_skills/    # Kimi agent 技能
-        ├── mcp/            # MCP 委托服务
-        ├── docs/           # 架构文档
-        └── VERSION         # 版本号
+        ├── inherit_skills/  # Inherited skills 源文件（v6.2.1+）
+        │   ├── claude_skills/
+        │   ├── codex_skills/
+        │   ├── droid_skills/
+        │   └── kimi_skills/
+        ├── dev_tools/       # 维护者开发工具（不随 release 安装）
+        ├── useful_tools/    # 可选用户工具（随 release 分发，不自动安装）
+        ├── mcp/             # MCP 委托服务
+        ├── docs/            # 架构文档
+        ├── plans/           # 架构设计与路线图
+        └── VERSION          # 版本号
 ```
 
 ### 环境变量覆盖
@@ -197,6 +207,11 @@ cd claude_codex_bridge
 | `CCB_USE_MANAGED_VENV` | `auto` | 托管 Python venv：`auto` / `1` / `0` |
 | `CCB_DROID_AUTOINSTALL` | `1` | 设为 `0` 跳过 Droid MCP 委托自动注册 |
 | `CCB_DROID_AUTOINSTALL_FORCE` | `0` | 设为 `1` 强制重新注册 Droid MCP 委托 |
+| `CCB_DROID_AUTOINSTALL_TIMEOUT_S` | `10` | Droid MCP 注册超时（秒） |
+| `CCB_TMUX_CONFIG` | `/dev/null` | 显式指定 CCB 管理的 tmux 配置文件 |
+| `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
+| `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
+| `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒） |
 | `CODEX_CLAUDE_COMMAND_DIR` | 自动检测 | 自定义 Claude commands 目录 |
 
 ---
@@ -319,6 +334,47 @@ Agent 配置字段：
 | `startup_args` | list | 传给 provider CLI 的额外启动参数 |
 | `workspace_root` | string | 自定义工作目录（必须是**绝对路径**） |
 | `provider_profile` | table | Provider 状态隔离配置，见下方说明 |
+| `queue_policy` | string | 任务队列策略，如 `"serial-per-agent"`（串行单 Agent） |
+| `permission` | string | 权限模式：`"auto"` / `"manual"` |
+
+#### 项目级共享记忆 `.ccb/ccb_memory.md`（v6.2.1+）
+
+在项目根目录创建 `.ccb/ccb_memory.md`，写入项目级的工作流指南、代码规范、架构约定等。所有 Agent 在启动时都会读取这份共享记忆，无需在每个 Agent 的 `memory.md` 中重复定义。
+
+```markdown
+# Project Memory
+
+## 技术栈
+- Python 3.12 + FastAPI
+- PostgreSQL + SQLAlchemy
+- pytest + mypy
+
+## 代码规范
+- 所有函数必须带类型注解
+- 异步函数统一使用 `async def`
+```
+
+#### Per-Agent 记忆 `.ccb/agents/<agent>/memory.md`（v6.2.1+）
+
+针对特定 Agent 的角色补充说明，放在 `.ccb/agents/<agent-name>/memory.md`。例如给 reviewer Agent 写入审查重点：
+
+```markdown
+# Reviewer Guidelines
+
+- 重点关注类型安全和异常处理
+- 检查是否有未处理的边界条件
+```
+
+#### `ccb_config` Skill（v6.2.1+）
+
+Claude 和 Codex 安装后会继承 `ccb_config` skill，支持通过自然语言设计或更新 Agent 团队：
+
+```text
+$ccb_config Design a team for a Python library with one coordinator,
+two worktree implementation agents, and one reviewer.
+```
+
+该 skill 会帮助选择 Agent 名称、Provider、布局语法，并验证 `.ccb/ccb.config` 是配置的唯一权威来源。
 
 #### `provider_profile` 隔离配置
 
@@ -349,9 +405,22 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 # 同一 Provider 不同模型
 cmd; fast:codex, deep:codex
 
-# 全部 Provider
-cmd, agent1:codex; agent2:codex, agent3:claude; agent4:kimi
+# 全部 Provider（含本地 Kimi、MMX）
+cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx
 ```
+
+#### Chained Ask / Callback Routing（v6.2.x）
+
+当 Agent 正在处理 CCB 任务时，如果需要另一个 Agent 的结果才能继续，必须使用 `--callback` 而非普通 `ask`：
+
+```bash
+# 在 Agent 内部调用（支持链式委派：agent2 -> agent4 -> agent1 -> agent3）
+ccb ask --callback reviewer <<'EOF'
+Review this failing test and return the minimal blocker.
+EOF
+```
+
+CCB 会记录父子任务关系，子任务完成后自动将结果回传给父 Agent 作为新的 continuation 任务。普通 `ask` 仅在**没有活跃 CCB 任务**时使用；在活跃任务内使用普通 `ask` 可能导致任务状态混乱。
 
 ---
 
@@ -362,8 +431,10 @@ cmd, agent1:codex; agent2:codex, agent3:claude; agent4:kimi
 ```bash
 ccb update              # 更新到最新稳定版
 ccb update 6            # 更新到 v6.x.x 最高版本
-ccb update 6.0.29       # 更新到指定版本
+ccb update 6.2.6        # 更新到指定版本
 ```
+
+> **v6.2.6+ 升级注意**：如果当前是 source dev 模式，`ccb update` 会下载最新 release 并切换为 managed release 模式（全局 `ccb` 指向 release 安装目录，不再 symlink 到 git checkout）。如需保持 source dev 模式，请用 `git pull` + `./install.sh install` 更新。
 
 ### Source Dev 模式更新
 
@@ -371,11 +442,26 @@ ccb update 6.0.29       # 更新到指定版本
 
 ```bash
 cd /path/to/claude_codex_bridge
-git pull
-./install.sh install     # 重新安装以更新 links 和 skills
+git pull                 # 拉取 upstream 最新代码
+./install.sh install     # 重新安装以更新 links、skills 和 entrypoint smoke check
 ```
 
-> **Source dev 模式特性**：安装目录通过 **符号链接（symlink）** 指向原始 git checkout，修改代码后立即生效，无需重新安装。
+> **Source dev 模式特性**：
+> - 安装目录通过 **符号链接（symlink）** 指向原始 git checkout，修改代码后立即生效，无需重新安装
+> - `inherit_skills/` 下的技能也会跟随 git checkout 实时更新
+> - 不参与 startup 时的自动更新提示
+> - 运行 `ccb update` 后会切换为 managed release 模式
+
+### Release 包与 Source Dev 切换
+
+```bash
+# Source dev -> Release（下载 GitHub release 资产）
+ccb update
+
+# Release -> Source dev（重新指向 git checkout）
+cd /path/to/claude_codex_bridge
+./install.sh install
+```
 
 ### 重新安装
 
@@ -397,20 +483,21 @@ cd /path/to/claude_codex_bridge
 ```
 
 卸载会移除：
-- `~/.local/share/ccb` — 安装目录
+- `~/.local/share/ccb` — 安装目录（含 `inherit_skills/`、`dev_tools/`、`useful_tools/`）
 - `~/.local/bin/ccb`, `ask`, `autonew`, `ctx-transfer`, `mmx-daemon` — 主可执行文件
 - `~/.local/bin/ccb-status.sh`, `ccb-border.sh`, `ccb-git.sh`, `ccb-tmux-on.sh`, `ccb-tmux-off.sh` — tmux 辅助脚本
 - `~/.claude/CLAUDE.md` 中的 CCB 配置块
 - `~/.claude/settings.json` 中的 CCB 权限
 - `~/.tmux.conf` / `~/.tmux.conf.local` 中的 CCB tmux 配置
-- `~/.claude/skills/` 中的 CCB skills
-- `~/.codex/skills/` 中的 CCB skills
-- `~/.factory/skills/` 中的 CCB skills
-- `~/.kimi/skills/` 中的 CCB skills
+- `~/.claude/skills/` 中的 inherited CCB skills（v6.2.1+ 从 `inherit_skills/claude_skills/` 安装）
+- `~/.codex/skills/` 中的 inherited CCB skills
+- `~/.factory/skills/` 中的 inherited CCB skills
+- `~/.kimi/skills/` 中的 CCB skills（本地 kimi_skills/ 安装）
 
 不会移除：
 - Python、tmux 等系统依赖
 - 项目目录下的 `.ccb/` 配置
+- 用户原始的 `~/.claude/`、`~/.codex/` 等 Provider 全局配置（仅移除 CCB 注入的部分）
 
 ### 高级：跨项目工作流
 
@@ -506,10 +593,16 @@ brew install tmux python
 检查 Agent CLI 是否已安装：
 
 ```bash
-which claude    # 若使用 Claude agent
-which codex     # 若使用 Codex agent
-which gemini    # 若使用 Gemini agent
+which claude     # 若使用 Claude agent
+which codex      # 若使用 Codex agent
+which gemini     # 若使用 Gemini agent
+which kimi       # 若使用 Kimi agent
+which mmx-daemon # 若使用 MMX agent
 ```
+
+> **Kimi 安装提示**：Kimi Code 是 VS Code 扩展，需要先在 VS Code 中安装 [Kimi Code 扩展](https://marketplace.visualstudio.com/items?itemName=moonshot-ai.kimi-code)。`kimi` CLI 通常位于 `~/.local/bin/kimi` 或 VS Code 扩展目录中。
+>
+> **MMX 安装提示**：`mmx-daemon` 随 CCB 一起安装到 `~/.local/bin/mmx-daemon`，无需额外安装。
 
 ### Q6: `ccb` 命令找不到
 
@@ -554,6 +647,42 @@ find ~/.local/share/ccb -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/nul
 find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
 ```
 
+### Q11: Tmux pane 布局异常 / 插件干扰（v6.2.6+）
+
+CCB v6.2.6 起默认使用 `tmux -f /dev/null` 运行管理的 tmux 命令，用户的 `~/.tmux.conf` 插件不会再干扰 CCB pane 拓扑。如果你之前通过 `~/.tmux.conf` 配置了 CCB 主题或按键，这些配置现在**仅在手动 `tmux attach` 时生效**。
+
+如需为 CCB 显式指定 tmux 配置文件：
+
+```bash
+export CCB_TMUX_CONFIG="$HOME/.tmux.conf.ccb"
+ccb
+```
+
+### Q12: Kimi/MMX Agent 任务卡住无响应
+
+v6.2.6+ 为 Kimi 和 MMX 配置了 `CompletionReliabilityPolicy`，当 Agent 超过 600 秒没有任何语义进度事件（如 `ANCHOR_SEEN`、`ASSISTANT_CHUNK`、`TURN_BOUNDARY`）时，任务会被自动标记为超时并结束。
+
+如需调整超时阈值：
+
+```bash
+# 将 Kimi 超时设为 5 分钟
+export CCB_KIMI_NO_TERMINAL_TIMEOUT_S=300
+ccb
+
+# 将 MMX 超时设为 5 分钟
+export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300
+ccb
+```
+
+### Q13: Source dev 安装后 `ccb` 报 Python 版本冲突
+
+v6.2.6+ 源码安装使用 Python wrapper，会尝试检测并使用正确的 Python 解释器。如果系统同时存在多个 Python 版本（如 macOS 的 Xcode Python 3.9 和 Homebrew Python 3.12），可通过环境变量强制指定：
+
+```bash
+export CCB_PYTHON_BIN=/opt/homebrew/bin/python3.12
+./install.sh install
+```
+
 ---
 
 ## 配置文件速查
@@ -561,6 +690,8 @@ find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
 | 文件 | 位置 | 作用 |
 |------|------|------|
 | `ccb.config` | `<project>/.ccb/ccb.config` | 项目 Agent 团队布局和 API 配置 |
+| `ccb_memory.md` | `<project>/.ccb/ccb_memory.md` | 项目级共享记忆文档（v6.2.1+） |
+| `memory.md` | `<project>/.ccb/agents/<agent>/memory.md` | Per-Agent 角色记忆（v6.2.1+） |
 | `CLAUDE.md` | `~/.claude/CLAUDE.md` | Claude 全局系统提示（含 CCB 协作规则） |
 | `settings.json` | `~/.claude/settings.json` | Claude 权限设置 |
 | `settings.local.json` | `<project>/.claude/settings.local.json` | 项目级 Claude 本地设置（Stop hooks） |
@@ -576,6 +707,7 @@ find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
 ```
 <project>/.ccb/
 ├── ccb.config              # 用户维护的团队配置
+├── ccb_memory.md           # 项目级共享记忆（v6.2.1+）
 ├── ccbd/                   # 控制平面守护进程状态
 │   ├── state.json          # tmux 会话状态
 │   ├── lifecycle.json      # 生命周期管理
@@ -587,8 +719,36 @@ find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
 │   └── <agent-name>/
 │       ├── agent.json      # Agent 规格
 │       ├── jobs.jsonl      # 任务队列
+│       ├── memory.md       # Per-Agent 角色记忆（v6.2.1+）
 │       └── provider-state/ # Provider 隔离状态
 └── history/                # 会话历史归档
+```
+
+---
+
+## 开发工具与实用工具
+
+### `dev_tools/` — 维护者工具（不随 Release 安装）
+
+位于源码仓库的 `dev_tools/` 目录，维护者专用，**不会被打包到 release 资产中**。
+
+- **`dev_tools/skills/ccb-github/`**：Release Checker Skill
+  - 检查 GitHub release 状态、Markdown 文档一致性、CI 工作流配置
+  - 包含 `check_release_state.py` 等 7 个 Python 脚本模块
+  - 用法：在支持 skill 的 Provider 中调用 `$ccb_github check release`
+
+### `useful_tools/` — 可选用户工具（随 Release 分发）
+
+位于源码仓库的 `useful_tools/` 目录，**随 release 分发但不自动安装**到 Provider home。
+
+- **`useful_tools/claude_skills/plan-tree/`**：Claude 版本 plan-tree skill
+- **`useful_tools/codex_skills/plan-tree/`**：Codex 版本 plan-tree skill
+
+如需使用，手动复制到对应 Provider 的 skills 目录：
+
+```bash
+# 例如安装 plan-tree skill 到 Claude
+cp -r useful_tools/claude_skills/plan-tree ~/.claude/skills/
 ```
 
 ---
@@ -632,6 +792,10 @@ find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
 每个 Agent 的 Provider 状态完全隔离：
 - Claude agent 的 `~/.claude/` 等价状态存储在 `.ccb/agents/<name>/provider-state/claude/home/`
 - Codex agent 的 `~/.codex/` 等价状态存储在 `.ccb/agents/<name>/provider-state/codex/home/`
+- Gemini agent 的 `~/.gemini/` 等价状态存储在 `.ccb/agents/<name>/provider-state/gemini/home/`
+- Droid agent 的状态存储在 `.ccb/agents/<name>/provider-state/droid/home/`
+- Kimi agent 使用 VS Code 扩展原生配置，session 文件存储在 `.ccb/agents/<name>/kimi-session/`
+- MMX agent 使用 pane log 协议，无 managed home，session 状态存储在 pane log 中
 - 互不污染，全局 Provider 配置不会被修改
 
 ---
@@ -653,16 +817,27 @@ ccb update             # 更新到最新版
 ccb reinstall          # 重新安装
 
 # Agent 间通信（在 Agent 内部使用）
-/ask <agent> <message> # 向指定 Agent 委派任务
-/ping <agent|ccbd>     # 检查 Agent 或控制平面健康
-/pend <agent|job_id>   # 查看 Agent 回复
+/ask <agent> <message>            # 向指定 Agent 委派任务（异步）
+ccb ask --callback <agent>        # 带回调的 ask（链式委派，v6.2.x+）
+ccb ask --silence <agent>         # 静默 ask（不等待结果，v6.2.x+）
+/ping <agent|ccbd>                # 检查 Agent 或控制平面健康
+/pend <agent|job_id>              # 查看 Agent 回复
+
+# 等待与观察（v6.2.x+，原 `ask --wait` 已移除）
+ccb watch <agent>              # 实时流式查看 Agent 回复
+ccb wait-any <agent>...        # 等待任意一个 Agent 回复
+ccb wait-all <agent>...        # 等待所有指定 Agent 回复
+ccb wait-quorum <N> <agent>... # 等待 N 个 Agent 回复（法定多数）
 
 # 高级诊断
 ccb ps                 # 运行时清单
 ccb logs <agent>       # 查看 Agent 日志
 ccb doctor             # 项目诊断
 ccb doctor --output    # 导出诊断支持包
-ccb watch <agent>      # 实时回复流
 ccb cancel <job_id>    # 取消任务
 ccb config validate    # 验证 ccb.config
+ccb queue              # 查看 Agent 队列状态
+ccb queue --detail     # 查看详细队列状态（v6.2.x+）
+ccb inbox <agent>      # 查看 Agent 收件箱
+ccb mailbox_head <agent> # 查看 Agent 邮箱头部（v6.2.x+）
 ```

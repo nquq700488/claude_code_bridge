@@ -21,12 +21,12 @@ def build_start_cmd(
     runtime_dir: Path,
     launch_session_id: str,
     *,
+    prepared_state: dict[str, object] | None = None,
     load_resolved_provider_profile_fn: Callable[[Path], object | None],
     prepare_codex_home_overrides_fn: Callable[..., dict[str, str]],
     provider_start_parts_fn: Callable[[str], list[str]],
     load_resume_session_id_fn: Callable[..., str | None],
     build_codex_shell_prefix_fn: Callable[..., list[str]],
-    prepared_state: dict[str, object] | None = None,
 ) -> str:
     profile = load_resolved_provider_profile_fn(runtime_dir)
     launch_context = prepared_state or {}

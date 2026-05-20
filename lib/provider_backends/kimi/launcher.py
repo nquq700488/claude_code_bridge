@@ -67,7 +67,7 @@ def build_runtime_launcher() -> ProviderRuntimeLauncher:
     )
 
 
-def build_start_cmd(command: ParsedStartCommand, spec: AgentSpec, runtime_dir: Path, launch_session_id: str) -> str:
+def build_start_cmd(command: ParsedStartCommand, spec: AgentSpec, runtime_dir: Path, launch_session_id: str, *, prepared_state: dict[str, object] | None = None) -> str:
     cmd_parts = provider_start_parts('kimi')
     # When no custom start command is set, resolve the full path to the kimi
     # executable (checking PATH and known install locations).

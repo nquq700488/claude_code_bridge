@@ -52,6 +52,7 @@ def build_start_cmd(
     runtime_dir: Path,
     launch_session_id: str,
     *,
+    prepared_state: dict[str, object] | None = None,
     load_profile_fn,
     prepare_home_overrides_fn,
     write_settings_overlay_fn,
