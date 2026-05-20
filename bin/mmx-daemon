@@ -2,8 +2,12 @@
 """
 mmx-daemon: Wraps MiniMax CLI (mmx) as a persistent interactive process for CCB.
 
-Runs inside a tmux pane, reads stdin lines as chat messages,
+Runs inside a tmux pane. Reads CCB_REQ-prefixed messages from stdin,
 calls `mmx text chat`, and outputs replies with CCB_DONE markers.
+
+Multi-line message support: after CCB_REQ:<id>, all subsequent lines
+until the next CCB_REQ:/CCB_PING/control command are treated as part
+of the same message.
 """
 from __future__ import annotations
 
@@ -11,7 +15,13 @@ import json
 import os
 import subprocess
 import sys
-import time
+
+REQ_ID_MARKER = "CCB_REQ:"
+DONE_MARKER = "CCB_DONE"
+HEALTH_PING = "CCB_PING"
+HEALTH_PONG = "CCB_PONG"
+MSG_END_MARKER = "CCB_MSG_END"
+CONSECUTIVE_FAILURE_LIMIT = 3
 
 
 def call_mmx(message: str, timeout: int = 120) -> str:
@@ -27,14 +37,12 @@ def call_mmx(message: str, timeout: int = 120) -> str:
         if result.returncode == 0:
             try:
                 data = json.loads(result.stdout)
-                # Try common output fields in mmx JSON response
                 for key in ("output", "text", "content", "response", "result", "message", "reply"):
                     if key in data:
                         val = data[key]
                         if isinstance(val, str):
                             return val
                         return json.dumps(val, ensure_ascii=False)
-                # If no known key, return pretty-printed JSON
                 return json.dumps(data, ensure_ascii=False, indent=2)
             except json.JSONDecodeError:
                 return result.stdout.strip()
@@ -55,30 +63,93 @@ def call_mmx(message: str, timeout: int = 120) -> str:
 
 
 def main() -> int:
-    # Print startup markers for CCB detection
     print("[mmx-daemon] started", flush=True)
     print("CCB_READY", flush=True)
 
-    while True:
+    consecutive_failures = 0
+    line_buffer: list[str] = []
+
+    def read_line() -> str | None:
+        if line_buffer:
+            return line_buffer.pop(0)
         try:
-            line = input().strip()
+            line = sys.stdin.readline()
+            if not line:  # EOF returns empty string, not None
+                return None
+            return line
         except EOFError:
-            break
-        except KeyboardInterrupt:
+            return None
+
+    while True:
+        raw = read_line()
+        if raw is None:
             break
 
+        line = raw.strip()
         if not line:
             continue
 
-        # Handle shutdown signals
         if line.lower() in ("exit", "quit", "shutdown"):
             print("[mmx-daemon] shutting down", flush=True)
             break
 
-        # Call mmx and output result
-        reply = call_mmx(line)
+        if line == HEALTH_PING:
+            status = "healthy" if consecutive_failures < CONSECUTIVE_FAILURE_LIMIT else "degraded"
+            print(f"{HEALTH_PONG} {status}", flush=True)
+            continue
+
+        # Extract req_id and message
+        req_id = ""
+        message = line
+        if line.startswith(REQ_ID_MARKER):
+            req_id = line[len(REQ_ID_MARKER):].strip()
+            # Read the rest of the message (multi-line support)
+            message_lines = []
+            while True:
+                next_raw = read_line()
+                if next_raw is None:
+                    break
+                stripped = next_raw.strip()
+                if stripped == MSG_END_MARKER:
+                    break
+                if (
+                    stripped.startswith(REQ_ID_MARKER)
+                    or stripped == HEALTH_PING
+                    or stripped.lower() in ("exit", "quit", "shutdown")
+                ):
+                    # Put it back for the next loop iteration
+                    line_buffer.append(next_raw)
+                    break
+                message_lines.append(next_raw)
+            # Strip trailing newline from the last line only
+            if message_lines:
+                message_lines[-1] = message_lines[-1].rstrip("\n")
+            message = "".join(message_lines)
+
+        reply = call_mmx(message)
+
+        if reply.startswith("mmx error") or reply.startswith("mmx timeout") or reply.startswith("mmx exception"):
+            consecutive_failures += 1
+            if reply.startswith("mmx CLI not found"):
+                print(f"[mmx-daemon] FATAL: {reply}", flush=True)
+                print(reply, flush=True)
+                print(DONE_MARKER, flush=True)
+                return 1
+        else:
+            consecutive_failures = 0
+
+        if req_id:
+            print(f"{REQ_ID_MARKER}{req_id}", flush=True)
         print(reply, flush=True)
-        print("CCB_DONE", flush=True)
+        print(DONE_MARKER, flush=True)
+
+        if consecutive_failures >= CONSECUTIVE_FAILURE_LIMIT:
+            print(
+                f"[mmx-daemon] {consecutive_failures} consecutive failures; "
+                f"daemon is degraded but still running",
+                flush=True,
+            )
+            consecutive_failures = 0
 
     print("[mmx-daemon] exited", flush=True)
     return 0

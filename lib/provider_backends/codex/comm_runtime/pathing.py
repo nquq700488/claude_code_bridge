@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from project.identity import normalize_work_dir as _normalize_work_dir_impl
 
 from .binding import extract_cwd_from_log_file
 
 
-def normalize_path(value: Any | None) -> Path | None:
+def normalize_path(value: Optional[Any]) -> Optional[Path]:
     if value in (None, ""):
         return None
     if isinstance(value, Path):
@@ -19,7 +19,7 @@ def normalize_path(value: Any | None) -> Path | None:
         return None
 
 
-def normalize_work_dir(work_dir: Path | None) -> str | None:
+def normalize_work_dir(work_dir: Optional[Path]) -> Optional[str]:
     if work_dir is None:
         work_dir = Path.cwd()
     try:
@@ -29,7 +29,7 @@ def normalize_work_dir(work_dir: Path | None) -> str | None:
     return normalized or None
 
 
-def extract_cwd_from_log(reader, log_path: Path) -> str | None:
+def extract_cwd_from_log(reader, log_path: Path) -> Optional[str]:
     del reader
     cwd = extract_cwd_from_log_file(log_path)
     if not cwd:

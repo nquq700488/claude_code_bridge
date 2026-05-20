@@ -39,8 +39,8 @@ from .handlers import register_handlers
 from .request_guard import rejection_for_request
 
 APP_REQUEST_TIMEOUT_S = 0.0
-JOB_HEARTBEAT_SILENCE_START_AFTER_S = 600.0
-JOB_HEARTBEAT_REPEAT_INTERVAL_S = 600.0
+JOB_HEARTBEAT_SILENCE_START_AFTER_S = 120.0
+JOB_HEARTBEAT_REPEAT_INTERVAL_S = 120.0
 
 
 def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> None:
@@ -136,6 +136,14 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         store=app.heartbeat_state_store,
         clock=app.clock,
     )
+    def _cancel_active_job_for_agent(agent_name: str) -> None:
+        job_id = app.dispatcher._state.active_job_for('agent', agent_name)
+        if job_id is not None:
+            try:
+                app.dispatcher.cancel(job_id)
+            except Exception:
+                pass
+
     app.health_monitor = HealthMonitor(
         app.registry,
         app.ownership_guard,
@@ -144,6 +152,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         runtime_service=app.runtime_service,
         clock=app.clock,
         namespace_state_store=app.namespace_state_store,
+        on_degraded_fn=_cancel_active_job_for_agent,
     )
     app.socket_server = CcbdSocketServer(app.paths.ccbd_socket_path)
     app.socket_server.set_request_guard(lambda op: rejection_for_request(app, op))

@@ -31,6 +31,7 @@ class HealthMonitor(HealthMonitorRuntimeStateMixin):
         pid_exists=process_exists,
         session_bindings=None,
         namespace_state_store=None,
+        on_degraded_fn=None,
     ) -> None:
         self._runtime_state = HealthMonitorRuntimeState(
             registry=registry,
@@ -44,6 +45,7 @@ class HealthMonitor(HealthMonitorRuntimeStateMixin):
             namespace_state_store=namespace_state_store,
             assess_provider_pane=assess_provider_pane,
         )
+        self._on_degraded_fn = on_degraded_fn
 
     def daemon_health(self):
         return daemon_health_impl(self)

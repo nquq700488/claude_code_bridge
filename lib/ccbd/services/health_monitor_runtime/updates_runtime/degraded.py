@@ -35,7 +35,7 @@ def mark_degraded(monitor, runtime, *, health: str, session=None, binding=None):
                 runtime,
                 **updated_fields,
             )
-        return monitor._runtime_service.patch_runtime_state(
+        updated = monitor._runtime_service.patch_runtime_state(
             current,
             state=AgentState.DEGRADED,
             health=health,
@@ -43,16 +43,30 @@ def mark_degraded(monitor, runtime, *, health: str, session=None, binding=None):
             active_pane_id=next_active_pane_id,
             last_seen_at=monitor._clock(),
         )
-    updated = replace(
-        runtime,
-        state=AgentState.DEGRADED,
-        health=health,
-        pane_state=next_pane_state,
-        active_pane_id=next_active_pane_id,
-        last_seen_at=monitor._clock(),
-        **updated_fields,
-    )
-    return monitor._registry.upsert_authority(updated)
+    else:
+        updated = replace(
+            runtime,
+            state=AgentState.DEGRADED,
+            health=health,
+            pane_state=next_pane_state,
+            active_pane_id=next_active_pane_id,
+            last_seen_at=monitor._clock(),
+            **updated_fields,
+        )
+        updated = monitor._registry.upsert_authority(updated)
+
+    # Notify the dispatcher to cancel any active job for this agent.
+    _notify_degraded(monitor, updated)
+    return updated
+
+
+def _notify_degraded(monitor, runtime):
+    on_degraded = getattr(monitor, '_on_degraded_fn', None)
+    if callable(on_degraded):
+        try:
+            on_degraded(runtime.agent_name)
+        except Exception:
+            pass
 
 
 __all__ = ['mark_degraded']

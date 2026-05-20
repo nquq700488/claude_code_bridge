@@ -22,7 +22,7 @@ def build_manifest() -> ProviderManifest:
                 completion_source_kind=CompletionSourceKind.PROTOCOL_EVENT_STREAM,
                 supports_exact_completion=True,
                 supports_observed_completion=False,
-                supports_anchor_binding=False,
+                supports_anchor_binding=True,
                 supports_reply_stability=False,
                 supports_terminal_reason=False,
                 selector_family=SelectorFamily.FINAL_MESSAGE,

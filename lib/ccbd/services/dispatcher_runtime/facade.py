@@ -121,6 +121,7 @@ class DispatcherFacadeMixin:
             runtime = None
         agent['runtime_state'] = runtime.state.value if runtime is not None else 'stopped'
         agent['runtime_health'] = runtime.health if runtime is not None else 'stopped'
+        agent['pane_state'] = runtime.pane_state if runtime is not None else None
         return agent
 
 

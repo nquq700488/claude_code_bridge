@@ -162,8 +162,38 @@ tmux -S .ccb/ccbd/tmux.sock send-keys -t %3 \
 
 1. **不支持 resume**：Kimi 的 session 恢复机制与 CCB 的持久化模型不匹配，manifest 中声明 `supports_resume=False`
 2. **Approval 模式**：Kimi CLI 默认需要手动批准 Shell 命令（非 yolo 模式），执行 `ccb ask` 等命令时会弹出 approval 提示，需要发送 `y` 批准
-3. **Session ID 获取**：`--print` 模式下 session_id 只输出到 stderr，CCB 采用 work_dir hash + 扫描最新 uuid 目录的方式定位 session
-4. **工具调用可见性**：Kimi 在交互模式下会自动执行工具，CCB 只能通过 context.jsonl 观测结果，无法干预每一步
+3. **工具调用可见性**：Kimi 在交互模式下会自动执行工具，CCB 只能通过 context.jsonl 观测结果，无法干预每一步
+
+## 后续优化
+
+### Session 自动切换（已实现）
+
+Kimi 在运行过程中会创建新的 `context.jsonl` 文件（如新对话、session 过期后重建）。旧的实现按目录 mtime 排序，导致 CCB 可能选中一个空的旧 session。
+
+**修复**：改为按 `context.jsonl` 文件的 mtime 排序，并在 poll 循环中检测 session 变化，自动切换到新会话。
+
+涉及文件：
+- `lib/provider_backends/kimi/comm.py` — `_find_latest_session_uuid()`, `_list_session_candidates()`
+- `lib/provider_backends/kimi/execution.py` — `_maybe_rotate_session()`
+
+### Think Block 实时暴露（已实现）
+
+Kimi 的 `context.jsonl` 中每条 assistant 消息包含 `think` 和 `text` 两部分。`think` 是模型的内部推理过程，以前被完全忽略。
+
+**修复**：提取 `think` 内容，在 poll 循环中 emit `ASSISTANT_CHUNK` 事件，让用户在等待长时间任务时能看到模型的思考进度。
+
+事件流示例：
+```
+seq=1: session_rotate     → 切到活跃会话
+seq=2: anchor_seen        → 请求已送达
+seq=3: assistant_chunk    → "让我先并行启动多个 explore agent..."
+seq=4: assistant_final    → 最终回复
+seq=5: turn_boundary      → 回合结束
+```
+
+涉及文件：
+- `lib/provider_backends/kimi/comm.py` — `_extract_assistant_think()`
+- `lib/provider_backends/kimi/execution.py` — `_emit_think_partial()`
 
 ## 总结
 

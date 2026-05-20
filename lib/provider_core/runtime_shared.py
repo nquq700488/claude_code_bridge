@@ -21,6 +21,7 @@ _PROVIDER_DEFAULT_EXECUTABLES = {
     'opencode': 'opencode',
     'droid': 'droid',
     'kimi': 'kimi',
+    'mmx': 'mmx-daemon',
 }
 
 

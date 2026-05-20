@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Kimi Session Auto-Rotation
+
+- **Session Discovery Fixed**: `_find_latest_session_uuid` now sorts sessions by `context.jsonl` mtime instead of directory mtime, ensuring the active session is always selected
+- **Auto-Session Switching**: Kimi poll loop now detects newer sessions and emits `SESSION_ROTATE` events, preventing stuck reads on stale session files
+- **Think Block Exposure**: Kimi `poll()` now extracts `think` content from `context.jsonl` and emits `ASSISTANT_CHUNK` events for real-time progress visibility during long tasks
+- **Multi-Agent Binding Guard**: `_is_bound_elsewhere` prevents switching to sessions already bound by other CCB agents
+
+### MMX Anchor Binding
+
+- **Anchor Detection Enabled**: MMX poll loop now detects `CCB_REQ:` echo in pane logs and emits `ANCHOR_SEEN` events
+- **Event Stream Modernization**: MMX `poll()` converted from terminal `CompletionDecision` to `CompletionItem` event stream (`ANCHOR_SEEN` → `ASSISTANT_FINAL` → `TURN_BOUNDARY`)
+- **Manifest Updated**: `supports_anchor_binding` changed from `False` to `True`
+
+### Python 3.12 Compatibility
+
+- **Shebang Fixed**: `ccb` script shebang changed from `#!/usr/bin/env python3` to `#!/opt/homebrew/bin/python3.12` to avoid Xcode Python 3.9 conflicts
+- **Type Union Syntax Fixed**: Codex backend `Any | None` changed to `Optional[Any]` across 4 files for Python 3.12 `_SpecialForm` compatibility
+
+### Heartbeat Tuning
+
+- **Silence Threshold Reduced**: `JOB_HEARTBEAT_SILENCE_START_AFTER_S` and `JOB_HEARTBEAT_REPEAT_INTERVAL_S` reduced from 600s to 120s for faster stale-job detection
+
 ## v6.0.29 (2026-05-07)
 
 ### WSL Runtime State Relocation

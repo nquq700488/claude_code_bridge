@@ -74,7 +74,23 @@ creative:mmx, claude:claude
 | `launcher.py` | Tmux 启动命令构建 + session payload 写入 |
 | `execution.py` | **核心**：`start()` / `poll()` / `resume()` 生命周期 |
 
-### 3.1 mmx-daemon 设计
+### 3.1 Anchor Binding 支持（后续优化）
+
+mmx 使用 `CCB_REQ:<req_id>` / `CCB_DONE` 标记协议。原始实现只检测 `CCB_DONE`，不检测 `CCB_REQ` echo，导致系统无法确认请求是否送达 daemon。
+
+**修复**：
+- `protocol_runtime.py` — 新增 `anchor_seen_in_text(text, req_id)` 检测 `CCB_REQ:` echo
+- `execution.py` — poll 循环检测到 anchor echo 后 emit `ANCHOR_SEEN` 事件
+- `manifest.py` — `supports_anchor_binding` 从 `False` 改为 `True`
+
+事件流：
+```
+seq=1: anchor_seen      → CCB_REQ echo detected
+seq=2: assistant_final  → reply extracted from CCB_DONE block
+seq=3: turn_boundary    → turn complete
+```
+
+### 3.2 mmx-daemon 设计
 `bin/mmx-daemon` 是一个运行在 tmux pane 中的 Python 包装器：
 - 循环读取 stdin（每行一条消息）
 - 调用 `mmx text chat --message ... --output json`

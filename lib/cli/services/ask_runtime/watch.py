@@ -7,6 +7,11 @@ from cli.services.watch import WatchEventBatch
 from cli.services.watch_fallback import load_persisted_terminal_watch_payload
 
 
+_HEALTH_CHECK_INTERVAL = 5.0
+_MAX_HEALTH_CHECK_ERRORS = 3
+_PANE_DEAD_CONFIRM_COUNT = 2
+
+
 def watch_ask_job(
     context,
     job_id: str,
@@ -37,6 +42,10 @@ def watch_ask_job(
         raise
     assert handle.client is not None
     client = handle.client
+
+    last_health_check = 0.0
+    health_check_errors = 0
+    pane_dead_count = 0
 
     while True:
         try:
@@ -83,6 +92,52 @@ def watch_ask_job(
                     write_lines_fn(out, render_watch_batch_fn(fallback))
                 return fallback
             raise RuntimeError(f'wait timed out for {job_id}')
+
+        # Periodic health check: detect pane death or degraded agent early
+        agent_name = batch.agent_name
+        if agent_name:
+            now = monotonic_fn()
+            if now - last_health_check >= _HEALTH_CHECK_INTERVAL:
+                last_health_check = now
+                try:
+                    health_payload = client.queue(agent_name)
+                    agent = health_payload.get('agent', {})
+                    pane_state = agent.get('pane_state')
+                    runtime_health = agent.get('runtime_health', 'unknown')
+
+                    # Runtime health is authoritative: degraded/orphaned means the job
+                    # cannot proceed regardless of what the event stream says.
+                    if runtime_health in {'degraded', 'orphaned', 'stopped'}:
+                        raise RuntimeError(
+                            f'Agent {agent_name} health is {runtime_health}. '
+                            f'Job {job_id} cannot proceed. '
+                            f'Check the pane: tmux -S {context.paths.ccbd_tmux_socket} attach'
+                        )
+
+                    # Pane state is a secondary signal. Require two consecutive
+                    # non-alive readings before aborting to avoid false positives
+                    # during brief tmux hiccups.
+                    if pane_state is not None and pane_state != 'alive':
+                        pane_dead_count += 1
+                        if pane_dead_count >= _PANE_DEAD_CONFIRM_COUNT:
+                            raise RuntimeError(
+                                f'Agent {agent_name} pane is {pane_state} '
+                                f'(confirmed {pane_dead_count} times). '
+                                f'Job {job_id} is stuck. '
+                                f'Check the pane: tmux -S {context.paths.ccbd_tmux_socket} attach'
+                            )
+                    else:
+                        pane_dead_count = 0
+
+                    health_check_errors = 0
+                except (reconnect_error_classes, AttributeError) as exc:
+                    health_check_errors += 1
+                    if health_check_errors >= _MAX_HEALTH_CHECK_ERRORS:
+                        raise RuntimeError(
+                            f'Health check failed {health_check_errors} consecutive times '
+                            f'for agent {agent_name}: {exc}'
+                        )
+
         sleep_fn(poll_interval)
 
 

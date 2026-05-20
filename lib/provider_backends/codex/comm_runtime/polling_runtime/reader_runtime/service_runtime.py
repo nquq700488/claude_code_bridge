@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Optional
 
 from ..context import build_cursor, state_payload
 from ..entries import Extractor, read_matching_from_handle
@@ -18,7 +18,7 @@ def read_matching_since(
     *,
     extractor: Extractor,
     stop_on_missing_timeout: bool,
-) -> tuple[Any | None, dict[str, Any]]:
+) -> tuple[Optional[Any], dict[str, Any]]:
     cursor = build_cursor(state, timeout=timeout)
 
     while True:
@@ -101,8 +101,8 @@ def read_log_match(
     cursor,
     extractor: Extractor,
     block: bool,
-    size: int | None,
-) -> tuple[Any | None, int | None]:
+    size: Optional[int],
+) -> tuple[Optional[Any], Optional[int]]:
     try:
         with log_path.open("rb") as handle:
             offset = seek_to_offset(handle, cursor.offset, size=size)

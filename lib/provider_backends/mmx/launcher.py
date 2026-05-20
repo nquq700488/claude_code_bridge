@@ -1,12 +1,40 @@
 from __future__ import annotations
 
+import os
+import shlex
 from pathlib import Path
 
 from agents.models import AgentSpec
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_core.contracts import ProviderRuntimeLauncher
+from provider_core.runtime_shared import provider_start_parts
 from workspace.models import WorkspacePlan
+
+
+def _resolve_mmx_executable() -> str:
+    """Find the mmx-daemon executable.
+
+    Resolution order:
+    1. MMX_START_CMD environment variable
+    2. Bundled path (~/.local/share/ccb/bin/mmx-daemon)
+    3. 'mmx-daemon' on PATH
+    4. Fallback to 'mmx-daemon'
+    """
+    env_cmd = os.environ.get('MMX_START_CMD', '').strip()
+    if env_cmd:
+        return env_cmd
+
+    bundled = Path("~/.local/share/ccb/bin/mmx-daemon").expanduser()
+    if bundled.exists():
+        return str(bundled)
+
+    for path_dir in os.environ.get('PATH', '').split(os.pathsep):
+        candidate = Path(path_dir) / 'mmx-daemon'
+        if candidate.exists() and candidate.is_file():
+            return str(candidate)
+
+    return 'mmx-daemon'
 
 
 def build_runtime_launcher() -> ProviderRuntimeLauncher:
@@ -19,15 +47,27 @@ def build_runtime_launcher() -> ProviderRuntimeLauncher:
 
 
 def build_start_cmd(command: ParsedStartCommand, spec: AgentSpec, runtime_dir: Path, launch_session_id: str) -> str:
-    """Build the shell command to start mmx-daemon in a tmux pane."""
-    # Try to find mmx-daemon relative to the ccb install
-    # Heuristic: look near the ccb script itself
-    ccb_script = Path("~/.local/share/ccb/bin/mmx-daemon").expanduser()
-    if ccb_script.exists():
-        return str(ccb_script)
+    cmd_parts = provider_start_parts('mmx')
+    # When no custom start command is set, resolve the full path to the mmx-daemon
+    # executable (checking bundled path and PATH).
+    has_custom_cmd = bool(os.environ.get('MMX_START_CMD', '').strip())
+    if not has_custom_cmd and cmd_parts and cmd_parts[0] == 'mmx-daemon':
+        resolved = _resolve_mmx_executable()
+        cmd_parts = [resolved] + cmd_parts[1:]
 
-    # Fallback: try PATH
-    return "mmx-daemon"
+    if command.restore:
+        cmd_parts.append('--restore')
+
+    cmd_parts.extend(spec.startup_args)
+    cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
+
+    env_prefix = ''
+    if runtime_dir:
+        env_prefix = f'export MMX_RUNTIME_DIR={shlex.quote(str(runtime_dir))}'
+
+    if env_prefix:
+        return f'{env_prefix}; {cmd}'
+    return cmd
 
 
 def build_session_payload(

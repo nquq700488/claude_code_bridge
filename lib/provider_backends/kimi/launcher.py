@@ -69,11 +69,12 @@ def build_runtime_launcher() -> ProviderRuntimeLauncher:
 
 def build_start_cmd(command: ParsedStartCommand, spec: AgentSpec, runtime_dir: Path, launch_session_id: str) -> str:
     cmd_parts = provider_start_parts('kimi')
-    # If provider_start_parts returns just ['kimi'] but we found a better path,
-    # prefer our resolved path unless env var was set.
-    if cmd_parts == ['kimi'] and not os.environ.get('KIMI_START_CMD', '').strip():
+    # When no custom start command is set, resolve the full path to the kimi
+    # executable (checking PATH and known install locations).
+    has_custom_cmd = bool(os.environ.get('KIMI_START_CMD', '').strip())
+    if not has_custom_cmd and cmd_parts and cmd_parts[0] == 'kimi':
         resolved = _resolve_kimi_executable()
-        cmd_parts = [resolved]
+        cmd_parts = [resolved] + cmd_parts[1:]
 
     if command.restore:
         cmd_parts.append('--continue')

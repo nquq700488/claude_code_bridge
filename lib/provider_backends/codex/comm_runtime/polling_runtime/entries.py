@@ -3,10 +3,10 @@ from __future__ import annotations
 import json
 import os
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 
 
-Extractor = Callable[[dict[str, Any]], Any | None]
+Extractor = Callable[[dict[str, Any]], Optional[Any]]
 
 
 def read_matching_from_handle(
@@ -16,7 +16,7 @@ def read_matching_from_handle(
     extractor: Extractor,
     deadline: float,
     block: bool,
-) -> tuple[Any | None, int]:
+) -> tuple[Optional[Any], int]:
     while True:
         if block and time.time() >= deadline:
             return None, offset

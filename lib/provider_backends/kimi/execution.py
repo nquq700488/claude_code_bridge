@@ -11,9 +11,9 @@ from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, 
 from provider_execution.common import build_item, no_wrap_requested, send_prompt_to_runtime_target
 from terminal_runtime import get_backend_for_session
 
-from .comm import KimiLogReader
+from .comm import KimiLogReader, _is_bound_elsewhere, _list_session_candidates
 from .protocol_runtime import extract_reply_for_req, wrap_kimi_prompt
-from .session import load_project_session
+from .session import load_project_session as _load_project_session
 
 
 class KimiProviderAdapter:
@@ -35,7 +35,7 @@ class KimiProviderAdapter:
             source_kind=CompletionSourceKind.SESSION_SNAPSHOT,
             now=now,
             missing_session_reason="missing_kimi_session",
-            load_session_fn=load_project_session,
+            load_session_fn=_load_session,
             backend_for_session_fn=get_backend_for_session,
         )
         if not hasattr(prepared, "session"):
@@ -69,6 +69,7 @@ class KimiProviderAdapter:
                 "anchor_emitted": no_wrap,
                 "reply_buffer": "",
                 "session_path": state.get("context_path", ""),
+                "session_uuid": state.get("session_uuid", ""),
                 "no_wrap": no_wrap,
             },
         )
@@ -82,14 +83,27 @@ class KimiProviderAdapter:
         runtime = _poll_runtime_state(submission)
         items = []
 
+        # --- Session auto-discovery: switch to newer session if safe ---
+        state, _ = _maybe_rotate_session(
+            state,
+            work_dir=prepared.reader.work_dir,
+            runtime=runtime,
+            items=items,
+            submission=submission,
+            now=now,
+        )
+
         reply, state = prepared.reader.try_get_message(state)
 
-        # Session rotation detection (context path changed)
+        # Session rotation detection (context path changed by reader)
         new_session_path = str(state.get("context_path") or "")
         _apply_session_rotation(submission, runtime, items, new_session_path=new_session_path, now=now)
 
         # Emit anchor once before the first reply
         _emit_anchor(submission, runtime, items, now=now)
+
+        # Emit think content as partial progress (visible feedback during long tasks)
+        _emit_think_partial(submission, runtime, items, state=state, now=now)
 
         if reply:
             _append_reply_item(submission, runtime, items, reply=reply, state=state, now=now)
@@ -104,6 +118,7 @@ class KimiProviderAdapter:
                 "anchor_emitted": runtime["anchor_emitted"],
                 "reply_buffer": runtime["reply_buffer"],
                 "session_path": runtime["session_path"],
+                "session_uuid": runtime["session_uuid"],
             },
         )
         if not items and updated.reply == submission.reply and updated.runtime_state == submission.runtime_state:
@@ -120,6 +135,8 @@ def _poll_runtime_state(submission: ProviderSubmission) -> dict[str, object]:
         "no_wrap": bool(runtime_state.get("no_wrap", False)),
         "reply_buffer": str(runtime_state.get("reply_buffer") or ""),
         "session_path": str(runtime_state.get("session_path") or ""),
+        "session_uuid": str(runtime_state.get("session_uuid") or ""),
+        "last_think_hash": str(runtime_state.get("last_think_hash") or ""),
     }
 
 
@@ -229,15 +246,128 @@ def _append_reply_item(
 
 
 def _reply_matches_request(runtime: dict[str, object], state: dict[str, object]) -> bool:
+    """Check whether the reply from the reader belongs to the current request.
+
+    Kimi's structured logs (context.jsonl) do not embed request anchors, so
+    exact correlation is not possible. The KimiLogReader already guards against
+    stale data via checkpoint and text-hash comparison, so the reply we receive
+    here is guaranteed to be new since the last poll. We conservatively accept
+    it as belonging to the current turn.
+    """
     if bool(runtime.get("no_wrap", False)):
         return True
-    # Kimi does not embed req_id in structured logs; we conservatively accept
-    # any new assistant message after our prompt was sent.
     return True
 
 
 def _clean_reply(reply) -> str:
     return str(reply).strip()
+
+
+def _emit_think_partial(
+    submission: ProviderSubmission,
+    runtime: dict[str, object],
+    items: list,
+    *,
+    state: dict[str, object],
+    now: str,
+) -> None:
+    """Emit ASSISTANT_PARTIAL with think content for visible progress during long tasks."""
+    think = str(state.get("last_think") or "").strip()
+    if not think:
+        return
+    think_hash = str(state.get("last_think_hash") or "").strip()
+    if think_hash == runtime.get("last_think_hash"):
+        return
+    session_path = str(runtime["session_path"] or "") or None
+    items.append(
+        build_item(
+            submission,
+            kind=CompletionItemKind.ASSISTANT_CHUNK,
+            timestamp=now,
+            seq=int(runtime["next_seq"]),
+            payload={
+                "text": think,
+                "turn_id": runtime["request_anchor"],
+                "session_path": session_path,
+            },
+            cursor_kwargs={"session_path": session_path},
+        )
+    )
+    runtime["next_seq"] = int(runtime["next_seq"]) + 1
+    runtime["last_think_hash"] = think_hash
+
+
+def _maybe_rotate_session(
+    state: dict[str, object],
+    *,
+    work_dir: Path,
+    runtime: dict[str, object],
+    items: list,
+    submission: ProviderSubmission,
+    now: str,
+) -> tuple[dict[str, object], bool]:
+    """Check if a newer Kimi session exists and rotate if safe.
+
+    Returns (new_state, rotated).
+    """
+    current_uuid = str(state.get("session_uuid") or "").strip()
+    candidates = _list_session_candidates(work_dir)
+    if not candidates:
+        return state, False
+
+    latest_mtime, latest_uuid, latest_path = candidates[0]
+    if latest_uuid == current_uuid:
+        return state, False
+
+    # Find current session's mtime among candidates
+    current_mtime = 0.0
+    for mtime, uuid, _ in candidates:
+        if uuid == current_uuid:
+            current_mtime = mtime
+            break
+
+    if current_uuid and current_mtime >= latest_mtime:
+        return state, False
+
+    # Avoid switching to a session already bound by another CCB agent
+    if _is_bound_elsewhere(latest_uuid, work_dir):
+        return state, False
+
+    # Rotate: emit event and reset reader state for the new session
+    items.append(
+        build_item(
+            submission,
+            kind=CompletionItemKind.SESSION_ROTATE,
+            timestamp=now,
+            seq=int(runtime["next_seq"]),
+            payload={
+                "session_path": str(latest_path),
+                "old_session_uuid": current_uuid,
+                "new_session_uuid": latest_uuid,
+            },
+            cursor_kwargs={"session_path": str(latest_path)},
+        )
+    )
+    runtime["next_seq"] = int(runtime["next_seq"]) + 1
+    runtime["anchor_emitted"] = bool(runtime["no_wrap"])
+    runtime["reply_buffer"] = ""
+    runtime["session_uuid"] = latest_uuid
+
+    new_state = {
+        **state,
+        "session_uuid": latest_uuid,
+        "context_path": str(latest_path),
+        "last_pos": 0,
+        "last_inode": None,
+        "last_checkpoint": -1,
+        "last_text_hash": "",
+    }
+    return new_state, True
+
+
+def _load_session(work_dir: Path, *, agent_name: str):
+    """Wrap load_project_session to accept agent_name keyword argument."""
+    return _load_project_session(work_dir, instance=agent_name)
 
 
 def build_execution_adapter() -> KimiProviderAdapter:

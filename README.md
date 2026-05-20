@@ -23,7 +23,7 @@
 <details>
 <summary><b>1. One command for all required CLI operations and management</b></summary>
 
-Start, attach, recover, supervise, and operate Claude, Codex, Gemini, OpenCode, and Droid from one terminal workspace.
+Start, attach, recover, supervise, and operate Claude, Codex, Gemini, OpenCode, Droid, Kimi, and MMX from one terminal workspace.
 
 - one project entry point for all supported CLI agents
 - one place to manage startup, restore, attach, and shutdown

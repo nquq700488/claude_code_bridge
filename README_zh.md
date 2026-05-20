@@ -23,7 +23,7 @@
 <details>
 <summary><b>1. 一条命令，聚合所需 CLI 的所有操作和管理</b></summary>
 
-在一个终端工作台里启动、attach、恢复、监督并操作 Claude、Codex、Gemini、OpenCode 和 Droid。
+在一个终端工作台里启动、attach、恢复、监督并操作 Claude、Codex、Gemini、OpenCode、Droid、Kimi 和 MMX。
 
 - 一个项目入口统一管理所有支持的 CLI agent
 - 一个地方处理启动、恢复、attach 和关闭
