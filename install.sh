@@ -96,9 +96,24 @@ msg() {
     watchdog_python_missing)
       en_msg="WARN: python not available; skipping optional watchdog install"
       zh_msg="警告：未找到 Python；跳过可选 watchdog 安装" ;;
+    tomli_installing)
+      en_msg="Installing Python dependency: tomli"
+      zh_msg="正在安装 Python 依赖: tomli" ;;
+    tomli_installed)
+      en_msg="OK: TOML parser available"
+      zh_msg="OK: TOML 解析器可用" ;;
+    tomli_failed)
+      en_msg="WARN: tomli install failed; rich TOML config requires Python 3.11+ or tomli/toml"
+      zh_msg="警告：tomli 安装失败；rich TOML config 需要 Python 3.11+ 或 tomli/toml" ;;
+    tomli_skipped)
+      en_msg="INFO: tomli auto-install skipped by CCB_INSTALL_TOMLI=0"
+      zh_msg="信息：已通过 CCB_INSTALL_TOMLI=0 跳过 tomli 自动安装" ;;
+    tomli_python_missing)
+      en_msg="WARN: python not available; skipping tomli install"
+      zh_msg="警告：未找到 Python；跳过 tomli 安装" ;;
     pip_missing)
-      en_msg="WARN: pip not available for selected Python; skipping optional watchdog install"
-      zh_msg="警告：当前 Python 未提供 pip；跳过可选 watchdog 安装" ;;
+      en_msg="WARN: pip not available for selected Python"
+      zh_msg="警告：当前 Python 未提供 pip" ;;
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
@@ -144,7 +159,7 @@ SCRIPTS_TO_LINK=(
 )
 
 CLAUDE_MARKDOWN=(
-  # Old CCB commands removed - replaced by unified ask/ping/pend skills
+  # Old CCB command markdown removed; ask is the only installed CCB skill.
 )
 
 LEGACY_SCRIPTS=(
@@ -204,18 +219,18 @@ Optional environment variables:
   CODEX_CLAUDE_COMMAND_DIR Custom Claude commands directory (default: auto-detect)
   CCB_DROID_AUTOINSTALL    Auto-register Droid MCP tools if droid exists (default: 1)
   CCB_DROID_AUTOINSTALL_FORCE Re-register Droid MCP tools (default: 0)
+  CCB_DROID_AUTOINSTALL_TIMEOUT_S Timeout for Droid MCP registration (default: 10)
   CCB_BUILD_CHANNEL        Override build channel metadata (e.g. stable, preview, dev)
   CCB_BUILD_PLATFORM       Override build platform metadata (default: detected platform)
   CCB_BUILD_ARCH           Override build arch metadata (default: uname -m)
   CCB_BUILD_TIME           Override build timestamp metadata (default: current UTC time)
   CCB_SOURCE_KIND          Override source kind metadata (default: source if .git exists, else release)
+  CCB_PYTHON_BIN           Python 3.10+ executable to use for install-time checks and wrappers
   CCB_USE_MANAGED_VENV     Use install-local Python venv: auto (default), 1, or 0
                            auto = enabled for macOS release installs, disabled for source/dev installs
+  CCB_INSTALL_TOMLI        Auto-install tomli on Python versions without tomllib (default: 1; set 0 to skip)
   CCB_INSTALL_WATCHDOG     Auto-install optional watchdog dependency (default: 1; set 0 to skip)
   CCB_CONFIRM_MAJOR_UPGRADE Set to 1 to confirm replacing a pre-v6 install with v6+
-  CCB_CLAUDE_MD_MODE       CLAUDE.md injection mode: "inline" (default) or "route"
-                           inline = full config in CLAUDE.md (~57 lines)
-                           route  = minimal pointer in CLAUDE.md, full config in ~/.claude/rules/ccb-config.md
 USAGE
 }
 
@@ -254,6 +269,15 @@ require_command() {
 }
 
 PYTHON_BIN="${CCB_PYTHON_BIN:-}"
+PYTHON_CANDIDATE_COMMANDS=(
+  python3
+  python3.14
+  python3.13
+  python3.12
+  python3.11
+  python3.10
+  python
+)
 
 _python_check_310() {
   local cmd="$1"
@@ -265,7 +289,7 @@ pick_python_bin() {
   if [[ -n "${PYTHON_BIN}" ]] && _python_check_310 "${PYTHON_BIN}"; then
     return 0
   fi
-  for cmd in python3 python; do
+  for cmd in "${PYTHON_CANDIDATE_COMMANDS[@]}"; do
     if _python_check_310 "$cmd"; then
       PYTHON_BIN="$cmd"
       return 0
@@ -278,7 +302,7 @@ pick_any_python_bin() {
   if [[ -n "${PYTHON_BIN}" ]] && command -v "${PYTHON_BIN}" >/dev/null 2>&1; then
     return 0
   fi
-  for cmd in python3 python; do
+  for cmd in "${PYTHON_CANDIDATE_COMMANDS[@]}"; do
     if command -v "$cmd" >/dev/null 2>&1; then
       PYTHON_BIN="$cmd"
       return 0
@@ -304,6 +328,14 @@ require_python_version() {
   echo "OK: Python $version ($PYTHON_BIN)"
 }
 
+selected_python_executable() {
+  if ! pick_python_bin; then
+    echo "ERROR: Missing dependency: python (3.10+ required)" >&2
+    return 1
+  fi
+  "$PYTHON_BIN" -c 'import sys; print(sys.executable)'
+}
+
 python_has_module() {
   local module="$1"
   if ! pick_any_python_bin; then
@@ -316,6 +348,21 @@ sys.exit(0 if importlib.util.find_spec("${module}") else 1)
 PY
 }
 
+python_has_toml_reader() {
+  if ! pick_any_python_bin; then
+    return 1
+  fi
+  "$PYTHON_BIN" - <<'PY' >/dev/null 2>&1
+import importlib.util
+import sys
+
+for module_name in ("tomllib", "tomli", "toml"):
+    if importlib.util.find_spec(module_name) is not None:
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 python_is_virtual_environment() {
   local python_path="${1:-$PYTHON_BIN}"
   "$python_path" - <<'PY' >/dev/null 2>&1
@@ -324,6 +371,160 @@ import sys
 is_virtualenv = getattr(sys, "base_prefix", sys.prefix) != sys.prefix or hasattr(sys, "real_prefix")
 raise SystemExit(0 if is_virtualenv else 1)
 PY
+}
+
+tomli_manual_install_command() {
+  local use_venv_scope="${1:-0}"
+  if [[ "$use_venv_scope" == "1" ]]; then
+    echo "   $PYTHON_BIN -m pip install 'tomli>=2.0.0'"
+  else
+    echo "   $PYTHON_BIN -m pip install --user 'tomli>=2.0.0'"
+  fi
+}
+
+install_tomli_into_virtualenv() {
+  local python_version python_path
+  python_version="$("$PYTHON_BIN" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
+  python_path="$("$PYTHON_BIN" -c 'import sys; print(sys.executable)' 2>/dev/null || command -v "$PYTHON_BIN" 2>/dev/null || echo "$PYTHON_BIN")"
+
+  local pip_log pip_log_cleanup=0 last_failure=""
+  pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-tomli-pip.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-tomli-pip.XXXXXX.log" 2>/dev/null || true)"
+  if [[ -z "$pip_log" ]]; then
+    pip_log="/dev/null"
+  else
+    pip_log_cleanup=1
+  fi
+
+  if "$PYTHON_BIN" -m pip install "tomli>=2.0.0" >"$pip_log" 2>&1; then
+    if python_has_toml_reader; then
+      if [[ "$pip_log_cleanup" -eq 1 ]]; then
+        rm -f "$pip_log"
+      fi
+      msg tomli_installed
+      return 0
+    fi
+    last_failure="pip install succeeded, but Python $python_path still cannot import tomli"
+  else
+    last_failure="$PYTHON_BIN -m pip install 'tomli>=2.0.0' failed"
+  fi
+
+  msg tomli_failed
+  if [[ -n "$last_failure" ]]; then
+    echo "   Last failure: $last_failure"
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 && -s "$pip_log" ]]; then
+    echo "   pip output:"
+    tail -20 "$pip_log" | sed 's/^/     /'
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 ]]; then
+    rm -f "$pip_log"
+  fi
+  echo "   Manual install:"
+  tomli_manual_install_command 1
+  return 0
+}
+
+install_tomli() {
+  if [[ "${CCB_INSTALL_TOMLI:-1}" == "0" ]]; then
+    msg tomli_skipped
+    return 0
+  fi
+  if python_has_toml_reader; then
+    msg tomli_installed
+    return 0
+  fi
+  if ! pick_any_python_bin; then
+    msg tomli_python_missing
+    return 0
+  fi
+  local python_version python_path
+  python_version="$("$PYTHON_BIN" -c 'import sys; print("{}.{}.{}".format(sys.version_info[0], sys.version_info[1], sys.version_info[2]))' 2>/dev/null || echo unknown)"
+  python_path="$("$PYTHON_BIN" -c 'import sys; print(sys.executable)' 2>/dev/null || command -v "$PYTHON_BIN" 2>/dev/null || echo "$PYTHON_BIN")"
+  msg tomli_installing
+  echo "   Python: $python_path ($python_version)"
+
+  if python_is_virtual_environment; then
+    install_tomli_into_virtualenv
+    return 0
+  fi
+
+  local last_failure=""
+  if command -v uv >/dev/null 2>&1; then
+    if uv pip install --system "tomli>=2.0.0" >/dev/null 2>&1 || \
+       uv pip install "tomli>=2.0.0" >/dev/null 2>&1; then
+      if python_has_toml_reader; then
+        msg tomli_installed
+        return 0
+      fi
+      last_failure="uv installed tomli, but Python $python_path still cannot import it"
+    else
+      last_failure="uv pip install tomli>=2.0.0 failed"
+    fi
+  fi
+
+  if ! "$PYTHON_BIN" -m pip --version >/dev/null 2>&1; then
+    msg pip_missing
+    echo "   Install manually for this Python if rich TOML config is needed:"
+    echo "   $PYTHON_BIN -m ensurepip --upgrade"
+    tomli_manual_install_command 0
+    return 0
+  fi
+
+  local pip_log pip_log_cleanup=0
+  pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-tomli-pip.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-tomli-pip.XXXXXX.log" 2>/dev/null || true)"
+  if [[ -z "$pip_log" ]]; then
+    pip_log="/dev/null"
+  else
+    pip_log_cleanup=1
+  fi
+  if "$PYTHON_BIN" -m pip install --user "tomli>=2.0.0" >"$pip_log" 2>&1; then
+    if python_has_toml_reader; then
+      if [[ "$pip_log_cleanup" -eq 1 ]]; then
+        rm -f "$pip_log"
+      fi
+      msg tomli_installed
+      return 0
+    fi
+    last_failure="pip install --user succeeded, but Python $python_path still cannot import tomli"
+  else
+    last_failure="$PYTHON_BIN -m pip install --user 'tomli>=2.0.0' failed"
+  fi
+
+  if "$PYTHON_BIN" -m pip install --user --break-system-packages "tomli>=2.0.0" >"$pip_log" 2>&1; then
+    if python_has_toml_reader; then
+      if [[ "$pip_log_cleanup" -eq 1 ]]; then
+        rm -f "$pip_log"
+      fi
+      msg tomli_installed
+      return 0
+    fi
+    last_failure="pip install --user --break-system-packages succeeded, but Python $python_path still cannot import tomli"
+  else
+    last_failure="$PYTHON_BIN -m pip install --user --break-system-packages 'tomli>=2.0.0' failed"
+  fi
+
+  msg tomli_failed
+  if [[ -n "$last_failure" ]]; then
+    echo "   Last failure: $last_failure"
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 && -s "$pip_log" ]]; then
+    echo "   pip output:"
+    tail -20 "$pip_log" | sed 's/^/     /'
+  fi
+  if [[ "$pip_log_cleanup" -eq 1 ]]; then
+    rm -f "$pip_log"
+  fi
+  echo "   Manual install:"
+  tomli_manual_install_command 0
+  return 0
+}
+
+install_tomli_for_python() {
+  local python_cmd="$1"
+  local previous_python_bin="$PYTHON_BIN"
+  PYTHON_BIN="$python_cmd"
+  install_tomli
+  PYTHON_BIN="$previous_python_bin"
 }
 
 watchdog_manual_install_command() {
@@ -679,6 +880,12 @@ resolve_install_asset_root() {
   else
     echo "$INSTALL_PREFIX"
   fi
+}
+
+resolve_inherit_skills_root() {
+  local asset_root
+  asset_root="$(resolve_install_asset_root)"
+  echo "$asset_root/inherit_skills"
 }
 
 read_simple_json_string_field() {
@@ -1117,6 +1324,7 @@ install_managed_venv() {
   if ! "$venv_python" -m pip install --upgrade pip >/dev/null 2>&1; then
     echo "WARN: unable to upgrade pip inside managed venv; continuing"
   fi
+  install_tomli_for_python "$venv_python"
   install_watchdog_for_python "$venv_python"
   echo "OK: Managed Python venv ready"
 }
@@ -1220,22 +1428,30 @@ install_owned_executable() {
   chmod +x "$destination_path" 2>/dev/null || true
 }
 
-write_managed_venv_python_wrapper() {
-  local source_path="$1"
-  local destination_path="$2"
-  local venv_python
+write_python_entrypoint_wrapper() {
+  local python_path="$1"
+  local source_path="$2"
+  local destination_path="$3"
   local absolute_source="$source_path"
   if [[ "$absolute_source" != /* ]]; then
     absolute_source="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
   fi
-  venv_python="$(managed_venv_python)"
   mkdir -p "$(dirname "$destination_path")"
   clear_installed_path "$destination_path"
   cat > "$destination_path" <<EOF
 #!/usr/bin/env bash
-exec "$venv_python" "$absolute_source" "\$@"
+if [[ "\${TERM:-}" == "xterm-ghostty" ]]; then
+  export TERM=xterm-256color
+fi
+exec "$python_path" "$absolute_source" "\$@"
 EOF
   chmod +x "$destination_path" 2>/dev/null || true
+}
+
+write_managed_venv_python_wrapper() {
+  local source_path="$1"
+  local destination_path="$2"
+  write_python_entrypoint_wrapper "$(managed_venv_python)" "$source_path" "$destination_path"
 }
 
 install_entrypoint_executable() {
@@ -1253,6 +1469,15 @@ install_entrypoint_executable() {
   fi
   if use_managed_venv && [[ "$absolute_source" == "$INSTALL_PREFIX/"* ]]; then
     write_managed_venv_python_wrapper "$absolute_source" "$destination_path"
+    return 0
+  fi
+
+  if install_uses_live_source; then
+    local python_path
+    if ! python_path="$(selected_python_executable)"; then
+      exit 1
+    fi
+    write_python_entrypoint_wrapper "$python_path" "$absolute_source" "$destination_path"
     return 0
   fi
 
@@ -1276,6 +1501,20 @@ install_bin_links() {
   done
 
   echo "Created executable links in $BIN_DIR"
+}
+
+verify_installed_entrypoints() {
+  if ! "$BIN_DIR/ccb" --print-version >/dev/null 2>&1; then
+    echo "ERROR: installed ccb entrypoint failed runtime smoke check"
+    echo "   Path: $BIN_DIR/ccb"
+    exit 1
+  fi
+  if ! "$BIN_DIR/ask" --help >/dev/null 2>&1; then
+    echo "ERROR: installed ask entrypoint failed runtime smoke check"
+    echo "   Path: $BIN_DIR/ask"
+    exit 1
+  fi
+  echo "OK: Installed entrypoints passed runtime smoke check"
 }
 
 ensure_path_configured() {
@@ -1373,9 +1612,9 @@ install_skill_entry() {
 }
 
 install_claude_skills() {
-  local asset_root
-  asset_root="$(resolve_install_asset_root)"
-  local skills_src="$asset_root/claude_skills"
+  local skills_root
+  skills_root="$(resolve_inherit_skills_root)"
+  local skills_src="$skills_root/claude_skills"
   local skills_dst="$HOME/.claude/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -1384,8 +1623,8 @@ install_claude_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete wrapper/provider skills
-  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping auto"
+  # Clean up obsolete wrapper/provider skills and CCB skills no longer installed by default.
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping auto ping pend autonew all-plan docs tp tr file-op review continue"
   for obs_skill in $obsolete_skills; do
     if [[ -d "$skills_dst/$obs_skill" ]]; then
       rm -rf "$skills_dst/$obs_skill"
@@ -1393,12 +1632,11 @@ install_claude_skills() {
     fi
   done
 
-  echo "Installing Claude skills (bash SKILL.md templates)..."
+  echo "Installing inherited Claude skills (bash SKILL.md template)..."
   for skill_dir in "$skills_src"/*/; do
     [[ -d "$skill_dir" ]] || continue
     local skill_name
     skill_name=$(basename "$skill_dir")
-    [[ "$skill_name" == "docs" ]] && continue
 
     if [[ ! -f "$skill_dir/SKILL.md.bash" && ! -f "$skill_dir/SKILL.md" ]]; then
       continue
@@ -1410,19 +1648,13 @@ install_claude_skills() {
     echo "  Updated skill: $skill_name"
   done
 
-  # Shared docs live at skills/docs but are not a "skill directory". Install them as well.
-  if [[ -d "$skills_src/docs" ]]; then
-    install_owned_directory "$skills_src/docs" "$skills_dst/docs"
-    echo "  Installed skills docs: docs/"
-  fi
-
   echo "Updated Claude skills directory: $skills_dst"
 }
 
 install_codex_skills() {
-  local asset_root
-  asset_root="$(resolve_install_asset_root)"
-  local skills_src="$asset_root/codex_skills"
+  local skills_root
+  skills_root="$(resolve_inherit_skills_root)"
+  local skills_src="$skills_root/codex_skills"
   local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -1431,8 +1663,8 @@ install_codex_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete wrapper/provider skills
-  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping"
+  # Clean up obsolete wrapper/provider skills and CCB skills no longer installed by default.
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping ping pend autonew all-plan file-op"
   for obs_skill in $obsolete_skills; do
     if [[ -d "$skills_dst/$obs_skill" ]]; then
       rm -rf "$skills_dst/$obs_skill"
@@ -1440,7 +1672,7 @@ install_codex_skills() {
     fi
   done
 
-  echo "Installing Codex skills (bash SKILL.md templates)..."
+  echo "Installing inherited Codex skills (bash SKILL.md template)..."
   for skill_dir in "$skills_src"/*/; do
     [[ -d "$skill_dir" ]] || continue
     local skill_name
@@ -1459,9 +1691,9 @@ install_codex_skills() {
 }
 
 install_droid_skills() {
-  local asset_root
-  asset_root="$(resolve_install_asset_root)"
-  local skills_src="$asset_root/droid_skills"
+  local skills_root
+  skills_root="$(resolve_inherit_skills_root)"
+  local skills_src="$skills_root/droid_skills"
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -1474,8 +1706,8 @@ install_droid_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete wrapper/provider skills
-  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping"
+  # Clean up obsolete wrapper/provider skills and CCB skills no longer installed by default.
+  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping ping pend autonew all-plan"
   for obs_skill in $obsolete_skills; do
     if [[ -d "$skills_dst/$obs_skill" ]]; then
       rm -rf "$skills_dst/$obs_skill"
@@ -1483,11 +1715,12 @@ install_droid_skills() {
     fi
   done
 
-  echo "Installing Droid/Factory skills..."
+  echo "Installing Droid/Factory ask skill..."
   for skill_dir in "$skills_src"/*/; do
     [[ -d "$skill_dir" ]] || continue
     local skill_name
     skill_name=$(basename "$skill_dir")
+    [[ "$skill_name" == "ask" ]] || continue
 
     if [[ ! -f "$skill_dir/SKILL.md" ]]; then
       continue
@@ -1547,6 +1780,36 @@ install_kimi_skills() {
   echo "Updated Kimi skills directory: $skills_dst"
 }
 
+droid_command_with_timeout() {
+  local python_runner="$1"
+  local timeout_s="$2"
+  shift 2
+  "$python_runner" - "$timeout_s" "$@" <<'PY' >/dev/null 2>&1
+from __future__ import annotations
+
+import subprocess
+import sys
+
+try:
+    timeout_s = float(sys.argv[1])
+except Exception:
+    timeout_s = 10.0
+cmd = sys.argv[2:]
+try:
+    result = subprocess.run(
+        cmd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        timeout=max(timeout_s, 0.1),
+    )
+except subprocess.TimeoutExpired:
+    raise SystemExit(124)
+except FileNotFoundError:
+    raise SystemExit(127)
+raise SystemExit(result.returncode)
+PY
+}
+
 install_droid_delegation() {
   if [[ "${CCB_DROID_AUTOINSTALL:-1}" == "0" ]]; then
     return
@@ -1555,11 +1818,11 @@ install_droid_delegation() {
     return
   fi
   local py
-  py="$(command -v python3 2>/dev/null || command -v python 2>/dev/null || true)"
-  if [[ -z "$py" ]]; then
-    echo "WARN: python required for Droid MCP setup; skipping"
+  if ! py="$(selected_python_executable)"; then
+    echo "WARN: Python 3.10+ required for Droid MCP setup; skipping"
     return
   fi
+  local timeout_s="${CCB_DROID_AUTOINSTALL_TIMEOUT_S:-10}"
   local asset_root
   asset_root="$(resolve_install_asset_root)"
   local server="$asset_root/mcp/ccb-delegation/server.py"
@@ -1568,12 +1831,12 @@ install_droid_delegation() {
     return
   fi
   if [[ "${CCB_DROID_AUTOINSTALL_FORCE:-0}" == "1" ]]; then
-    droid mcp remove ccb-delegation >/dev/null 2>&1 || true
+    droid_command_with_timeout "$py" "$timeout_s" droid mcp remove ccb-delegation || true
   fi
-  if droid mcp add ccb-delegation --type stdio "$py" "$server" >/dev/null 2>&1; then
+  if droid_command_with_timeout "$py" "$timeout_s" droid mcp add ccb-delegation --type stdio "$py" "$server"; then
     echo "OK: Droid MCP delegation registered"
   else
-    echo "WARN: Failed to register Droid MCP delegation (already registered or droid config unavailable)"
+    echo "WARN: Failed to register Droid MCP delegation within ${timeout_s}s (already registered, unavailable, or timed out)"
   fi
 }
 
@@ -1846,6 +2109,48 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
   fi
 
   echo "Updated .clinerules: $clinerules"
+}
+
+cleanup_marked_memory_file() {
+  local file_path="$1"
+  local start_marker="$2"
+  local end_marker="$3"
+  local label="$4"
+
+  if [[ ! -f "$file_path" ]]; then
+    return 0
+  fi
+  if ! grep -q "$start_marker" "$file_path" 2>/dev/null; then
+    return 0
+  fi
+  if ! pick_python_bin; then
+    echo "WARN: python required to clean $label; skipping"
+    return 1
+  fi
+
+  "$PYTHON_BIN" - "$file_path" "$start_marker" "$end_marker" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+path = Path(sys.argv[1])
+start = re.escape(sys.argv[2])
+end = re.escape(sys.argv[3])
+content = path.read_text(encoding="utf-8")
+content = re.sub(rf"\n?{start}.*?{end}\n?", "\n", content, flags=re.DOTALL)
+path.write_text(content.strip() + "\n", encoding="utf-8")
+PY
+  echo "Removed CCB memory block from $label"
+}
+
+cleanup_memory_injections() {
+  uninstall_claude_md_config
+  if install_uses_live_source; then
+    return 0
+  fi
+  cleanup_marked_memory_file "$INSTALL_PREFIX/AGENTS.md" "$CCB_ROLES_START_MARKER" "$CCB_ROLES_END_MARKER" "AGENTS.md" || true
+  cleanup_marked_memory_file "$INSTALL_PREFIX/AGENTS.md" "$CCB_RUBRICS_START_MARKER" "$CCB_RUBRICS_END_MARKER" "AGENTS.md" || true
+  cleanup_marked_memory_file "$INSTALL_PREFIX/.clinerules" "$CCB_ROLES_START_MARKER" "$CCB_ROLES_END_MARKER" ".clinerules" || true
 }
 
 install_settings_permissions() {
@@ -2142,8 +2447,9 @@ install_requirements() {
   confirm_backend_env_wsl
   require_python_version
   if use_managed_venv; then
-    echo "INFO: watchdog will be installed inside the managed Python venv"
+    echo "INFO: Python package dependencies will be installed inside the managed Python venv"
   else
+    install_tomli
     install_watchdog
   fi
   require_terminal_backend
@@ -2209,6 +2515,7 @@ install_all() {
     write_install_metadata
   fi
   install_bin_links
+  verify_installed_entrypoints
   ensure_path_configured
   install_claude_commands
   install_claude_skills
@@ -2216,9 +2523,7 @@ install_all() {
   install_droid_skills
   install_kimi_skills
   install_droid_delegation
-  install_claude_md_config
-  install_agents_md_config
-  install_clinerules_config
+  cleanup_memory_injections
   install_settings_permissions
   install_tmux_config
   echo "OK: Installation complete"
@@ -2231,18 +2536,7 @@ install_all() {
   fi
   print_install_identity_summary
   echo "   Claude commands updated"
-  local md_mode="${CCB_CLAUDE_MD_MODE:-inline}"
-  if [[ "$md_mode" == "route" ]]; then
-    echo "   Global CLAUDE.md configured with CCB route pointer (full config in ~/.claude/rules/ccb-config.md)"
-  else
-    echo "   Global CLAUDE.md configured with CCB collaboration rules (inline)"
-  fi
-  if install_uses_live_source; then
-    echo "   Repo AGENTS.md/.clinerules left untouched (source dev mode)"
-  else
-    echo "   AGENTS.md configured with review rubrics"
-    echo "   .clinerules configured with role assignments"
-  fi
+  echo "   Global memory files left unmodified; old CCB memory blocks cleaned when present"
   if use_managed_venv; then
     echo "   Managed Python: $(managed_venv_python)"
   fi
@@ -2431,7 +2725,7 @@ except Exception:
 
 uninstall_claude_skills() {
   local skills_dst="$HOME/.claude/skills"
-  local ccb_skills="ask ping pend autonew all-plan docs tp tr file-op review continue"
+  local ccb_skills="ask ccb_config ping pend autonew all-plan docs tp tr file-op review continue"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
@@ -2448,7 +2742,7 @@ uninstall_claude_skills() {
 
 uninstall_codex_skills() {
   local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
-  local ccb_skills="ask ping pend autonew all-plan file-op"
+  local ccb_skills="ask ccb_config ping pend autonew all-plan file-op"
 
   if [[ ! -d "$skills_dst" ]]; then
     return

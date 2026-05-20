@@ -8,8 +8,22 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from provider_core.memory_projection import (
+    memory_projection_result,
+    record_memory_projection_event,
+    text_file_sha256,
+)
+from provider_core.projected_assets import route_projected_tree
 from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
+from project_memory import (
+    ensure_project_memory,
+    load_memory_sources,
+    read_memory_source,
+    render_memory_bundle,
+)
+from project_memory.hashing import sha256_text
+from storage.atomic import atomic_write_text
 
 from ..home_layout import ClaudeHomeLayout, claude_layout_for_home, claude_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
@@ -27,7 +41,9 @@ _CLAUDE_JSON_AUTH_COMPANION_KEYS = (
     'hasAvailableSubscription',
     'subscriptionNoticeCount',
 )
-_MACOS_KEYCHAIN_CLAUDE_SERVICES = ('Claude Code', 'Claude Code-custom-oauth')
+_MACOS_KEYCHAIN_CLAUDE_SERVICES = ('Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code')
+_CLAUDE_SKILLS_PROJECTION_LABEL = 'claude-inherited-skills'
+_CLAUDE_COMMANDS_PROJECTION_LABEL = 'claude-inherited-commands'
 
 
 def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
@@ -43,9 +59,28 @@ def resolve_claude_home_layout(runtime_dir: Path, profile) -> ClaudeHomeLayout:
     return claude_layout_for_home(managed_home)
 
 
-def prepare_claude_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
+def prepare_claude_home_overrides(
+    runtime_dir: Path,
+    profile,
+    *,
+    refresh_home: bool = True,
+    project_root: Path | None = None,
+    agent_name: str | None = None,
+    workspace_path: Path | None = None,
+    memory_projection_event_path: Path | None = None,
+    memory_projection_marker_path: Path | None = None,
+) -> dict[str, str]:
     layout = resolve_claude_home_layout(runtime_dir, profile)
-    materialize_claude_home_config(layout.home_root, profile=profile)
+    if refresh_home:
+        materialize_claude_home_config(
+            layout.home_root,
+            profile=profile,
+            project_root=project_root,
+            agent_name=agent_name,
+            workspace_path=workspace_path,
+            memory_projection_event_path=memory_projection_event_path,
+            memory_projection_marker_path=memory_projection_marker_path,
+        )
     return {
         'HOME': str(layout.home_root),
         'CLAUDE_PROJECTS_ROOT': str(layout.projects_root),
@@ -53,18 +88,40 @@ def prepare_claude_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
     }
 
 
-def materialize_claude_home_config(target_home: Path, *, profile=None, source_home: Path | None = None) -> ClaudeHomeLayout:
+def materialize_claude_home_config(
+    target_home: Path,
+    *,
+    profile=None,
+    source_home: Path | None = None,
+    project_root: Path | None = None,
+    agent_name: str | None = None,
+    workspace_path: Path | None = None,
+    memory_projection_event_path: Path | None = None,
+    memory_projection_marker_path: Path | None = None,
+) -> ClaudeHomeLayout:
     layout = claude_layout_for_home(Path(target_home).expanduser())
     source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
-    _prepare_managed_home(source_root, layout, profile=profile)
+    memory_result = _prepare_managed_home(
+        source_root,
+        layout,
+        profile=profile,
+        project_root=project_root,
+        agent_name=agent_name,
+        workspace_path=workspace_path,
+    )
+    record_memory_projection_event(
+        memory_result,
+        provider='claude',
+        event_path=memory_projection_event_path,
+        marker_path=memory_projection_marker_path,
+        agent_name=agent_name,
+    )
     return layout
 
 
 def _profile_runtime_home(profile) -> Path | None:
-    runtime_home = getattr(profile, 'runtime_home', None) if profile is not None else None
-    if not runtime_home:
-        return None
-    return Path(runtime_home).expanduser()
+    del profile
+    return None
 
 
 def _existing_layout(runtime_dir: Path, *, managed_home: Path) -> ClaudeHomeLayout | None:
@@ -109,7 +166,15 @@ def _normalize_path(value: object) -> Path | None:
             return None
 
 
-def _prepare_managed_home(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+def _prepare_managed_home(
+    source_home: Path,
+    target_layout: ClaudeHomeLayout,
+    *,
+    profile,
+    project_root: Path | None,
+    agent_name: str | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
     target_layout.home_root.mkdir(parents=True, exist_ok=True)
     target_layout.claude_dir.mkdir(parents=True, exist_ok=True)
     target_layout.projects_root.mkdir(parents=True, exist_ok=True)
@@ -117,22 +182,141 @@ def _prepare_managed_home(source_home: Path, target_layout: ClaudeHomeLayout, *,
 
     if target_layout.home_root == source_home.expanduser():
         _ensure_trust_file(target_layout.trust_path)
-        return
+        return memory_projection_result(
+            status='skipped',
+            reason='source_home_is_target_home',
+            path=target_layout.claude_dir / 'CLAUDE.md',
+        )
 
     _materialize_settings(source_home, target_layout, profile=profile)
+    _materialize_macos_keychain_preferences(source_home, target_layout, profile=profile)
     _materialize_auth(source_home, target_layout, profile=profile)
     _materialize_trust(source_home, target_layout, profile=profile)
-    _materialize_inherited_assets(source_home, target_layout, profile=profile)
+    return _materialize_inherited_assets(
+        source_home,
+        target_layout,
+        profile=profile,
+        project_root=project_root,
+        agent_name=agent_name,
+        workspace_path=workspace_path,
+    )
 
 
-def _materialize_inherited_assets(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
-    if _inherits_commands(profile):
-        _sync_tree(source_home / '.claude' / 'commands', target_layout.claude_dir / 'commands')
-    if _inherits_skills(profile):
-        _sync_tree(source_home / '.claude' / 'skills', target_layout.claude_dir / 'skills')
-        _sync_file(source_home / '.claude' / 'CLAUDE.md', target_layout.claude_dir / 'CLAUDE.md')
+def _materialize_inherited_assets(
+    source_home: Path,
+    target_layout: ClaudeHomeLayout,
+    *,
+    profile,
+    project_root: Path | None,
+    agent_name: str | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
+    _route_inherited_tree(
+        source_home / '.claude' / 'commands',
+        target_layout.claude_dir / 'commands',
+        enabled=_inherits_commands(profile),
+        label=_CLAUDE_COMMANDS_PROJECTION_LABEL,
+    )
+    _route_inherited_tree(
+        source_home / '.claude' / 'skills',
+        target_layout.claude_dir / 'skills',
+        enabled=_inherits_skills(profile),
+        label=_CLAUDE_SKILLS_PROJECTION_LABEL,
+    )
+    memory_result = _materialize_claude_memory(
+        source_home,
+        target_layout,
+        profile=profile,
+        project_root=project_root,
+        agent_name=agent_name,
+        workspace_path=workspace_path,
+    )
     _materialize_home_hook_assets(source_home, target_layout, profile=profile)
+    return memory_result
 
+
+def _materialize_claude_memory(
+    source_home: Path,
+    target_layout: ClaudeHomeLayout,
+    *,
+    profile,
+    project_root: Path | None,
+    agent_name: str | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
+    target = target_layout.claude_dir / 'CLAUDE.md'
+    if not _inherits_memory(profile):
+        _remove_file(target)
+        return memory_projection_result(
+            status='skipped',
+            reason='inherit_memory_disabled',
+            path=target,
+        )
+    if project_root is None or agent_name is None:
+        return memory_projection_result(
+            status='failed',
+            reason='missing_project_context',
+            path=target,
+        )
+    root = Path(project_root).expanduser()
+    try:
+        warnings: list[str] = []
+        ensure_result = ensure_project_memory(root)
+        if ensure_result.warning:
+            warnings.append(ensure_result.warning)
+        extra_sources = tuple(
+            source
+            for source in (
+                read_memory_source(
+                    kind='provider_user_memory',
+                    title='Provider User Memory',
+                    path=source_home / '.claude' / 'CLAUDE.md',
+                    include_missing=False,
+                ),
+            )
+            if source is not None
+        )
+        sources = load_memory_sources(
+            root,
+            agent_name=agent_name,
+            provider='claude',
+            extra_sources=extra_sources,
+            include_provider_native_project=False,
+        )
+        warnings.extend(source.warning for source in sources if source.warning)
+        rendered = render_memory_bundle(
+            project_root=root,
+            agent_name=agent_name,
+            provider='claude',
+            sources=sources,
+            workspace_path=workspace_path,
+        )
+        digest = sha256_text(rendered)
+        if text_file_sha256(target) == digest:
+            return memory_projection_result(
+                status='skipped',
+                reason='unchanged',
+                path=target,
+                sha256=digest,
+                source_count=len(sources),
+                warnings=warnings,
+            )
+        atomic_write_text(target, rendered)
+        return memory_projection_result(
+            status='ok',
+            reason='written',
+            path=target,
+            sha256=digest,
+            source_count=len(sources),
+            warnings=warnings,
+        )
+    except Exception as exc:
+        return memory_projection_result(
+            status='failed',
+            reason=type(exc).__name__,
+            path=target,
+            error_detail=str(exc),
+        )
 
 def _materialize_home_hook_assets(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
     if not _inherits_config(profile):
@@ -181,6 +365,48 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
         if source_auth.is_file():
             _sync_file(source_auth, target_auth)
     _materialize_macos_keychain_auth(target_layout)
+
+
+def _materialize_macos_keychain_preferences(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+    target = target_layout.home_root / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    target_keychains = target_layout.home_root / 'Library' / 'Keychains'
+    if not _inherits_auth(profile):
+        _remove_file(target)
+        _remove_keychains_link(target_keychains)
+        return
+    if platform.system() != 'Darwin':
+        return
+    source = source_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    if source.is_file():
+        _sync_file(source, target)
+        return
+    _remove_file(target)
+    _materialize_macos_keychains_link(source_home / 'Library' / 'Keychains', target_keychains)
+
+
+def _materialize_macos_keychains_link(source: Path, target: Path) -> None:
+    if not source.is_dir():
+        _remove_keychains_link(target)
+        return
+    try:
+        if target.is_symlink():
+            if target.resolve() == source.resolve():
+                return
+            target.unlink()
+        elif target.exists():
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.symlink_to(source, target_is_directory=True)
+    except Exception:
+        pass
+
+
+def _remove_keychains_link(path: Path) -> None:
+    try:
+        if path.is_symlink():
+            path.unlink()
+    except Exception:
+        pass
 
 
 def _projected_claude_json_payload(
@@ -252,7 +478,7 @@ def _macos_keychain_services() -> tuple[str, ...]:
     custom_service = 'Claude Code-custom-oauth'
     if os.environ.get('CLAUDE_CODE_CUSTOM_OAUTH_URL') and custom_service in services:
         services.remove(custom_service)
-        services.insert(0, custom_service)
+        services.insert(1, custom_service)
     return tuple(services)
 
 
@@ -385,6 +611,10 @@ def _inherits_commands(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_commands', True))
 
 
+def _inherits_memory(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_memory', True))
+
+
 def _read_json_object(path: Path) -> dict[str, object]:
     try:
         data = _json_object_from_text(path.read_text(encoding='utf-8'))
@@ -482,6 +712,10 @@ def _sync_tree(source: Path, target: Path) -> None:
         shutil.copytree(source, target, dirs_exist_ok=True)
     except Exception:
         pass
+
+
+def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
+    route_projected_tree(source, target, enabled=enabled, label=label, allow_unmarked_replace=True)
 
 
 def _system_home_root() -> Path:

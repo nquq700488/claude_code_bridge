@@ -4,9 +4,57 @@ from collections.abc import Callable, Collection
 
 from agents.models import AgentValidationError
 from ccbd.api_models import DeliveryScope, MessageEnvelope
-from mailbox_runtime.targets import CMD_ACTOR, NON_AGENT_ACTORS, normalize_actor_name
+from mailbox_runtime.targets import NON_AGENT_ACTORS, normalize_actor_name
 
 from .models import AskSummary
+
+_DEFAULT_REPLY_GUIDANCE = """CCB reply guidance:
+- Answer directly and concisely.
+- Include only relevant conclusions, blockers, risks, evidence, and next actions.
+- Avoid raw logs and background unless explicitly requested."""
+
+_COMPACT_REPLY_GUIDANCE = """CCB reply guidance:
+- Distill aggressively and lead with the answer.
+- Keep only details needed for this ask.
+- Omit empty sections, raw logs, repeated context, and background unless essential."""
+
+_SILENT_REPLY_GUIDANCE = """CCB reply guidance:
+- Silent-on-success requested.
+- Reply with the shortest useful status.
+- Include details only for failures, blockers, or required next actions."""
+
+_GUIDANCE_MARKER = 'CCB reply guidance:'
+_EXPLICIT_OUTPUT_HINTS = (
+    'output requirements',
+    'reply format',
+    'response format',
+    'format:',
+    'only reply',
+    'reply only',
+    'full report',
+    'full output',
+    'detailed report',
+    'complete output',
+    'include everything',
+    'all details',
+    'leave nothing out',
+    'verbatim',
+    'do not summarize',
+    'do not abbreviate',
+    '\u5b8c\u6574\u8f93\u51fa',
+    '\u4e0d\u8981\u603b\u7ed3',
+    '\u4e0d\u8981\u538b\u7f29',
+    '\u4e0d\u8981\u7cbe\u7b80',
+    '\u4e0d\u8981\u7701\u7565',
+    '\u9010\u5b57\u8fd4\u56de',
+    '\u9010\u5b57',
+    '\u539f\u6837\u8fd4\u56de',
+    '\u4fdd\u7559\u539f\u6587',
+    '\u5b8c\u6574\u65e5\u5fd7',
+    '\u5b8c\u6574\u62a5\u544a',
+    '\u8be6\u7ec6\u62a5\u544a',
+    '\u5168\u6587',
+)
 
 
 def submit_ask(
@@ -22,7 +70,7 @@ def submit_ask(
     _validate_target(normalized_target, config.agents)
     sender = resolve_ask_sender_fn(context, command.sender)
     normalized_sender = _normalize_sender(sender)
-    _validate_sender(normalized_sender, config.agents, cmd_enabled=bool(getattr(config, 'cmd_enabled', False)))
+    _validate_sender(normalized_sender, config.agents)
     payload = invoke_mounted_daemon_fn(
         context,
         allow_restart_stale=True,
@@ -31,16 +79,56 @@ def submit_ask(
                 project_id=context.project.project_id,
                 to_agent=normalized_target,
                 from_actor=normalized_sender,
-                body=command.message,
+                body=message_with_reply_guidance(
+                    command.message,
+                    message_type=command.mode or 'ask',
+                    compact=bool(getattr(command, 'compact', False)),
+                    silence_on_success=command.silence,
+                ),
                 task_id=command.task_id,
                 reply_to=command.reply_to,
                 message_type=command.mode or 'ask',
                 delivery_scope=_delivery_scope(command.target),
                 silence_on_success=command.silence,
+                route_options=_route_options(command),
             )
         )
     )
     return _summary_from_payload(context.project.project_id, payload)
+
+
+def _route_options(command) -> dict[str, object]:
+    if not bool(getattr(command, 'callback', False)):
+        return {}
+    return {'mode': 'callback'}
+
+
+def message_with_reply_guidance(
+    message: str,
+    *,
+    message_type: str,
+    compact: bool = False,
+    silence_on_success: bool = False,
+) -> str:
+    if str(message_type or '').strip().lower() != 'ask':
+        return message
+    if _has_explicit_output_guidance(message):
+        return message
+    if silence_on_success:
+        guidance = _SILENT_REPLY_GUIDANCE
+    elif compact:
+        guidance = _COMPACT_REPLY_GUIDANCE
+    else:
+        guidance = _DEFAULT_REPLY_GUIDANCE
+    return f'{str(message).rstrip()}\n\n{guidance}'
+
+
+def _has_explicit_output_guidance(message: str) -> bool:
+    text = str(message or '')
+    lowered = text.lower()
+    if _GUIDANCE_MARKER.lower() in lowered:
+        return True
+    return any(hint in lowered for hint in _EXPLICIT_OUTPUT_HINTS)
 
 
 def _normalize_sender(value: str | None) -> str:
@@ -62,9 +150,9 @@ def _validate_target(target: str, configured_agents: Collection[str]) -> None:
         raise ValueError(f'unknown agent: {target}')
 
 
-def _validate_sender(sender: str, configured_agents: Collection[str], *, cmd_enabled: bool) -> None:
+def _validate_sender(sender: str, configured_agents: Collection[str]) -> None:
     if sender in NON_AGENT_ACTORS:
-        if sender == CMD_ACTOR and not cmd_enabled:
+        if sender == 'cmd':
             raise ValueError(f'unknown sender agent: {sender}')
         return
     if sender in configured_agents:
@@ -95,4 +183,4 @@ def _summary_from_payload(project_id: str, payload: dict) -> AskSummary:
     return AskSummary(project_id=project_id, submission_id=submission_id, jobs=jobs)
 
 
-__all__ = ['submit_ask']
+__all__ = ['message_with_reply_guidance', 'submit_ask']

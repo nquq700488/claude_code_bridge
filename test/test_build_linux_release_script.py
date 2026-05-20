@@ -36,6 +36,11 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / ".architec").mkdir(parents=True)
     (repo_root / ".tmp_pytest" / "run").mkdir(parents=True)
     (repo_root / ".tmp_test_env_arch1" / "env").mkdir(parents=True)
+    (repo_root / "dev_tools" / "skills").mkdir(parents=True)
+    (repo_root / "inherit_skills" / "codex_skills" / "ask").mkdir(parents=True)
+    (repo_root / "inherit_skills" / "claude_skills" / "ask").mkdir(parents=True)
+    (repo_root / "useful_tools" / "codex_skills" / "plan-tree").mkdir(parents=True)
+    (repo_root / "useful_tools" / "claude_skills" / "plan-tree").mkdir(parents=True)
     (repo_root / "lib").mkdir(parents=True)
     (repo_root / "ccb").write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     (repo_root / "install.sh").write_text("#!/usr/bin/env bash\n", encoding="utf-8")
@@ -46,10 +51,19 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / ".architec" / "summary.json").write_text("{}", encoding="utf-8")
     (repo_root / ".tmp_pytest" / "run" / "state.json").write_text("{}", encoding="utf-8")
     (repo_root / ".tmp_test_env_arch1" / "env" / "state.json").write_text("{}", encoding="utf-8")
+    (repo_root / "dev_tools" / "skills" / "README.md").write_text("dev only\n", encoding="utf-8")
+    (repo_root / "inherit_skills" / "codex_skills" / "ask" / "SKILL.md").write_text("ask\n", encoding="utf-8")
+    (repo_root / "inherit_skills" / "claude_skills" / "ask" / "SKILL.md").write_text("ask\n", encoding="utf-8")
+    (repo_root / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
+    (repo_root / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
 
     module.copy_repo_tree(repo_root, destination)
 
     assert (destination / "lib" / "app.py").exists()
+    assert (destination / "inherit_skills" / "codex_skills" / "ask" / "SKILL.md").exists()
+    assert (destination / "inherit_skills" / "claude_skills" / "ask" / "SKILL.md").exists()
+    assert (destination / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").exists()
+    assert (destination / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").exists()
     assert not (destination / ".git").exists()
     assert not (destination / ".ccb").exists()
     assert not (destination / ".ccb-requests").exists()
@@ -57,6 +71,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert not (destination / ".architec").exists()
     assert not (destination / ".tmp_pytest").exists()
     assert not (destination / ".tmp_test_env_arch1").exists()
+    assert not (destination / "dev_tools").exists()
 
 
 def test_copy_repo_tree_excludes_generated_output_subtree_inside_repo(tmp_path: Path) -> None:
@@ -159,6 +174,24 @@ def test_dirty_worktree_entries_ignores_excluded_temp_env_prefix(monkeypatch) ->
         return SimpleNamespace(
             returncode=0,
             stdout="?? .tmp_test_env_arch1/runtime/state.json\n M install.sh\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(module.subprocess, "run", _fake_run)
+
+    entries = module.dirty_worktree_entries(Path("/tmp/repo"))
+
+    assert entries == (" M install.sh",)
+
+
+def test_dirty_worktree_entries_ignores_dev_tools(monkeypatch) -> None:
+    module = _load_module()
+
+    def _fake_run(cmd, **kwargs):
+        assert cmd[-2:] == ["--porcelain", "--untracked-files=all"]
+        return SimpleNamespace(
+            returncode=0,
+            stdout="?? dev_tools/skills/ccb-github/SKILL.md\n M install.sh\n",
             stderr="",
         )
 

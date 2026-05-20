@@ -10,16 +10,37 @@ from pathlib import Path
 import re
 import shutil
 
+from provider_core.memory_projection import (
+    materialize_provider_memory_file,
+    memory_projection_result,
+    record_memory_projection_event,
+)
+from provider_core.projected_assets import (
+    copy_projected_tree_to_cache,
+    remove_projected_path,
+    route_projected_tree,
+    tree_content_fingerprint,
+    write_projected_marker,
+)
+from provider_core.source_home import current_provider_source_home
+from storage.atomic import atomic_write_text
+from storage.paths import PathLayout
+
 
 _CODEX_CUSTOM_PROVIDER_ID = 'custom'
 _BARE_TOML_KEY_RE = re.compile(r'^[A-Za-z0-9_-]+$')
 _CODEX_PLUGIN_TREE_RELATIVE = Path('.tmp') / 'plugins'
 _CODEX_PLUGIN_SHA_RELATIVE = Path('.tmp') / 'plugins.sha'
+_CODEX_SKILLS_PROJECTION_LABEL = 'codex-inherited-skills'
+_CODEX_COMMANDS_PROJECTION_LABEL = 'codex-inherited-commands'
+_CODEX_PLUGIN_PROJECTION_LABEL = 'codex-plugin-bundle'
 _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('.agents') / 'plugins' / 'marketplace.json',
     Path('.agents') / 'skills',
     Path('plugins'),
 )
+_MANAGED_CODEX_DISABLED_FEATURES = ('external_migration',)
+_TOML_TABLE_HEADER_RE = re.compile(r'^\s*\[{1,2}[^\]]+\]{1,2}\s*(?:#.*)?$')
 
 
 @dataclass(frozen=True)
@@ -35,6 +56,12 @@ def materialize_codex_home_config(
     *,
     profile=None,
     source_home: Path | None = None,
+    project_root: Path | None = None,
+    agent_name: str | None = None,
+    workspace_path: Path | None = None,
+    shared_cache_root: Path | None = None,
+    memory_projection_event_path: Path | None = None,
+    memory_projection_marker_path: Path | None = None,
 ) -> Path:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
@@ -49,7 +76,12 @@ def materialize_codex_home_config(
         _write_codex_api_authority_config(target_config, authority, source_config=source_config)
     elif _inherits_config(profile) and _inherits_api(profile) and _source_config_valid(source_config):
         if source_config.is_file():
-            _sync_file(source_config, target_config)
+            payload = _read_source_config_payload(source_config)
+            if payload:
+                _write_managed_codex_config(target_config, payload)
+            else:
+                _sync_file(source_config, target_config)
+                _append_managed_codex_feature_overrides(target_config)
         else:
             _write_managed_config_stub(target_config)
     else:
@@ -61,9 +93,39 @@ def materialize_codex_home_config(
         profile=profile,
         authority=authority,
     )
-    _sync_tree(source_home / 'skills', target_home / 'skills', enabled=_inherits_skills(profile))
-    _sync_tree(source_home / 'commands', target_home / 'commands', enabled=_inherits_commands(profile))
-    _sync_codex_plugin_projection(source_home, target_home)
+    _route_inherited_tree(
+        source_home / 'skills',
+        target_home / 'skills',
+        enabled=_inherits_skills(profile),
+        label=_CODEX_SKILLS_PROJECTION_LABEL,
+    )
+    _route_inherited_tree(
+        source_home / 'commands',
+        target_home / 'commands',
+        enabled=_inherits_commands(profile),
+        label=_CODEX_COMMANDS_PROJECTION_LABEL,
+    )
+    _sync_codex_plugin_projection(
+        source_home,
+        target_home,
+        project_root=project_root,
+        shared_cache_root=shared_cache_root,
+    )
+    memory_result = _materialize_codex_memory(
+        source_home,
+        target_home,
+        profile=profile,
+        project_root=project_root,
+        agent_name=agent_name,
+        workspace_path=workspace_path,
+    )
+    record_memory_projection_event(
+        memory_result,
+        provider='codex',
+        event_path=memory_projection_event_path,
+        marker_path=memory_projection_marker_path,
+        agent_name=agent_name,
+    )
     return target_config
 
 
@@ -114,6 +176,10 @@ def _inherits_commands(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_commands', True))
 
 
+def _inherits_memory(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_memory', True))
+
+
 def _profile_env(profile) -> dict[str, str]:
     if profile is None:
         return {}
@@ -139,6 +205,69 @@ def _write_managed_config_stub(target: Path) -> None:
     target.write_text('# ccb agent-local codex config\n', encoding='utf-8')
 
 
+def _write_managed_codex_config(target: Path, payload: dict[str, object]) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    sanitized = _disable_interactive_migration_features(payload)
+    target.write_text(_render_toml_document(sanitized), encoding='utf-8')
+
+
+def _append_managed_codex_feature_overrides(target: Path) -> None:
+    if not target.is_file():
+        return
+    try:
+        text = target.read_text(encoding='utf-8')
+    except Exception:
+        return
+    target.write_text(_merge_managed_codex_feature_overrides(text), encoding='utf-8')
+
+
+def _merge_managed_codex_feature_overrides(text: str) -> str:
+    lines = text.splitlines()
+    features_index = _find_toml_table_index(lines, 'features')
+    override_lines = [f'{feature_name} = false' for feature_name in _MANAGED_CODEX_DISABLED_FEATURES]
+
+    if features_index is None:
+        merged = [text.rstrip(), '', '[features]', *override_lines]
+        return '\n'.join(merged).lstrip('\n') + '\n'
+
+    section_end = _toml_table_end(lines, features_index + 1)
+    disabled = set(_MANAGED_CODEX_DISABLED_FEATURES)
+    section_lines = [
+        line
+        for line in lines[features_index + 1 : section_end]
+        if _toml_key_name(line) not in disabled
+    ]
+    insert_at = len(section_lines)
+    while insert_at > 0 and not section_lines[insert_at - 1].strip():
+        insert_at -= 1
+    section_lines[insert_at:insert_at] = override_lines
+    merged_lines = [*lines[: features_index + 1], *section_lines, *lines[section_end:]]
+    return '\n'.join(merged_lines).rstrip() + '\n'
+
+
+def _find_toml_table_index(lines: list[str], table_name: str) -> int | None:
+    needle = f'[{table_name}]'
+    for index, line in enumerate(lines):
+        if line.split('#', 1)[0].strip() == needle:
+            return index
+    return None
+
+
+def _toml_table_end(lines: list[str], start: int) -> int:
+    for index in range(start, len(lines)):
+        if _TOML_TABLE_HEADER_RE.match(lines[index]):
+            return index
+    return len(lines)
+
+
+def _toml_key_name(line: str) -> str | None:
+    candidate = line.split('#', 1)[0]
+    if '=' not in candidate:
+        return None
+    raw_key = candidate.split('=', 1)[0].strip()
+    return raw_key if _BARE_TOML_KEY_RE.match(raw_key) else None
+
+
 def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority) -> dict[str, object]:
     payload = {'model_provider': authority.provider_id}
     inherited_payload = _strip_route_authority(_read_source_config_payload(source_config))
@@ -152,7 +281,17 @@ def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAut
             'base_url': authority.base_url,
         }
     }
-    return payload
+    return _disable_interactive_migration_features(payload)
+
+
+def _disable_interactive_migration_features(payload: dict[str, object]) -> dict[str, object]:
+    sanitized = _clone_mapping(payload)
+    raw_features = sanitized.get('features')
+    features = dict(raw_features) if isinstance(raw_features, dict) else {}
+    for feature_name in _MANAGED_CODEX_DISABLED_FEATURES:
+        features[feature_name] = False
+    sanitized['features'] = features
+    return sanitized
 
 
 def _import_optional_toml_reader():
@@ -277,29 +416,188 @@ def _sync_tree(source: Path, target: Path, *, enabled: bool) -> None:
         pass
 
 
-def _sync_codex_plugin_projection(source_home: Path, target_home: Path) -> None:
+def _route_inherited_tree(source: Path, target: Path, *, enabled: bool, label: str) -> None:
+    if not enabled:
+        remove_projected_path(target, label=label)
+        return
+    if not source.is_dir():
+        remove_projected_path(target, label=label)
+        return
+    route_projected_tree(source, target, label=label)
+
+
+def _sync_codex_plugin_projection(
+    source_home: Path,
+    target_home: Path,
+    *,
+    project_root: Path | None,
+    shared_cache_root: Path | None,
+) -> None:
     source_tree = source_home / _CODEX_PLUGIN_TREE_RELATIVE
     source_sha = source_home / _CODEX_PLUGIN_SHA_RELATIVE
     target_tree = target_home / _CODEX_PLUGIN_TREE_RELATIVE
     target_sha = target_home / _CODEX_PLUGIN_SHA_RELATIVE
     if not source_tree.is_dir():
-        _remove_path(target_tree)
+        remove_projected_path(target_tree, label=_CODEX_PLUGIN_PROJECTION_LABEL)
         _remove_path(target_sha)
         return
-    if _plugin_projection_is_current(
+    if _same_path(source_tree, target_tree):
+        return
+    bundle_sha = _codex_plugin_bundle_sha(source_tree, source_sha)
+    if not bundle_sha:
+        return
+    bundle_tree = _codex_plugin_shared_bundle_path(
+        project_root,
+        target_home,
+        shared_cache_root=shared_cache_root,
+        bundle_sha=bundle_sha,
+    )
+    if source_sha.is_file() and _plugin_projection_is_current(
         source_tree=source_tree,
         source_sha=source_sha,
         target_tree=target_tree,
         target_sha=target_sha,
     ):
+        if bundle_tree is None:
+            return
+        if _same_path(target_tree, bundle_tree):
+            write_projected_marker(
+                target_tree,
+                label=_CODEX_PLUGIN_PROJECTION_LABEL,
+                mode='symlink',
+                source=bundle_tree,
+            )
+            return
+    projected = False
+    if bundle_tree is not None and copy_projected_tree_to_cache(source_tree, bundle_tree, label=_CODEX_PLUGIN_PROJECTION_LABEL):
+        remove_projected_path(target_tree, label=_CODEX_PLUGIN_PROJECTION_LABEL, source=source_tree)
+        target_tree.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            target_tree.symlink_to(bundle_tree, target_is_directory=True)
+            write_projected_marker(
+                target_tree,
+                label=_CODEX_PLUGIN_PROJECTION_LABEL,
+                mode='symlink',
+                source=bundle_tree,
+            )
+            projected = True
+        except Exception:
+            projected = route_projected_tree(
+                bundle_tree,
+                target_tree,
+                label=_CODEX_PLUGIN_PROJECTION_LABEL,
+                allow_unmarked_replace=True,
+            )
+    else:
+        projected = route_projected_tree(
+            source_tree,
+            target_tree,
+            label=_CODEX_PLUGIN_PROJECTION_LABEL,
+            allow_unmarked_replace=True,
+        )
+    if not projected or not _plugin_required_paths_available(source_tree, target_tree):
         return
-    _remove_path(target_tree)
     _remove_path(target_sha)
-    _sync_tree(source_tree, target_tree, enabled=True)
     if source_sha.is_file():
         _sync_file(source_sha, target_sha)
     else:
-        target_sha.unlink(missing_ok=True)
+        target_sha.parent.mkdir(parents=True, exist_ok=True)
+        target_sha.write_text(f'{bundle_sha}\n', encoding='utf-8')
+
+
+def _codex_plugin_bundle_sha(source_tree: Path, source_sha: Path) -> str:
+    if source_sha.is_file():
+        digest = _safe_read_text(source_sha).strip()
+        if digest:
+            return _safe_cache_segment(digest)
+    return tree_content_fingerprint(source_tree)
+
+
+def _safe_cache_segment(value: str) -> str:
+    normalized = re.sub(r'[^A-Za-z0-9._-]+', '-', str(value or '').strip()).strip('.-')
+    if normalized:
+        return normalized[:160]
+    return hashlib.sha256(str(value or '').encode('utf-8', errors='ignore')).hexdigest()
+
+
+def _codex_plugin_shared_bundle_path(
+    project_root: Path | None,
+    target_home: Path,
+    *,
+    shared_cache_root: Path | None,
+    bundle_sha: str,
+) -> Path | None:
+    cache_root = _shared_cache_root(project_root, target_home, shared_cache_root=shared_cache_root)
+    if cache_root is None:
+        return None
+    return cache_root / 'codex' / 'plugin-bundles' / bundle_sha
+
+
+def _shared_cache_root(
+    project_root: Path | None,
+    target_home: Path,
+    *,
+    shared_cache_root: Path | None,
+) -> Path | None:
+    if shared_cache_root is not None:
+        return Path(shared_cache_root).expanduser()
+    if project_root is not None:
+        layout = PathLayout(Path(project_root).expanduser())
+        try:
+            layout.ensure_provider_shared_cache_dir('codex')
+        except Exception:
+            return None
+        return layout.shared_cache_dir
+    del target_home
+    return None
+
+
+def _materialize_codex_memory(
+    source_home: Path,
+    target_home: Path,
+    *,
+    profile,
+    project_root: Path | None,
+    agent_name: str | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
+    normalized_source_home = Path(source_home).expanduser()
+    normalized_target_home = Path(target_home).expanduser()
+    target = normalized_target_home / 'AGENTS.md'
+    if _same_path(normalized_source_home, normalized_target_home):
+        return memory_projection_result(
+            status='skipped',
+            reason='source_home_is_target_home',
+            path=target,
+        )
+    if not _inherits_memory(profile):
+        _remove_path(target)
+        return memory_projection_result(
+            status='skipped',
+            reason='inherit_memory_disabled',
+            path=target,
+        )
+    if project_root is None or agent_name is None:
+        return memory_projection_result(
+            status='failed',
+            reason='missing_project_context',
+            path=target,
+        )
+    return materialize_provider_memory_file(
+        project_root=project_root,
+        agent_name=agent_name,
+        provider='codex',
+        target=target,
+        provider_memory_path=source_home / 'AGENTS.md',
+        provider_memory_title='Provider User Memory',
+        workspace_path=workspace_path,
+    )
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return Path(left).expanduser().resolve() == Path(right).expanduser().resolve()
+    except Exception:
+        return Path(left).expanduser() == Path(right).expanduser()
 
 
 def _plugin_projection_is_current(*, source_tree: Path, source_sha: Path, target_tree: Path, target_sha: Path) -> bool:
@@ -309,6 +607,8 @@ def _plugin_projection_is_current(*, source_tree: Path, source_sha: Path, target
         return False
     if source_sha.is_file():
         return target_sha.is_file() and _safe_read_text(source_sha) == _safe_read_text(target_sha)
+    # Metadata fingerprint is a cheap repair check for legacy projections.
+    # Content-addressed bundle selection uses tree_content_fingerprint instead.
     source_fingerprint = _tree_metadata_fingerprint(source_tree)
     if not source_fingerprint:
         return False
@@ -359,7 +659,24 @@ def _remove_path(path: Path) -> None:
 
 
 def _system_codex_home() -> Path:
-    return Path(os.environ.get('CODEX_HOME') or (Path.home() / '.codex')).expanduser()
+    if os.environ.get('CCB_SOURCE_HOME'):
+        return current_provider_source_home() / '.codex'
+    raw = str(os.environ.get('CODEX_HOME') or '').strip()
+    if raw:
+        candidate = Path(raw).expanduser()
+        if not _looks_like_ccb_provider_home(candidate):
+            return candidate
+    return current_provider_source_home() / '.codex'
+
+
+def _looks_like_ccb_provider_home(path: Path) -> bool:
+    parts = Path(path).expanduser().parts
+    for index in range(0, max(len(parts) - 4, 0)):
+        if parts[index] != 'agents':
+            continue
+        if parts[index + 2] == 'provider-state' and parts[index + 4] == 'home':
+            return True
+    return False
 
 
 def _render_toml_document(payload: dict[str, object]) -> str:
@@ -368,7 +685,7 @@ def _render_toml_document(payload: dict[str, object]) -> str:
     return f'{rendered}\n' if rendered else ''
 
 
-def _render_toml_sections(payload: dict[str, object], *, path: tuple[str, ...]) -> list[str]:
+def _render_toml_sections(payload: dict[str, object], *, path: tuple[str, ...] = ()) -> list[str]:
     scalar_lines: list[str] = []
     child_sections: list[str] = []
     child_tables: list[tuple[str, dict[str, object]]] = []
@@ -422,7 +739,20 @@ def _render_toml_value(value: object) -> str:
         return value.isoformat()
     if isinstance(value, (list, tuple)):
         return '[' + ', '.join(_render_toml_value(item) for item in value) + ']'
+    if isinstance(value, dict):
+        return _render_toml_inline_table(value)
     raise TypeError(f'unsupported TOML value type: {type(value).__name__}')
+
+
+def _render_toml_inline_table(payload: dict[object, object]) -> str:
+    items = [
+        f'{_render_toml_key(str(key))} = {_render_toml_value(value)}'
+        for key, value in payload.items()
+        if value is not None
+    ]
+    if not items:
+        return '{}'
+    return '{ ' + ', '.join(items) + ' }'
 
 
 __all__ = [

@@ -12,19 +12,10 @@ class ParsedAskCommand:
     task_id: str | None = None
     reply_to: str | None = None
     mode: str | None = None
+    compact: bool = False
     silence: bool = False
-    wait: bool = False
-    output_path: str | None = None
-    timeout_s: float | None = None
+    callback: bool = False
     kind: str = 'ask'
-
-
-@dataclass(frozen=True)
-class ParsedAskWaitCommand:
-    project: str | None
-    job_id: str
-    timeout_s: float | None = None
-    kind: str = 'ask-wait'
 
 
 @dataclass(frozen=True)
@@ -39,6 +30,8 @@ class ParsedPendCommand:
     project: str | None
     target: str
     count: int | None = None
+    observer_mode: str = 'snapshot'
+    detail: bool = False
     kind: str = 'pend'
 
 
@@ -46,6 +39,7 @@ class ParsedPendCommand:
 class ParsedQueueCommand:
     project: str | None
     target: str
+    detail: bool = False
     kind: str = 'queue'
 
 
@@ -91,6 +85,7 @@ class ParsedWatchCommand:
 class ParsedInboxCommand:
     project: str | None
     agent_name: str
+    detail: bool = False
     kind: str = 'inbox'
 
 
@@ -105,7 +100,6 @@ class ParsedAckCommand:
 __all__ = [
     'ParsedAckCommand',
     'ParsedAskCommand',
-    'ParsedAskWaitCommand',
     'ParsedCancelCommand',
     'ParsedInboxCommand',
     'ParsedPendCommand',

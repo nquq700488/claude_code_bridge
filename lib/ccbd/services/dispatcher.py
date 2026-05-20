@@ -5,11 +5,13 @@ from .dispatcher_runtime import (
     build_last_restore_report,
     cancel_job,
     cancel_with_decision,
+    cleanup_stale_execution_states,
     complete_job,
     get_job,
     latest_for_agent,
     poll_completion_updates,
     prepare_reply_deliveries,
+    repair_callback_edges,
     restore_running_jobs,
     submit_jobs,
     terminate_nonterminal_jobs,
@@ -71,6 +73,7 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
         message_bureau: MessageBureauFacade | None = None,
         message_bureau_control: MessageBureauControlService | None = None,
         snapshot_writer: SnapshotWriter | None = None,
+        timing_sink=None,
         clock=utc_now,
     ) -> None:
         self._runtime_state = DispatcherRuntimeState(
@@ -97,17 +100,23 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
             dispatch_rejected_error=DispatchRejectedError,
             terminal_event_by_status=_TERMINAL_EVENT_BY_STATUS,
             running_status=JobStatus.RUNNING,
+            timing_sink=timing_sink,
             last_restore_entries=(),
             last_restore_generated_at=None,
         )
         self._rebuild_state()
+        cleanup_stale_execution_states(self)
 
     def submit(self, request: MessageEnvelope) -> SubmitReceipt:
         return submit_jobs(self, request)
 
     def tick(self) -> tuple[JobRecord, ...]:
+        repair_callback_edges(self)
         prepare_reply_deliveries(self)
         return tick_jobs(self)
+
+    def disable_auto_reply_delivery(self) -> None:
+        self._runtime_state.auto_reply_delivery_on_complete = False
 
     def complete(self, job_id: str, decision: CompletionDecision) -> JobRecord:
         return complete_job(self, job_id, decision)

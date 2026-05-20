@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
 
+from provider_core.memory_projection import (
+    materialize_provider_memory_file,
+    memory_projection_result,
+    record_memory_projection_event,
+)
 from provider_core.source_home import current_provider_source_home
 from provider_profiles import provider_api_env_keys
+from storage.atomic import atomic_write_text
+from storage.paths import PathLayout
 
 from ..home_layout import GeminiHomeLayout, gemini_layout_for_home, gemini_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
@@ -26,21 +34,42 @@ def resolve_gemini_home_layout(runtime_dir: Path, profile) -> GeminiHomeLayout:
     return gemini_layout_for_home(managed_home)
 
 
-def prepare_gemini_home_overrides(runtime_dir: Path, profile) -> dict[str, str]:
+def prepare_gemini_home_overrides(
+    runtime_dir: Path,
+    profile,
+    *,
+    refresh_home: bool = True,
+    project_root: Path | None = None,
+    agent_name: str | None = None,
+    workspace_path: Path | None = None,
+    memory_projection_event_path: Path | None = None,
+    memory_projection_marker_path: Path | None = None,
+) -> dict[str, str]:
     layout = resolve_gemini_home_layout(runtime_dir, profile)
-    materialize_gemini_home_config(layout.home_root, profile=profile)
+    if refresh_home:
+        materialize_gemini_home_config(
+            layout.home_root,
+            profile=profile,
+            project_root=project_root,
+            agent_name=agent_name,
+            workspace_path=workspace_path,
+            memory_projection_event_path=memory_projection_event_path,
+            memory_projection_marker_path=memory_projection_marker_path,
+        )
+    cache_root = _gemini_shared_cache_root(project_root, runtime_dir)
     return {
         'HOME': str(layout.home_root),
         'GEMINI_CLI_HOME': str(layout.home_root),
         'GEMINI_ROOT': str(layout.tmp_root),
+        'NPM_CONFIG_CACHE': str(cache_root / 'npm'),
+        'npm_config_cache': str(cache_root / 'npm'),
+        'XDG_CACHE_HOME': str(cache_root / 'xdg'),
     }
 
 
 def _profile_runtime_home(profile) -> Path | None:
-    runtime_home = getattr(profile, 'runtime_home', None) if profile is not None else None
-    if not runtime_home:
-        return None
-    return Path(runtime_home).expanduser()
+    del profile
+    return None
 
 
 def _existing_layout(runtime_dir: Path, *, managed_home: Path) -> GeminiHomeLayout | None:
@@ -61,6 +90,49 @@ def _managed_isolated_home(runtime_dir: Path) -> Path:
     if state_dir is not None:
         return state_dir / 'home'
     return Path(runtime_dir).expanduser() / 'gemini-home'
+
+
+def _gemini_shared_cache_root(project_root: Path | None, runtime_dir: Path) -> Path:
+    cache_root = _external_project_cache_root(project_root, runtime_dir)
+    if cache_root is None:
+        cache_root = Path(runtime_dir).expanduser() / 'rebuildable-cache'
+    root = cache_root / 'gemini'
+    (root / 'npm').mkdir(parents=True, exist_ok=True)
+    (root / 'xdg').mkdir(parents=True, exist_ok=True)
+    return root
+
+
+def _external_project_cache_root(project_root: Path | None, runtime_dir: Path) -> Path | None:
+    root = Path(project_root).expanduser() if project_root is not None else _project_root_from_runtime_dir(runtime_dir)
+    if root is None:
+        return None
+    try:
+        layout = PathLayout(root)
+    except Exception:
+        return None
+    return _user_cache_home() / 'ccb' / 'projects' / layout.project_id[:16] / 'provider-cache'
+
+
+def _user_cache_home() -> Path:
+    raw = str(os.environ.get('XDG_CACHE_HOME') or '').strip()
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / '.cache'
+
+
+def _project_root_from_runtime_dir(runtime_dir: Path) -> Path | None:
+    ccb_dir = _project_ccb_dir(runtime_dir)
+    if ccb_dir is None:
+        return None
+    return ccb_dir.parent
+
+
+def _project_ccb_dir(runtime_dir: Path) -> Path | None:
+    current = Path(runtime_dir).expanduser()
+    for candidate in (current, *current.parents):
+        if candidate.name == '.ccb':
+            return candidate
+    return None
 
 
 def _is_within_home_root(candidate: Path, managed_home: Path) -> bool:
@@ -100,15 +172,45 @@ def _ensure_json_file(path: Path) -> None:
     path.write_text('{}\n', encoding='utf-8')
 
 
-def materialize_gemini_home_config(target_home: Path, *, profile=None, source_home: Path | None = None) -> GeminiHomeLayout:
+def materialize_gemini_home_config(
+    target_home: Path,
+    *,
+    profile=None,
+    source_home: Path | None = None,
+    project_root: Path | None = None,
+    agent_name: str | None = None,
+    workspace_path: Path | None = None,
+    memory_projection_event_path: Path | None = None,
+    memory_projection_marker_path: Path | None = None,
+) -> GeminiHomeLayout:
     layout = gemini_layout_for_home(target_home)
     _prepare_managed_home(layout)
     source_root = Path(source_home).expanduser() if source_home is not None else _system_home_root()
+    memory_result = memory_projection_result(
+        status='skipped',
+        reason='source_home_is_target_home',
+        path=layout.gemini_dir / 'GEMINI.md',
+    )
     if layout.home_root != source_root:
         _materialize_settings(source_root, layout, profile=profile)
         _materialize_env_file(source_root, layout, profile=profile)
         _materialize_trusted_folders(source_root, layout)
         _materialize_auth(source_root, layout, profile=profile)
+        memory_result = _materialize_gemini_memory(
+            source_root,
+            layout,
+            profile=profile,
+            project_root=project_root,
+            agent_name=agent_name,
+            workspace_path=workspace_path,
+        )
+    record_memory_projection_event(
+        memory_result,
+        provider='gemini',
+        event_path=memory_projection_event_path,
+        marker_path=memory_projection_marker_path,
+        agent_name=agent_name,
+    )
     return layout
 
 
@@ -190,6 +292,9 @@ def _merge_settings_payload(
     hooks = existing_payload.get('hooks')
     if hooks is not None:
         merged['hooks'] = hooks
+    context_file_name = existing_payload.get('contextFileName')
+    if context_file_name is not None:
+        merged['contextFileName'] = context_file_name
     if merged:
         return merged
     if existing_payload:
@@ -307,6 +412,62 @@ def _inherits_auth(profile) -> bool:
 def _inherits_config(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_config', True))
 
+
+def _inherits_memory(profile) -> bool:
+    return True if profile is None else bool(getattr(profile, 'inherit_memory', True))
+
+
+def _materialize_gemini_memory(
+    source_home: Path,
+    layout: GeminiHomeLayout,
+    *,
+    profile,
+    project_root: Path | None,
+    agent_name: str | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
+    target = layout.gemini_dir / 'GEMINI.md'
+    if not _inherits_memory(profile):
+        _remove_file(target)
+        _clear_context_file_name(layout)
+        return memory_projection_result(
+            status='skipped',
+            reason='inherit_memory_disabled',
+            path=target,
+        )
+    if project_root is None or agent_name is None:
+        return memory_projection_result(
+            status='failed',
+            reason='missing_project_context',
+            path=target,
+        )
+    result = materialize_provider_memory_file(
+        project_root=project_root,
+        agent_name=agent_name,
+        provider='gemini',
+        target=target,
+        provider_memory_path=source_home / '.gemini' / 'GEMINI.md',
+        provider_memory_title='Provider User Memory',
+        workspace_path=workspace_path,
+    )
+    if result.get('status') in {'ok', 'skipped'}:
+        _ensure_context_file_name(layout)
+    return result
+
+def _ensure_context_file_name(layout: GeminiHomeLayout) -> None:
+    payload = _read_json_object(layout.settings_path) or {}
+    if payload.get('contextFileName') == 'GEMINI.md':
+        return
+    payload['contextFileName'] = 'GEMINI.md'
+    _write_json_object(layout.settings_path, payload)
+
+
+def _clear_context_file_name(layout: GeminiHomeLayout) -> None:
+    payload = _read_json_object(layout.settings_path) or {}
+    if payload.get('contextFileName') != 'GEMINI.md':
+        return
+    payload.pop('contextFileName', None)
+    _write_json_object(layout.settings_path, payload)
 
 def _should_project_login_auth(source_settings_path: Path, *, profile) -> bool:
     if not _inherits_auth(profile):

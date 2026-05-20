@@ -7,7 +7,7 @@ from pathlib import Path
 from agents.config_loader import load_project_config
 from agents.models import AgentState
 from agents.store import AgentRuntimeStore
-from terminal_runtime.tmux import normalize_socket_name, socket_name_from_tmux_env
+from terminal_runtime.tmux import normalize_socket_name, socket_ref_from_tmux_env
 
 
 @dataclass(frozen=True)
@@ -16,14 +16,33 @@ class KillPreparation:
     extra_agent_names: tuple[str, ...]
     tmux_sockets: tuple[str | None, ...]
     pid_candidates: dict[int, list[Path]]
+    control_plane_pids: tuple[int, ...] = ()
 
 
-def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates_fn) -> KillPreparation:
+def prepare_local_shutdown(
+    context,
+    *,
+    force: bool,
+    collect_agent_pid_candidates_fn,
+    collect_project_authority_pid_candidates_fn=None,
+    control_plane_pid_candidates: dict[int, list[Path]] | None = None,
+) -> KillPreparation:
     store = AgentRuntimeStore(context.paths)
     tmux_sockets = collect_candidate_tmux_sockets()
     configured_agent_names = _configured_agent_names(context)
     extra_agent_names = extra_agent_dir_names(context, configured_agent_names)
     pid_candidates: dict[int, list[Path]] = {}
+    control_plane_pids: tuple[int, ...] = ()
+    if control_plane_pid_candidates is not None:
+        authority_candidates = control_plane_pid_candidates
+    elif collect_project_authority_pid_candidates_fn is not None:
+        authority_candidates = collect_project_authority_pid_candidates_fn(context.project.project_root)
+    else:
+        authority_candidates = {}
+    if authority_candidates:
+        control_plane_pids = tuple(sorted(authority_candidates))
+        for pid, sources in authority_candidates.items():
+            pid_candidates.setdefault(pid, []).extend(sources)
     for agent_name in (*configured_agent_names, *extra_agent_names):
         runtime = store.load_best_effort(agent_name)
         _capture_runtime_tmux_socket(tmux_sockets, runtime)
@@ -41,14 +60,16 @@ def prepare_local_shutdown(context, *, force: bool, collect_agent_pid_candidates
         extra_agent_names=extra_agent_names,
         tmux_sockets=tuple(tmux_sockets or {None}),
         pid_candidates=pid_candidates,
+        control_plane_pids=control_plane_pids,
     )
 
 
 def collect_candidate_tmux_sockets() -> set[str | None]:
     sockets: set[str | None] = set()
     for value in (
+        os.environ.get("CCB_TMUX_SOCKET_PATH"),
         normalize_socket_name(os.environ.get("CCB_TMUX_SOCKET")),
-        socket_name_from_tmux_env(os.environ.get("TMUX")),
+        socket_ref_from_tmux_env(os.environ.get("TMUX")),
     ):
         if value is not None:
             sockets.add(value)
@@ -81,8 +102,9 @@ def _capture_runtime_tmux_socket(tmux_sockets: set[str | None], runtime) -> None
         return
     if not str(runtime.runtime_ref or "").startswith("tmux:"):
         return
-    if getattr(runtime, "tmux_socket_path", None) is not None:
-        return
+    socket_path = str(getattr(runtime, "tmux_socket_path", "") or "").strip()
+    if socket_path:
+        tmux_sockets.add(socket_path)
     socket_name = normalize_socket_name(runtime.tmux_socket_name)
     if socket_name is not None:
         tmux_sockets.add(socket_name)

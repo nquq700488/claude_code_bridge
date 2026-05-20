@@ -1,5 +1,3 @@
-# Changelog
-
 ## Unreleased
 
 ### Kimi Session Auto-Rotation
@@ -15,6 +13,14 @@
 - **Event Stream Modernization**: MMX `poll()` converted from terminal `CompletionDecision` to `CompletionItem` event stream (`ANCHOR_SEEN` → `ASSISTANT_FINAL` → `TURN_BOUNDARY`)
 - **Manifest Updated**: `supports_anchor_binding` changed from `False` to `True`
 
+### MMX Multi-Line Message Support
+
+- **mmx-daemon Fixed**: daemon now correctly reads multi-line messages via `CCB_MSG_END` terminator and EOF handling
+
+### CLI Health Check
+
+- **`--wait` Periodic Health Check**: `watch_ask_job` now queries agent health every 5s via `queue()` and aborts early on pane death or degraded health
+
 ### Python 3.12 Compatibility
 
 - **Shebang Fixed**: `ccb` script shebang changed from `#!/usr/bin/env python3` to `#!/opt/homebrew/bin/python3.12` to avoid Xcode Python 3.9 conflicts
@@ -24,6 +30,237 @@
 
 - **Silence Threshold Reduced**: `JOB_HEARTBEAT_SILENCE_START_AFTER_S` and `JOB_HEARTBEAT_REPEAT_INTERVAL_S` reduced from 600s to 120s for faster stale-job detection
 
+## Unreleased
+
+## v6.2.6 (2026-05-20)
+
+### Tmux Isolation And Startup Hardening Release
+
+- **CCB Tmux Uses Isolated Config By Default**: managed tmux commands now run with `tmux -f /dev/null ...`, with `CCB_TMUX_CONFIG` available for explicit managed overrides, so user `~/.tmux.conf` plugins and hooks cannot alter CCB pane topology.
+- **Source Install Startup Path Hardened**: source/dev installs now use a Python wrapper, honor `CCB_PYTHON_BIN`, run post-install entrypoint smoke checks, and keep Droid MCP registration bounded by a timeout.
+- **Provider Startup Reliability Improved**: restore-fresh behavior takes effect correctly and Claude managed homes write trust state while preserving the accepted `--permission-mode bypassPermissions` auto-permission path.
+- **Ask Removed-Flag Surface Kept Simple**: removed wait-alias migration guidance remains absent from the current ask parser and tests.
+
+## v6.2.5 (2026-05-19)
+
+### Claude Managed Memory De-Duplication Hotfix
+
+- **Claude Project Memory De-Duplicated**: managed `.claude/CLAUDE.md` bundles no longer copy the project-level `CLAUDE.md`, allowing Claude to load it natively from the working directory.
+- **Managed Memory Sources Preserved**: provider user memory from real `~/.claude/CLAUDE.md`, `.ccb/ccb_memory.md`, and per-agent `.ccb/agents/<agent>/memory.md` still project into the managed Claude home.
+- **Project Memory Loader Flag Added**: `load_memory_sources(..., include_provider_native_project=False)` can now skip provider-native project memory while the default behavior still includes it for existing callers.
+
+## v6.2.4 (2026-05-18)
+
+### Codex Managed Config TOML Hotfix
+
+- **Codex Managed Config Rendering Hardened**: managed Codex `config.toml` inheritance now renders dict values as inline TOML tables, preserving parsed inline-table arrays without crashing on `unsupported TOML value type: dict`.
+- **Fallback Feature Merge Fixed**: when no TOML reader is available, managed Codex fallback copy now updates an existing `[features]` section instead of appending duplicate sections, and it stops correctly at both `[table]` and `[[array_of_tables]]` boundaries.
+- **Installer TOML Parser Dependency Added**: Linux/macOS and Windows installers now auto-install `tomli>=2.0.0` when no `tomllib`/`tomli`/`toml` reader is available, support `CCB_INSTALL_TOMLI=0`, and install `tomli` inside the managed venv before optional watchdog.
+
+## v6.2.3 (2026-05-18)
+
+### Architecture Hotspot Optimization Release
+
+- **Release Checker Split Into Focused Modules**: the GitHub release checker now keeps the CLI entrypoint small while moving local state, Markdown, GitHub, workflow, and asset checks into dedicated helper modules.
+- **Provider Memory Projection Shared**: Codex, Claude, Gemini, and OpenCode memory projection now share provider-core helpers for projection events, markers, signatures, and bundle materialization while preserving provider-specific behavior.
+- **Startup Update Flow Simplified**: startup update handling is split into state, refresh, and flow modules so update checks and install refresh logic are easier to review and test.
+- **Storage Classification Boundary Extracted**: provider-home cleanup classification now has a dedicated module with direct tests for provider precedence and unknown-provider handling.
+- **Architecture Plan Captured**: the optimization roadmap, decisions, and post-phase Architec results are recorded under `plans/architecture-optimization/`.
+
+## v6.2.2 (2026-05-18)
+
+### Codex Managed Home Migration Prompt Hotfix
+
+- **Codex External Migration Prompt Disabled In Managed Homes**: managed Codex `config.toml` now forces `[features].external_migration = false` so managed panes do not stop on an interactive migration prompt.
+- **Inherited Config Preserved**: source-home Codex config, model/API settings, and existing feature flags are still inherited; only the managed-home external migration prompt is disabled.
+- **Fallback Copy Path Hardened**: when TOML parsing is unavailable, the copied managed config still gets a managed `[features]` override for `external_migration = false`.
+
+## v6.2.1 (2026-05-18)
+
+### Inherited CCB Config Skill Release
+
+- **Inherited `ccb_config` Skill Added**: Claude and Codex installs now inherit a `ccb_config` skill for designing `.ccb/ccb.config`, choosing roles/providers/worktree layout, and updating shared plus per-agent CCB memory.
+- **Inherited Skill Layout Consolidated**: CCB-owned inherited skills now live under `inherit_skills/`; optional `useful_tools/` remain user-installable tools and are not inherited by default.
+- **Ask Guidance Simplified**: injected ask reply guidance is shorter, English-only in source text, skips nested-routing instructions in every ask body, and recognizes more explicit-output requests.
+- **Project Memory Wording Simplified**: generated project/runtime memory now uses shorter submit-once guidance while keeping callback and silence routing rules available where they belong.
+- **Config Memory Routing Clarified**: `ccb_config` memory patterns prefer direct owner-to-next-owner callback handoffs and separate root work packages for parallel chains, without claiming single-task multi-callback fan-in.
+
+## v6.2.0 (2026-05-17)
+
+### Callback Ask Chain Release
+
+- **Callback Ask Chains Added**: `ccb ask --callback <agent>` lets an active agent delegate work whose result is needed before finishing the original task; CCB resumes the parent as a continuation task when the child reply is ready.
+- **Nested Ask Guardrails Enforced**: plain nested `ask` from an active CCB task is rejected; use `--callback` for needed child results or `--silence` for independent no-result-needed work.
+- **Durable Callback Routing Added**: callback edges persist parent/child routing state, repair crash windows, and support chained continuations across multiple agents.
+- **Ask Skills And Memory Updated**: Claude, Codex, and Droid ask skills plus generated project memory now document callback delegation and stop-after-submit behavior.
+
+## v6.1.21 (2026-05-17)
+
+### Kill And Restart Cleanup Hotfix
+
+- **Forced Kill Finalization Survives Client Disconnects**: `ccb kill -f` now still queues daemon finalization when the requesting pane disappears before the socket response is written.
+- **Project-Scoped Kill Cleanup Hardened**: kill cleanup preserves full tmux socket paths, reads lifecycle owner/keeper PID authority, and scopes process fallback matching to CCB control-plane commands for the same project.
+- **Stale Execution Residue Cleared**: ccbd startup and late provider updates now clear execution files for cancelled, completed, or missing jobs so `doctor` no longer reports stale work as active or recoverable authority.
+- **Startup/Kill Contract Updated**: documents the shutdown finalizer, project-scoped process cleanup, tmux socket path, and stale execution-state cleanup requirements.
+
+## v6.1.20 (2026-05-16)
+
+### Claude Active Version Cache Release
+
+- **Managed Claude Follows Source Active Version**: when the source home uses the standard Claude Code layout, CCB now detects `~/.local/bin/claude -> ~/.local/share/claude/versions/<version>/claude` and makes managed Claude use that active version.
+- **Active Version Is Cached Safely**: the selected source-home Claude version is copied into the CCB provider cache, then managed `.local/bin/claude` points at the cached copy instead of selecting another version already present in shared cache.
+- **Fallback Behavior Preserved**: if the source active-version layout is unavailable, Claude binary routing keeps the previous shared-cache behavior.
+- **Provider Hook Routing Updated**: Claude provider workspace preparation now passes the source home into binary-cache routing so the active-version preference is applied during managed startup.
+
+## v6.1.19 (2026-05-16)
+
+### Managed Ask Skill Projection Release
+
+- **Managed Ask Skills Project Across Providers**: Claude inherited `skills/` and `commands/` now use CCB projected assets instead of copy-sync, so managed agents inherit system-installed ask skills without duplicating user provider homes.
+- **Droid Managed FACTORY_HOME Added**: Droid now gets a managed provider home with system `~/.factory/skills` projected into each managed Droid home, plus session-scoped Droid sessions rooted under that managed home.
+- **Droid Session Readers Follow Managed Sessions**: Droid launch/session payloads, execution polling, and communicator state now use the session-scoped Droid sessions root so restart and session rotation stay bound to the managed session log.
+- **Ask Replies Are Guided By Default**: `ccb ask` now injects concise reply guidance, adds `--compact` for distilled answers and `--silence` for silent-on-success asks.
+
+## v6.1.18 (2026-05-15)
+
+### Heartbeat Timeout And Useful Tools Release
+
+- **Heartbeat Timeout Now Terminalizes Stalled Jobs**: running-job heartbeat observations stay internal until three no-progress intervals, then CCB emits one terminal `heartbeat_timeout` reply that recommends sending a small communication test before another large task.
+- **Provider Reliability Progress Is Semantic**: cursor movement, polling timestamps, session snapshot rotation, and other reader bookkeeping no longer extend provider completion deadlines; only semantic progress refreshes reliability state.
+- **Reliability State Survives Persistence**: provider runtime persistence preserves `reliability_*` fields so restored jobs keep their timeout deadline instead of resetting it.
+- **Useful Tools Bundle Included**: release artifacts now include the packaged `useful_tools/useful_tools.zip` alongside the versioned optional tool tree.
+
+## v6.1.17 (2026-05-15)
+
+### Completion Binding And Codex Session Hotfix
+
+- **Claude Completion Request Binding Fixed**: Claude Stop hooks now resolve the current outer `CCB_REQ_ID` from structured transcript/user prompt records, so forwarded text or tool output containing older request ids cannot write completion events to the wrong job.
+- **Codex Session Resume Stabilized**: Codex memory projection fingerprint changes are now diagnostic freshness metadata, not conversation identity; restart no longer archives or resets the Codex session just because `.ccb/ccb_memory.md` changed.
+- **Mailbox Stale Request Recovery Included**: merged PR #205 so terminal `task_request` queue heads can be discarded or acked when their attempt is already terminal, preventing mailbox queues from staying stuck in delivering.
+- **Regression Coverage Added**: adds transcript req_id parsing, provider finish hook, Codex resume, and mailbox stale-head recovery coverage.
+
+## v6.1.16 (2026-05-14)
+
+### Memory Handoff And Claude Route Hotfix
+
+- **Ask Handoff Guidance Stabilized**: generated managed-memory bundles now include CCB-owned submit-only ask coordination rules, so stale `.ccb/ccb_memory.md` text cannot reintroduce polling/waiting behavior after restart.
+- **Project Memory Template Tightened**: new `.ccb/ccb_memory.md` files now describe `/ask` as a fire-and-forget handoff and avoid obsolete `ccb -h` guidance in the managed memory seed.
+- **Claude ccswitch Route Inheritance Fixed**: managed Claude startup now prefers the source-home `~/.claude/settings.json` `ANTHROPIC_BASE_URL` over a stale caller-shell `ANTHROPIC_BASE_URL`, so ccswitch route changes take effect after `ccb kill && ccb`.
+- **Claude Source Contract Documented**: the Claude isolation contract now records source settings as the route authority when no agent-specific profile URL is configured.
+
+## v6.1.15 (2026-05-14)
+
+### Kill Shutdown Reliability Hotfix
+
+- **Remote Kill Fully Stops ccbd**: `ccb kill` now snapshots the active `ccbd` and keeper pids before remote `stop_all`, then waits for those exact control-plane processes to exit instead of trusting `phase=unmounted` alone.
+- **Cleanup Works Immediately After Kill**: remote kill now finalizes lifecycle state to `phase=unmounted` / `desired_state=stopped`, so `ccb cleanup` can run right after `ccb kill` without requiring a second kill.
+- **Orphan Runtime Cleanup Hardened**: lingering provider-runtime pid files and orphan process groups are still collected during kill finalization, with regression coverage for stale/new-generation pid races.
+
+## v6.1.14 (2026-05-14)
+
+### macOS Claude Keychain Boundary Follow-up
+
+- **Keychain Fallback Contract Documented**: records the managed Claude `Library/Keychains` fallback as agent-local secret auth compatibility state
+- **Diagnostics Boundary Clarified**: support bundles must not follow the fallback Keychains symlink, and storage diagnostics classify it as secret auth state
+
+## v6.1.13 (2026-05-14)
+
+### macOS Claude Keychain Fallback
+
+- **Claude Keychain Fallback Added**: managed Claude homes on macOS now link `Library/Keychains` when `com.apple.security.plist` is absent, so official Claude login lookup still resolves the user's login keychain
+- **Auth Cleanup Remains Symmetric**: disabling Claude auth inheritance removes both the projected Keychain preference and the fallback Keychains link
+- **Storage Diagnostics Hardened**: `ccb doctor storage` now classifies the managed Claude `Library/Keychains` symlink as secret auth state instead of unknown out-of-bounds residue
+
+## v6.1.12 (2026-05-13)
+
+### Claude Tmux Permission Release
+
+- **Claude Tmux Permission Prompt Fix Released**: packages the merged Claude auto-permission pane fix, using `--permission-mode bypassPermissions` plus `skipDangerousModePermissionPrompt` so tmux panes do not block on an unanswerable confirmation prompt
+- **Cleanup Hardening Included**: carries forward the WSL cleanup smoke alignment and Claude rollback cache preservation from v6.1.11/v6.1.10
+
+## v6.1.11 (2026-05-13)
+
+### WSL Cleanup Smoke Alignment
+
+- **WSL Storage Smoke Updated**: real-platform WSL cleanup validation now expects relocated mounted-drive projects to report shared cache as enabled, matching the current storage contract
+- **Claude Cleanup Rollback Fix Included**: keeps the active Claude Code version plus one rollback version during `ccb cleanup`
+
+## v6.1.10 (2026-05-13)
+
+### Claude Cleanup Rollback Hotfix
+
+- **Claude Rollback Cache Preserved**: `ccb cleanup` now keeps the active Claude Code version plus one rollback version while pruning older rebuildable version-cache entries
+- **Real Platform Cleanup Smoke Restored**: storage cleanup behavior now matches the macOS and WSL real-platform smoke expectations for Claude current/rollback preservation and Gemini cache pruning
+
+## v6.1.9 (2026-05-13)
+
+### Storage Dedup And Shutdown Hardening
+
+- **Provider Storage Footprint Reduced**: Codex projected assets now prefer symlinks/shared bundles, Claude version/cache cleanup handles shared cache locations, and Gemini rebuildable caches route through shared/external cache paths instead of piling up per agent
+- **Cleanup Reclaims Runtime Residue**: `ccb cleanup` now prunes old Claude shared versions, Gemini shared cache content, rebuildable Claude caches, and stale pane crash logs while preserving session/auth authority
+- **Kill Shutdown Reliability Hardened**: `ccb kill` now snapshots old `ccbd`/keeper pids before shutdown, waits for them to really exit, treats Linux zombies as dead, and avoids killing a newer backend generation
+- **Claude Tmux Startup Stabilized**: Claude auto-permission launches now use `--permission-mode bypassPermissions` plus a settings overlay to skip the tmux-unanswerable bypass confirmation prompt
+
+## v6.1.8 (2026-05-13)
+
+### macOS Claude Keychain Preference Hotfix
+
+- **Claude Keychain Preference Projection Fixed**: managed Claude homes on macOS now inherit `Library/Preferences/com.apple.security.plist`, preserving the default Keychain preference needed for Claude login lookup
+- **Auth Isolation Preserved**: the preference file is projected only on Darwin and is removed when Claude auth inheritance is disabled
+
+## v6.1.7 (2026-05-12)
+
+### Codex Memory Freshness Hotfix
+
+- **Codex Shared Memory Refresh Fixed**: Codex startup now records the managed `AGENTS.md` memory projection fingerprint and skips stale `resume` bindings when `.ccb/ccb_memory.md` changes
+- **Ask Skill Submit Discipline Tightened**: Claude and Droid ask skills now require heredoc submission and stop immediately after submit, avoiding accidental polling or waiting
+
+## v6.1.6 (2026-05-11)
+
+### Startup And Claude Auth Hotfix
+
+- **Start/Maintenance Race Fixed**: ccbd now prevents heartbeat maintenance from mutating project tmux panes while a start request is laying out and launching agents
+- **Project Memory Anchor Tightened**: CCB no longer creates, imports, or depends on project-root `CCB.md`; `.ccb/ccb_memory.md` is the only shared CCB memory anchor
+- **Claude macOS Login Inheritance Fixed**: managed Claude startup now checks the current `Claude Code-credentials` Keychain service before older service names
+
+## v6.1.5 (2026-05-11)
+
+### Tmux Startup Hotfix
+
+- **Pane Startup Race Fixed**: project layout panes are now created with a silent placeholder in the initial tmux split, preventing fast-exiting shells from causing `Cannot split: pane ... does not exist` or `respawn pane failed: can't find pane`
+- **Provider Launch Semantics Preserved**: agent panes still use the managed respawn path, preserving provider shell, stderr log, and `remain-on-exit` behavior
+- **Tmux Regression Coverage Added**: tests now cover real tmux layout creation with an exiting `default-command` plus guardrails that keep provider commands off the structural split path
+
+## v6.1.4 (2026-05-11)
+
+### Project Shared Memory V1
+
+- **Shared Project Memory Landed**: `.ccb/ccb_memory.md` is now the shared project memory anchor injected into managed Claude, Codex, Gemini, and OpenCode agents during startup
+- **Per-Agent Memory Layer Added**: `.ccb/agents/<agent>/memory.md` now participates as an agent-private overlay on top of the shared project file
+- **Provider Startup Contract Unified**: memory projection now runs through a single writer path with explicit launch context, stable workspace resolution, and fail-fast launch behavior across providers
+- **Gemini Managed Memory Smoke Validated**: Gemini CLI 0.41.2 was real-smoke validated against managed `.gemini/GEMINI.md` loading via `GEMINI_CLI_HOME`
+
+## v6.1.2 (2026-05-11)
+
+### Provider Storage Boundary Hardening
+
+- **Storage Audit Expanded**: `ccb doctor storage` now reports explicit storage classes for provider authority, sessions, secrets, workspaces, user content, projected config, rebuildable cache, and startup authority bundles
+- **Safe Cleanup Added**: `ccb cleanup` now holds the project lifecycle lock, refuses active `ccbd` or pending ask jobs, prunes old Claude version caches conservatively, and removes only safe Gemini rebuildable caches
+- **Diagnostics Bundle Hardened**: support bundles now include storage summaries while excluding provider secrets, Claude binary caches, Gemini rebuildable caches, and Codex startup bundles even when classification fails
+- **Provider Runtime Boundaries Tightened**: non-Codex profile runtime-home overrides are rejected, Codex legacy profile homes migrate into managed provider state safely, and duplicate effective provider homes fail validation
+- **Shared Cache Foundation Added**: future provider shared-cache roots now resolve through `PathLayout`, reject unsafe WSL drvfs placement without relocation, and create a versioned `MANIFEST.json`
+
+## v6.1.0 (2026-05-09)
+
+### CCBD Ask Stability And Observer Convergence
+
+- **Ask Submit Fastpath Stabilized**: `ccb ask` now returns bounded receipts without waiting on provider readiness, mailbox history projection, or long maintenance ticks; real Linux fastpath stress validated 60 queued asks with p95 submit latency under 250ms
+- **Lifecycle And Shutdown Races Closed**: stop-all, shutdown, and background supervision now respect lifecycle stopping state so stopped runtimes and terminal jobs are not revived by stale maintenance or recovery work
+- **Provider Completion Recovery Hardened**: Codex polling now follows rebound session bindings after restart, so replies written to a new managed session log can still terminalize the original job
+- **Mailbox Summary Read Model Landed**: queue, inbox, pend, and related observer views now prefer maintained mailbox summaries and explicitly degrade on missing/corrupt summaries instead of silently scanning full history on routine paths
+- **Observer Surfaces Weakened**: `pend`, `watch`, `queue`, and `inbox` are documented and rendered as non-authoritative snapshots, reducing confusion between weak mailbox observations and lineage inspection
+- **Real Platform Validation Added**: new GitHub Actions coverage runs macOS and WSL ccbd/ask smoke tests, communication matrix, short soak, and fastpath stress with stub providers; Linux local validation covered full pytest, comm matrix, soak, and fastpath stress
+
 ## v6.0.29 (2026-05-07)
 
 ### WSL Runtime State Relocation
@@ -31,6 +268,8 @@
 - **Runtime State Moved Off Mounted Drives**: on WSL projects rooted under `/mnt/<drive>/...`, project authority remains in `.ccb` while `ccbd/` and agent runtime state relocate to a local Linux state root with explicit marker files
 - **Diagnostics and Bundle Mapping Updated**: doctor output and support bundles now expose the project anchor, runtime-state root, relocation reason, and logical `.ccb` archive paths for relocated runtime files
 - **Provider Lookup and Ask Routing Kept Stable**: relocated runtime directories still resolve back to the project anchor for session discovery and ask sender attribution without changing Linux or macOS default layout behavior
+- **Runtime Markers Are Validated**: relocated runtime markers and refs now reject malformed or mismatched payloads, so stale relocation residue cannot silently remap one project to another
+- **WSL Smoke Matches the Final Contract**: the release smoke now expects the runtime-root relocation path that the relocated project actually writes, instead of treating the first relocation step as the final socket fallback
 
 ## v6.0.28 (2026-05-07)
 

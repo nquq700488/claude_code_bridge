@@ -24,6 +24,10 @@ $repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 # Constants
 $script:CCB_START_MARKER = "<!-- CCB_CONFIG_START -->"
 $script:CCB_END_MARKER = "<!-- CCB_CONFIG_END -->"
+$script:CCB_ROLES_START_MARKER = "<!-- CCB_ROLES_START -->"
+$script:CCB_ROLES_END_MARKER = "<!-- CCB_ROLES_END -->"
+$script:CCB_RUBRICS_START_MARKER = "<!-- REVIEW_RUBRICS_START -->"
+$script:CCB_RUBRICS_END_MARKER = "<!-- REVIEW_RUBRICS_END -->"
 
 $script:SCRIPTS_TO_LINK = @(
   "ccb",
@@ -31,7 +35,7 @@ $script:SCRIPTS_TO_LINK = @(
 )
 
 $script:CLAUDE_MARKDOWN = @(
-  # Old CCB commands removed - replaced by unified ask/ping/pend skills
+  # Old CCB command markdown removed; ask is the only installed CCB skill.
 )
 
 $script:LEGACY_SCRIPTS = @(
@@ -84,16 +88,24 @@ function Show-Usage {
   Write-Host "  - Python 3.10+"
 }
 
-function Find-Python {
-  if (Get-Command py -ErrorAction SilentlyContinue) { return "py -3" }
-  if (Get-Command python -ErrorAction SilentlyContinue) { return "python" }
-  if (Get-Command python3 -ErrorAction SilentlyContinue) { return "python3" }
-  return $null
+function Test-IsWindowsStoreAliasPath {
+  param([string]$PathText)
+  if ([string]::IsNullOrWhiteSpace($PathText)) {
+    return $false
+  }
+  $normalized = $PathText.Trim().Trim('"').ToLowerInvariant()
+  return (
+    $normalized -like "*\microsoft\windowsapps\python.exe" -or
+    $normalized -like "*\microsoft\windowsapps\python3.exe"
+  )
 }
 
-function Require-Python310 {
+function Get-PythonVersionInfo {
   param([string]$PythonCmd)
 
+  if ([string]::IsNullOrWhiteSpace($PythonCmd)) {
+    throw "Python command is empty"
+  }
   # Handle commands with arguments (e.g., "py -3")
   $cmdParts = $PythonCmd -split ' ', 2
   $fileName = $cmdParts[0]
@@ -101,14 +113,14 @@ function Require-Python310 {
 
   # Use ProcessStartInfo for reliable execution across different Python installations
   # (e.g., Miniconda, custom paths). The & operator can fail in some environments.
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $fileName
   try {
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = $fileName
     # Combine base arguments with Python code arguments
     if ($baseArgs) {
-      $psi.Arguments = "$baseArgs -c `"import sys; v=sys.version_info; print(f'{v.major}.{v.minor}.{v.micro} {v.major} {v.minor}')`""
+      $psi.Arguments = "$baseArgs -c `"import sys; v=sys.version_info; print(f'{v.major}.{v.minor}.{v.micro}|{v.major}|{v.minor}|{sys.executable}')`""
     } else {
-      $psi.Arguments = "-c `"import sys; v=sys.version_info; print(f'{v.major}.{v.minor}.{v.micro} {v.major} {v.minor}')`""
+      $psi.Arguments = "-c `"import sys; v=sys.version_info; print(f'{v.major}.{v.minor}.{v.micro}|{v.major}|{v.minor}|{sys.executable}')`""
     }
     $psi.RedirectStandardOutput = $true
     $psi.RedirectStandardError = $true
@@ -122,30 +134,209 @@ function Require-Python310 {
 
     $vinfo = $process.StandardOutput.ReadToEnd().Trim()
     if ($process.ExitCode -ne 0 -or [string]::IsNullOrEmpty($vinfo)) {
-      throw $process.StandardError.ReadToEnd()
+      $stderr = $process.StandardError.ReadToEnd().Trim()
+      if ([string]::IsNullOrWhiteSpace($stderr)) {
+        $stderr = "exit code $($process.ExitCode)"
+      }
+      throw $stderr
     }
 
-    $vparts = $vinfo -split " "
-    if ($vparts.Length -lt 3) {
+    $vparts = $vinfo -split "\|", 4
+    if ($vparts.Length -lt 4) {
       throw "Unexpected version output: $vinfo"
     }
 
     $version = $vparts[0]
     $major = [int]$vparts[1]
     $minor = [int]$vparts[2]
+    return @{
+      Command = $PythonCmd
+      Version = $version
+      Major = $major
+      Minor = $minor
+      Executable = $vparts[3]
+    }
   } catch {
-    Write-Host "[ERROR] Failed to query Python version using: $PythonCmd"
-    Write-Host "   Error details: $_"
+    $errorText = $_.Exception.Message
+    if ([string]::IsNullOrWhiteSpace($errorText)) {
+      $errorText = [string]$_
+    }
+    throw "Failed to query Python version using '$PythonCmd': $errorText"
+  }
+}
+
+function Get-PythonCandidates {
+  $candidates = New-Object System.Collections.Generic.List[string]
+
+  function Add-Candidate {
+    param([string]$Value)
+    if ([string]::IsNullOrWhiteSpace($Value)) { return }
+    $trimmed = $Value.Trim()
+    if (Test-IsWindowsStoreAliasPath $trimmed) { return }
+    if ($candidates -notcontains $trimmed) {
+      $candidates.Add($trimmed)
+    }
+  }
+
+  Add-Candidate $env:CCB_PYTHON_CMD
+  Add-Candidate "py -3"
+  Add-Candidate "python"
+  Add-Candidate "python3"
+
+  try {
+    $wherePython = & where.exe python 2>$null
+    foreach ($item in @($wherePython)) {
+      $candidatePath = [string]$item
+      if ([string]::IsNullOrWhiteSpace($candidatePath)) { continue }
+      Add-Candidate $candidatePath.Trim()
+    }
+  } catch {}
+
+  $globPatterns = @(
+    "$env:LOCALAPPDATA\Programs\Python\Python*\python.exe",
+    "$env:ProgramFiles\Python*\python.exe",
+    "$env:ProgramFiles\Python\Python*\python.exe",
+    "$env:ProgramFiles(x86)\Python*\python.exe",
+    "$env:ProgramFiles(x86)\Python\Python*\python.exe"
+  )
+  foreach ($pattern in $globPatterns) {
+    try {
+      Get-ChildItem -Path $pattern -ErrorAction SilentlyContinue | ForEach-Object {
+        Add-Candidate $_.FullName
+      }
+    } catch {}
+  }
+
+  return @($candidates)
+}
+
+function Find-Python {
+  foreach ($candidate in Get-PythonCandidates) {
+    try {
+      $info = Get-PythonVersionInfo -PythonCmd $candidate
+      if (
+        $info.Major -eq 3 -and
+        $info.Minor -ge 10 -and
+        -not (Test-IsWindowsStoreAliasPath $info.Executable)
+      ) {
+        return $candidate
+      }
+    } catch {}
+  }
+  return $null
+}
+
+function Require-Python310 {
+  param([string]$PythonCmd)
+
+  try {
+    $info = Get-PythonVersionInfo -PythonCmd $PythonCmd
+  } catch {
+    Write-Host "[ERROR] $($_.Exception.Message)"
     exit 1
   }
 
-  if (($major -ne 3) -or ($minor -lt 10)) {
-    Write-Host "[ERROR] Python version too old: $version"
+  if (($info.Major -ne 3) -or ($info.Minor -lt 10)) {
+    Write-Host "[ERROR] Python version too old: $($info.Version)"
     Write-Host "   ccb requires Python 3.10+"
     Write-Host "   Download: https://www.python.org/downloads/"
     exit 1
   }
-  Write-Host "[OK] Python $version"
+  Write-Host "[OK] Python $($info.Version) ($($info.Executable))"
+}
+
+function Test-PythonTomlReader {
+  param([string]$PythonCmd)
+
+  try {
+    $cmdParts = $PythonCmd -split ' ', 2
+    $fileName = $cmdParts[0]
+    $baseArgs = if ($cmdParts.Length -gt 1) { $cmdParts[1] } else { "" }
+    $code = "import importlib.util, sys; sys.exit(0 if any(importlib.util.find_spec(m) for m in ('tomllib','tomli','toml')) else 1)"
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $fileName
+    if ($baseArgs) {
+      $psi.Arguments = "$baseArgs -c `"$code`""
+    } else {
+      $psi.Arguments = "-c `"$code`""
+    }
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+
+    $process = New-Object System.Diagnostics.Process
+    $process.StartInfo = $psi
+    $process.Start() | Out-Null
+    $process.WaitForExit()
+    return ($process.ExitCode -eq 0)
+  } catch {
+    return $false
+  }
+}
+
+function Install-Tomli {
+  param([string]$PythonCmd)
+
+  if ($env:CCB_INSTALL_TOMLI -eq "0") {
+    Write-Host "INFO: tomli auto-install skipped by CCB_INSTALL_TOMLI=0"
+    return
+  }
+  if (Test-PythonTomlReader -PythonCmd $PythonCmd) {
+    Write-Host "[OK] TOML parser available"
+    return
+  }
+
+  Write-Host "Installing Python dependency: tomli"
+  $cmdParts = $PythonCmd -split ' ', 2
+  $fileName = $cmdParts[0]
+  $baseArgs = if ($cmdParts.Length -gt 1) { $cmdParts[1] } else { "" }
+  $argVariants = @()
+  if ($baseArgs) {
+    $argVariants += "$baseArgs -m pip install --user tomli>=2.0.0"
+    $argVariants += "$baseArgs -m pip install --user --break-system-packages tomli>=2.0.0"
+  } else {
+    $argVariants += "-m pip install --user tomli>=2.0.0"
+    $argVariants += "-m pip install --user --break-system-packages tomli>=2.0.0"
+  }
+
+  $lastError = ""
+  foreach ($args in $argVariants) {
+    try {
+      $psi = New-Object System.Diagnostics.ProcessStartInfo
+      $psi.FileName = $fileName
+      $psi.Arguments = $args
+      $psi.RedirectStandardOutput = $true
+      $psi.RedirectStandardError = $true
+      $psi.UseShellExecute = $false
+      $psi.CreateNoWindow = $true
+
+      $process = New-Object System.Diagnostics.Process
+      $process.StartInfo = $psi
+      $process.Start() | Out-Null
+      $stdout = $process.StandardOutput.ReadToEnd()
+      $stderr = $process.StandardError.ReadToEnd()
+      $process.WaitForExit()
+      if ($process.ExitCode -eq 0 -and (Test-PythonTomlReader -PythonCmd $PythonCmd)) {
+        Write-Host "[OK] TOML parser available"
+        return
+      }
+      $lastError = $stderr.Trim()
+      if ([string]::IsNullOrWhiteSpace($lastError)) {
+        $lastError = $stdout.Trim()
+      }
+    } catch {
+      $lastError = $_.Exception.Message
+    }
+  }
+
+  Write-Host "WARN: tomli install failed; rich TOML config requires Python 3.11+ or tomli/toml"
+  if (-not [string]::IsNullOrWhiteSpace($lastError)) {
+    Write-Host "   Last failure: $lastError"
+  }
+  Write-Host "   Manual install:"
+  Write-Host "   $PythonCmd -m pip install --user tomli>=2.0.0"
 }
 
 function Confirm-BackendEnv {
@@ -188,9 +379,16 @@ function Install-Native {
   }
 
   Require-Python310 -PythonCmd $pythonCmd
+  Install-Tomli -PythonCmd $pythonCmd
 
   Write-Host "Installing ccb to $InstallPrefix ..."
   Write-Host "Using Python: $pythonCmd"
+  $pythonInfo = Get-PythonVersionInfo -PythonCmd $pythonCmd
+  $pythonExecutable = $pythonInfo.Executable
+  if ([string]::IsNullOrWhiteSpace($pythonExecutable)) {
+    Write-Host "[ERROR] Failed to resolve a concrete Python executable."
+    exit 1
+  }
 
   $cleanInstall = $false
   $cleanEnv = ($env:CCB_CLEAN_INSTALL -as [string])
@@ -214,7 +412,7 @@ function Install-Native {
     New-Item -ItemType Directory -Path $binDir -Force | Out-Null
   }
 
-  $items = @("ccb", "lib", "bin", "commands", "mcp", "droid_skills")
+  $items = @("ccb", "lib", "bin", "commands", "mcp", "inherit_skills")
   foreach ($item in $items) {
     $src = Join-Path $repoRoot $item
     $dst = Join-Path $InstallPrefix $item
@@ -268,7 +466,8 @@ function Install-Native {
       # Script is installed alongside the wrapper under $InstallPrefix\bin
       $relPath = $script
     }
-    $wrapperContent = "@echo off`r`nset `"PYTHON=python`"`r`nwhere python >NUL 2>&1 || set `"PYTHON=py -3`"`r`n%PYTHON% `"%~dp0$relPath`" %*"
+    $escapedPythonExecutable = $pythonExecutable.Replace('"', '""')
+    $wrapperContent = "@echo off`r`nset `"PYTHON=$escapedPythonExecutable`"`r`nif not exist `"%PYTHON%`" set `"PYTHON=python`"`r`nwhere python >NUL 2>&1 || if /I `"%PYTHON%`"==`"python`" set `"PYTHON=py -3`"`r`n%PYTHON% `"%~dp0$relPath`" %*"
     [System.IO.File]::WriteAllText($batPath, $wrapperContent, $script:utf8NoBom)
     # .cmd wrapper for PowerShell/CMD users (and tools preferring .cmd over raw shebang scripts)
     [System.IO.File]::WriteAllText($cmdPath, $wrapperContent, $script:utf8NoBom)
@@ -408,7 +607,7 @@ function Cleanup-LegacyFiles {
 }
 
 function Install-CodexSkills {
-  $skillsSrc = Join-Path $repoRoot "codex_skills"
+  $skillsSrc = Join-Path (Join-Path $repoRoot "inherit_skills") "codex_skills"
   $codexHome = if ($env:CODEX_HOME) { $env:CODEX_HOME } else { Join-Path $env:USERPROFILE ".codex" }
   $skillsDst = Join-Path $codexHome "skills"
 
@@ -420,7 +619,16 @@ function Install-CodexSkills {
     New-Item -ItemType Directory -Path $skillsDst -Force | Out-Null
   }
 
-  Write-Host "Installing Codex skills (PowerShell SKILL.md templates)..."
+  $deprecatedSkills = @("ping", "pend", "autonew", "all-plan", "file-op")
+  foreach ($skill in $deprecatedSkills) {
+    $skillPath = Join-Path $skillsDst $skill
+    if (Test-Path $skillPath) {
+      Remove-Item -Recurse -Force $skillPath
+      Write-Host "  Removed obsolete skill: $skill"
+    }
+  }
+
+  Write-Host "Installing inherited Codex skills (PowerShell SKILL.md template)..."
   Get-ChildItem -Path $skillsSrc -Directory | ForEach-Object {
     $skillName = $_.Name
     $srcDir = $_.FullName
@@ -455,7 +663,7 @@ function Install-CodexSkills {
 }
 
 function Install-DroidSkills {
-  $skillsSrc = Join-Path $repoRoot "droid_skills"
+  $skillsSrc = Join-Path (Join-Path $repoRoot "inherit_skills") "droid_skills"
   $factoryHome = if ($env:FACTORY_HOME) { $env:FACTORY_HOME } else { Join-Path $env:USERPROFILE ".factory" }
   $skillsDst = Join-Path $factoryHome "skills"
 
@@ -471,8 +679,17 @@ function Install-DroidSkills {
     New-Item -ItemType Directory -Path $skillsDst -Force | Out-Null
   }
 
-  Write-Host "Installing Droid/Factory skills..."
-  Get-ChildItem -Path $skillsSrc -Directory | ForEach-Object {
+  $deprecatedSkills = @("ping", "pend", "autonew", "all-plan")
+  foreach ($skill in $deprecatedSkills) {
+    $skillPath = Join-Path $skillsDst $skill
+    if (Test-Path $skillPath) {
+      Remove-Item -Recurse -Force $skillPath
+      Write-Host "  Removed obsolete skill: $skill"
+    }
+  }
+
+  Write-Host "Installing Droid/Factory ask skill..."
+  Get-ChildItem -Path $skillsSrc -Directory | Where-Object { $_.Name -eq "ask" } | ForEach-Object {
     $skillName = $_.Name
     $srcDir = $_.FullName
     $dstDir = Join-Path $skillsDst $skillName
@@ -530,7 +747,6 @@ function Install-DroidDelegation {
 function Install-ClaudeConfig {
   $claudeDir = Join-Path $env:USERPROFILE ".claude"
   $commandsDir = Join-Path $claudeDir "commands"
-  $claudeMd = Join-Path $claudeDir "CLAUDE.md"
   $settingsJson = Join-Path $claudeDir "settings.json"
 
   if (-not (Test-Path $claudeDir)) {
@@ -549,15 +765,23 @@ function Install-ClaudeConfig {
 
   # Install skills
   $skillsDir = Join-Path $claudeDir "skills"
-  $srcSkills = Join-Path $repoRoot "claude_skills"
+  $srcSkills = Join-Path (Join-Path $repoRoot "inherit_skills") "claude_skills"
   if (Test-Path $srcSkills) {
     if (-not (Test-Path $skillsDir)) {
       New-Item -ItemType Directory -Path $skillsDir -Force | Out-Null
     }
-    Write-Host "Installing Claude skills (PowerShell SKILL.md templates)..."
-    Get-ChildItem -Path $srcSkills -Directory | ForEach-Object {
-      if ($_.Name -eq "docs") { return }
 
+    $deprecatedSkills = @("ping", "pend", "autonew", "all-plan", "docs", "tp", "tr", "file-op", "review", "continue")
+    foreach ($skill in $deprecatedSkills) {
+      $skillPath = Join-Path $skillsDir $skill
+      if (Test-Path $skillPath) {
+        Remove-Item -Recurse -Force $skillPath
+        Write-Host "  Removed obsolete skill: $skill"
+      }
+    }
+
+    Write-Host "Installing inherited Claude skills (PowerShell SKILL.md template)..."
+    Get-ChildItem -Path $srcSkills -Directory | ForEach-Object {
       $skillName = $_.Name
       $srcDir = $_.FullName
       $dstDir = Join-Path $skillsDir $skillName
@@ -587,54 +811,9 @@ function Install-ClaudeConfig {
 
       Write-Host "  Updated skill: $skillName"
     }
-
-    $srcDocs = Join-Path $srcSkills "docs"
-    if (Test-Path $srcDocs) {
-      $dstDocs = Join-Path $skillsDir "docs"
-      if (Test-Path $dstDocs) { Remove-Item -Recurse -Force $dstDocs }
-      Copy-Item -Recurse -Force $srcDocs $dstDocs
-      Write-Host "  Installed skills docs: docs/"
-    }
   }
 
-  $claudeMdTemplate = Join-Path $installPrefix "config\claude-md-ccb.md"
-  if (-not (Test-Path $claudeMdTemplate)) {
-    Write-Warning "Template not found: $claudeMdTemplate; skipping CLAUDE.md injection"
-  } else {
-    $codexRules = Get-Content -Raw $claudeMdTemplate
-
-  if (Test-Path $claudeMd) {
-    $content = Get-Content -Raw $claudeMd
-
-    if ($content -match [regex]::Escape($script:CCB_START_MARKER)) {
-      $pattern = '(?s)<!-- CCB_CONFIG_START -->.*?<!-- CCB_CONFIG_END -->'
-      $newContent = [regex]::Replace($content, $pattern, $codexRules.Trim())
-      $newContent | Out-File -Encoding UTF8 -FilePath $claudeMd
-      Write-Host "Updated CLAUDE.md with CCB collaboration rules"
-    } elseif ($content -match '##\s+(Codex|Gemini|OpenCode)\s+Collaboration Rules' -or $content -match '##\s+(Codex|Gemini|OpenCode)\s+协作规则') {
-      $patterns = @(
-        '(?s)## Codex Collaboration Rules.*?(?=\n## (?!Gemini)|\Z)',
-        '(?s)## Codex 协作规则.*?(?=\n## |\Z)',
-        '(?s)## Gemini Collaboration Rules.*?(?=\n## |\Z)',
-        '(?s)## Gemini 协作规则.*?(?=\n## |\Z)',
-        '(?s)## OpenCode Collaboration Rules.*?(?=\n## |\Z)',
-        '(?s)## OpenCode 协作规则.*?(?=\n## |\Z)'
-      )
-      foreach ($p in $patterns) {
-        $content = [regex]::Replace($content, $p, '')
-      }
-      $content = ($content.TrimEnd() + "`n")
-      ($content + $codexRules + "`n") | Out-File -Encoding UTF8 -FilePath $claudeMd
-      Write-Host "Updated CLAUDE.md with CCB collaboration rules"
-    } else {
-      Add-Content -Path $claudeMd -Value $codexRules
-      Write-Host "Updated CLAUDE.md with CCB collaboration rules"
-    }
-  } else {
-    $codexRules | Out-File -Encoding UTF8 -FilePath $claudeMd
-    Write-Host "Created CLAUDE.md with CCB collaboration rules"
-  }
-  } # end claudeMdTemplate check
+  Remove-CCBMemoryInjections
 
   $allowList = @(
     "Bash(ccb ask *)", "Bash(ccb ping *)", "Bash(ccb pend *)"
@@ -672,45 +851,34 @@ function Install-ClaudeConfig {
     Write-Host "Updated settings.json with permissions"
   }
 
-  # --- AGENTS.md injection ---
-  $agentsMdTemplate = Join-Path $installPrefix "config\agents-md-ccb.md"
-  $agentsMd = Join-Path $installPrefix "AGENTS.md"
-  if (Test-Path $agentsMdTemplate) {
-    $templateContent = Get-Content -Raw $agentsMdTemplate
-    if (Test-Path $agentsMd) {
-      $agentsContent = Get-Content -Raw $agentsMd
-      if ($agentsContent -match '<!-- CCB_ROLES_START -->' -or $agentsContent -match '<!-- REVIEW_RUBRICS_START -->') {
-        $agentsContent = [regex]::Replace($agentsContent, '(?s)<!-- CCB_ROLES_START -->.*?<!-- CCB_ROLES_END -->', '')
-        $agentsContent = [regex]::Replace($agentsContent, '(?s)<!-- REVIEW_RUBRICS_START -->.*?<!-- REVIEW_RUBRICS_END -->', '')
-        $agentsContent = $agentsContent.TrimEnd() + "`n`n" + $templateContent.Trim() + "`n"
-        $agentsContent | Out-File -Encoding UTF8 -FilePath $agentsMd
-      } else {
-        Add-Content -Path $agentsMd -Value ("`n" + $templateContent)
-      }
-    } else {
-      $templateContent | Out-File -Encoding UTF8 -FilePath $agentsMd
-    }
-    Write-Host "Updated AGENTS.md with review rubrics"
-  }
+}
 
-  # --- .clinerules injection ---
-  $clinerulesTpl = Join-Path $installPrefix "config\clinerules-ccb.md"
+function Remove-MarkedMemoryBlock {
+  param(
+    [string]$Path,
+    [string]$StartMarker,
+    [string]$EndMarker,
+    [string]$Label
+  )
+  if (-not (Test-Path $Path)) { return }
+  $content = Get-Content -Raw $Path -Encoding UTF8
+  if (-not $content.Contains($StartMarker)) { return }
+  $pattern = "(?s)\r?\n?$([regex]::Escape($StartMarker)).*?$([regex]::Escape($EndMarker))\r?\n?"
+  $content = [regex]::Replace($content, $pattern, "`n").Trim() + "`n"
+  [System.IO.File]::WriteAllText($Path, $content, $script:utf8NoBom)
+  Write-Host "Removed CCB memory block from $Label"
+}
+
+function Remove-CCBMemoryInjections {
+  $claudeMd = Join-Path $env:USERPROFILE ".claude\CLAUDE.md"
+  Remove-MarkedMemoryBlock -Path $claudeMd -StartMarker $script:CCB_START_MARKER -EndMarker $script:CCB_END_MARKER -Label "CLAUDE.md"
+
+  $agentsMd = Join-Path $installPrefix "AGENTS.md"
+  Remove-MarkedMemoryBlock -Path $agentsMd -StartMarker $script:CCB_ROLES_START_MARKER -EndMarker $script:CCB_ROLES_END_MARKER -Label "AGENTS.md"
+  Remove-MarkedMemoryBlock -Path $agentsMd -StartMarker $script:CCB_RUBRICS_START_MARKER -EndMarker $script:CCB_RUBRICS_END_MARKER -Label "AGENTS.md"
+
   $clinerules = Join-Path $installPrefix ".clinerules"
-  if (Test-Path $clinerulesTpl) {
-    $tplContent = Get-Content -Raw $clinerulesTpl
-    if (Test-Path $clinerules) {
-      $crContent = Get-Content -Raw $clinerules
-      if ($crContent -match '<!-- CCB_ROLES_START -->') {
-        $crContent = [regex]::Replace($crContent, '(?s)<!-- CCB_ROLES_START -->.*?<!-- CCB_ROLES_END -->', $tplContent.Trim())
-        $crContent | Out-File -Encoding UTF8 -FilePath $clinerules
-      } else {
-        Add-Content -Path $clinerules -Value ("`n" + $tplContent)
-      }
-    } else {
-      $tplContent | Out-File -Encoding UTF8 -FilePath $clinerules
-    }
-    Write-Host "Updated .clinerules with role assignments"
-  }
+  Remove-MarkedMemoryBlock -Path $clinerules -StartMarker $script:CCB_ROLES_START_MARKER -EndMarker $script:CCB_ROLES_END_MARKER -Label ".clinerules"
 }
 
 function Uninstall-Native {
@@ -737,7 +905,7 @@ function Uninstall-Native {
 
   # 3. Remove Claude skills
   $claudeSkillsDir = Join-Path $env:USERPROFILE ".claude\skills"
-  $ccbSkills = @("ask", "ping", "pend", "autonew", "all-plan", "docs")
+  $ccbSkills = @("ask", "ccb_config", "ping", "pend", "autonew", "all-plan", "docs", "tp", "tr", "file-op", "review", "continue")
   if (Test-Path $claudeSkillsDir) {
     Write-Host "Removing CCB Claude skills..."
     foreach ($skill in $ccbSkills) {

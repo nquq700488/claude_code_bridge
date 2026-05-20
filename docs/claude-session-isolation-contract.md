@@ -15,6 +15,11 @@ It is the authoritative design anchor for:
 
 This document complements, but does not replace, the project startup contract in
 [docs/ccbd-startup-supervision-contract.md](/home/bfly/yunwei/ccb_source/docs/ccbd-startup-supervision-contract.md).
+Storage class naming, diagnostics classification, shared-cache eligibility, and
+cleanup sequencing for managed Claude files are defined by
+[docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md).
+Claude binary/version cache specifics are further narrowed by
+[docs/claude-binary-cache-dedup-plan.md](/home/bfly/yunwei/ccb_source/docs/claude-binary-cache-dedup-plan.md).
 
 ## 2. Identity Model
 
@@ -63,12 +68,24 @@ Inside that home, the managed Claude state is:
   - only when inherited Claude Code login auth is projected into the managed home
   - on macOS, this may be materialized from the user's Claude Code Keychain
     entry when that entry can be read during startup
+- `.ccb/agents/<agent>/provider-state/claude/home/Library/Preferences/com.apple.security.plist`
+  - on macOS, copied as Keychain preference compatibility state when the source
+    preference exists
+- `.ccb/agents/<agent>/provider-state/claude/home/Library/Keychains`
+  - on macOS, a symlink to the user's `~/Library/Keychains` only when
+    `com.apple.security.plist` is absent and auth inheritance is enabled
+  - this link is auth compatibility state, not project evidence or cache
 - `.ccb/agents/<agent>/provider-state/claude/home/.config/claude-code/auth.json`
   - copied only for compatibility with older or alternate Claude Code login
     cache layouts
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/skills/` when skill inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/commands/` when command inheritance is enabled
-- `.ccb/agents/<agent>/provider-state/claude/home/.claude/CLAUDE.md` when Claude prompt inheritance is enabled
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/CLAUDE.md`
+  - a CCB-generated memory projection when `inherit_memory = true`
+  - not a user-editable source file
+  - generated from inherited provider user memory, project `.ccb/ccb_memory.md`, project
+    `CLAUDE.md`, and optional `.ccb/agents/<agent>/memory.md`
+  - removed when `inherit_memory = false`
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude.json`
   - contains managed workspace trust plus selected inherited Claude account
     metadata required for official login reuse; it is not a provider
@@ -136,6 +153,11 @@ When `ccb` starts a managed Claude agent:
   read the user's Claude Code Keychain item and materialize the equivalent
   managed `.claude/.credentials.json` cache; projected secret material remains
   provider state and must be excluded from diagnostics
+- if `~/Library/Preferences/com.apple.security.plist` does not exist on macOS,
+  managed login-auth projection may instead link the managed
+  `Library/Keychains` path to the user's `~/Library/Keychains`; this link must
+  be removed when auth inheritance is disabled and must be classified as secret
+  auth state by storage diagnostics
 - managed login-auth projection may also synchronize older or alternate Claude
   Code credential cache artifacts such as `.config/claude-code/auth.json` when
   they exist in the source home
@@ -149,6 +171,12 @@ When `ccb` starts a managed Claude agent:
 - when source-home auth inheritance is enabled and the source Claude settings
   still provide auth env keys, startup must refresh those source auth values
   into the managed home on each managed launch
+- when API inheritance is enabled and no agent/provider profile explicitly sets
+  `ANTHROPIC_BASE_URL`, startup must prefer the source-home
+  `~/.claude/settings.json` route over a caller-shell `ANTHROPIC_BASE_URL`;
+  tools such as `ccswitch` update the source settings file and must take effect
+  after a managed Claude restart, while shell environment values are only a
+  fallback when the source settings do not define a route
 - when source-home auth inheritance is enabled but the source Claude settings no
   longer provide auth env keys, startup must preserve compatible managed-local
   Claude auth state already written inside the managed home instead of blanking
@@ -163,9 +191,26 @@ When `ccb` starts a managed Claude agent:
 - when auth inheritance is disabled, startup must not silently keep stale
   managed Claude auth env state, stale copied login credential artifacts, or
   stale inherited Claude account metadata in `.claude.json`
-- when inheritance is enabled, it must refresh inherited Claude `skills/`,
-  `commands/`, and `.claude/CLAUDE.md` projections into the managed home on
-  each managed launch so source-home updates become visible after restart
+- when skill inheritance is enabled, startup must route inherited Claude
+  `skills/` into the managed home as a CCB projected asset on each managed
+  launch
+- when command inheritance is enabled, startup must route inherited Claude
+  `commands/` into the managed home as a CCB projected asset on each managed
+  launch
+- when memory inheritance is enabled, startup must refresh the managed
+  `.claude/CLAUDE.md` projection on each managed launch so source-home and
+  project-memory updates become visible after restart
+- `inherit_memory` defaults to true and is independent of `inherit_skills` and
+  `inherit_commands`; disabling skill inheritance must not disable memory
+  projection
+- managed `.claude/CLAUDE.md` projection must be generated atomically and
+  idempotently; unchanged content should not be rewritten only to refresh mtime
+- users must edit `.ccb/ccb_memory.md`, project `CLAUDE.md`, or
+  `.ccb/agents/<agent>/memory.md` rather than the managed projection file
+- managed Claude home materialization must receive `project_root`, logical
+  `agent_name`, and `workspace_path` from the startup context; it must not infer
+  project root by walking upward from provider-runtime paths, because runtime
+  state may be relocated outside the project `.ccb` tree
 - when inherited Claude hooks reference allowlisted source-home hook assets
   through home-relative paths such as `$HOME/.codeisland/...`, startup may copy
   those referenced assets into the managed home so the inherited hook command
@@ -273,4 +318,6 @@ Diagnostics export should include:
   home
 
 Diagnostics export must exclude copied credential files and projected trust/auth
-state such as `.claude/.credentials.json` and `.config/claude-code/auth.json`.
+state such as `.claude/.credentials.json`, `.config/claude-code/auth.json`, and
+the macOS `Library/Keychains` fallback link. Support bundles must not follow
+that symlink.

@@ -32,7 +32,7 @@ def watch_ask_job(
     deadline = _watch_deadline(timeout, timeout_seconds_fn=timeout_seconds_fn, monotonic_fn=monotonic_fn)
     poll_interval = poll_interval_seconds_fn()
     try:
-        handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+        handle = connect_mounted_daemon_fn(context, allow_restart_stale=False)
     except reconnect_error_classes:
         fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
         if fallback is not None:
@@ -73,7 +73,7 @@ def watch_ask_job(
                     if emit_output:
                         write_lines_fn(out, render_watch_batch_fn(fallback))
                     return fallback
-                raise RuntimeError(f'wait timed out for {job_id}')
+                raise RuntimeError(f'watch timed out for {job_id}')
             sleep_fn(poll_interval)
             continue
 
@@ -91,7 +91,7 @@ def watch_ask_job(
                 if emit_output:
                     write_lines_fn(out, render_watch_batch_fn(fallback))
                 return fallback
-            raise RuntimeError(f'wait timed out for {job_id}')
+            raise RuntimeError(f'watch timed out for {job_id}')
 
         # Periodic health check: detect pane death or degraded agent early
         agent_name = batch.agent_name
@@ -137,7 +137,6 @@ def watch_ask_job(
                             f'Health check failed {health_check_errors} consecutive times '
                             f'for agent {agent_name}: {exc}'
                         )
-
         sleep_fn(poll_interval)
 
 
@@ -191,7 +190,7 @@ def _connect_client(
         if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
             return None
         try:
-            handle = connect_mounted_daemon_fn(context, allow_restart_stale=True)
+            handle = connect_mounted_daemon_fn(context, allow_restart_stale=False)
         except reconnect_error_classes:
             fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
             if fallback is not None:

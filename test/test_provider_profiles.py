@@ -1,16 +1,27 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import shutil
+try:
+    import tomllib
+except ModuleNotFoundError:  # pragma: no cover - Python < 3.11
+    import tomli as tomllib
+
+import pytest
 
 from agents.models import AgentSpec, PermissionMode, ProviderProfileSpec, QueuePolicy, RestoreMode, RuntimeMode, WorkspaceMode
 import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import materialize_claude_home_config
+from provider_backends.claude.launcher_runtime.binary_cache import route_claude_binary_cache
+from provider_backends.droid.home import materialize_droid_home_config
 from provider_backends.gemini.launcher_runtime.home import materialize_gemini_home_config
+import provider_core.projected_assets as projected_assets
 import provider_profiles.codex_home_config as codex_home_config
 from provider_profiles.codex_home_config import codex_provider_authority_fingerprint
-from provider_profiles import materialize_provider_profile
+from provider_profiles import materialize_provider_profile, validate_provider_runtime_home_uniqueness
+from provider_core.pathing import session_filename_for_agent
 from storage.paths import PathLayout
 
 
@@ -27,6 +38,12 @@ def _spec(name: str, provider: str = "codex", *, provider_profile: ProviderProfi
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
         provider_profile=provider_profile or ProviderProfileSpec(),
     )
+
+
+def _write_project_memory(project_root: Path, text: str) -> None:
+    path = project_root / '.ccb' / 'ccb_memory.md'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding='utf-8')
 
 
 def _write_codex_plugin_source(
@@ -84,9 +101,10 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     (source_home / 'commands' / 'demo.md').write_text('demo command\n', encoding='utf-8')
     _write_codex_plugin_source(source_home)
     monkeypatch.setenv('CODEX_HOME', str(source_home))
+    layout = PathLayout(project_root)
 
     profile = materialize_provider_profile(
-        layout=PathLayout(project_root),
+        layout=layout,
         spec=_spec(
             'agent1',
             provider_profile=ProviderProfileSpec(
@@ -102,15 +120,799 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     )
 
     runtime_home = Path(profile.runtime_home or '')
+    assert runtime_home == layout.agent_provider_state_dir('agent1', 'codex') / 'home'
+    assert profile.profile_root is None
+    assert not (layout.provider_profiles_dir / 'agent1' / 'codex').exists()
     assert runtime_home.is_dir()
     assert (runtime_home / 'config.toml').is_file()
     assert (runtime_home / 'auth.json').is_file()
     assert (runtime_home / 'skills' / 'demo.md').is_file()
+    assert (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
+    assert (runtime_home / 'commands').is_symlink()
     assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
+    assert (runtime_home / '.tmp' / 'plugins').is_symlink()
+    assert (runtime_home / '.tmp' / 'plugins').resolve() == (
+        project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'plugins-sha-v1'
+    ).resolve()
     assert (runtime_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json').is_file()
     assert (runtime_home / '.tmp' / 'plugins' / 'plugins' / 'demo-plugin' / '.codex-plugin' / 'plugin.json').is_file()
     assert (runtime_home / 'sessions').is_dir()
+
+
+def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[features]',
+                'external_migration = true',
+                'memories = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
+    assert 'model = "gpt-5.5"' in config_text
+    assert '[features]' in config_text
+    assert 'memories = true' in config_text
+    assert 'external_migration = false' in config_text
+    assert 'external_migration = true' not in config_text
+
+
+def test_materialize_codex_profile_preserves_inline_table_arrays(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                'mcp_servers = [{ name = "puppeteer", enabled = true, args = ["-y", "pkg"] }]',
+                '',
+                '[features]',
+                'external_migration = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
+    assert 'mcp_servers = [{ name = "puppeteer", enabled = true, args = ["-y", "pkg"] }]' in config_text
+    assert 'external_migration = false' in config_text
+
+
+def test_materialize_codex_profile_preserves_nested_inline_table_arrays(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                'tools = [{ name = "demo", config = { retries = 2, enabled = true } }]',
+                '',
+                '[features]',
+                'external_migration = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
+    assert 'tools = [{ name = "demo", config = { retries = 2, enabled = true } }]' in config_text
+    assert 'external_migration = false' in config_text
+
+
+def test_materialize_codex_profile_disables_external_migration_without_toml_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[features]',
+                'external_migration = true',
+                'memories = true',
+                '',
+                '[projects."/tmp/demo"]',
+                'trust_level = "trusted"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_home_config, '_import_optional_toml_reader', lambda: None)
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
+    assert config_text.count('[features]') == 1
+    assert 'model = "gpt-5.5"' in config_text
+    assert 'memories = true' in config_text
+    assert 'external_migration = false' in config_text
+    assert 'external_migration = true' not in config_text
+    assert '[projects."/tmp/demo"]' in config_text
+    assert 'trust_level = "trusted"' in config_text
+
+
+def test_materialize_codex_profile_merges_final_features_without_toml_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[features]',
+                'external_migration = true',
+                'memories = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_home_config, '_import_optional_toml_reader', lambda: None)
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
+    assert config_text.count('[features]') == 1
+    assert 'memories = true' in config_text
+    assert 'external_migration = false' in config_text
+    assert 'external_migration = true' not in config_text
+
+
+def test_materialize_codex_profile_stops_feature_merge_at_array_table_without_toml_reader(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[features]',
+                'external_migration = true',
+                'memories = true',
+                '',
+                '[[tools]]',
+                'external_migration = true',
+                'name = "not-a-feature"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    monkeypatch.setattr(codex_home_config, '_import_optional_toml_reader', lambda: None)
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
+    assert config_text.count('[features]') == 1
+    assert config_text.count('external_migration = true') == 1
+    assert '[[tools]]' in config_text
+    assert 'name = "not-a-feature"' in config_text
+
+
+def test_materialize_codex_home_config_falls_back_to_marked_copy_when_symlink_fails(tmp_path: Path, monkeypatch) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills' / 'demo').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo' / 'SKILL.md').write_text('demo skill\n', encoding='utf-8')
+
+    def fail_symlink(self, target, target_is_directory=False):
+        raise OSError('symlink disabled')
+
+    monkeypatch.setattr(Path, 'symlink_to', fail_symlink)
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills' / 'demo' / 'SKILL.md').read_text(encoding='utf-8') == 'demo skill\n'
+    assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (target_home / 'skills' / 'demo.md').exists()
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    user_assets = tmp_path / 'user-skills'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    user_assets.mkdir(parents=True, exist_ok=True)
+    (user_assets / 'custom.md').write_text('user skill\n', encoding='utf-8')
+    target_home.mkdir(parents=True, exist_ok=True)
+    try:
+        (target_home / 'skills').symlink_to(user_assets, target_is_directory=True)
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills').resolve() == user_assets.resolve()
+    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (target_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills').resolve() == (source_home / 'skills').resolve()
+    assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_codex_home_config_leaves_source_home_assets_in_place(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    (source_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'demo.md').write_text('source skill\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        source_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert not (source_home / 'skills').is_symlink()
+    assert (source_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert not (source_home / 'skills.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_config_routes_plugins_through_shared_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    _write_codex_plugin_source(source_home, sha='shared-plugin-sha')
+    first_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    second_home = project_root / '.ccb' / 'agents' / 'agent2' / 'provider-state' / 'codex' / 'home'
+
+    codex_home_config.materialize_codex_home_config(
+        first_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+    )
+    codex_home_config.materialize_codex_home_config(
+        second_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+    )
+
+    bundle = project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'shared-plugin-sha'
+    assert (bundle / '.agents' / 'plugins' / 'marketplace.json').is_file()
+    assert (first_home / '.tmp' / 'plugins').is_symlink()
+    assert (second_home / '.tmp' / 'plugins').is_symlink()
+    assert (first_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (second_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (first_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'shared-plugin-sha\n'
+    assert (second_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'shared-plugin-sha\n'
+
+
+def test_materialize_codex_home_config_migrates_current_legacy_plugin_copy_to_shared_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    target_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    _write_codex_plugin_source(source_home, sha='shared-plugin-sha')
+    shutil.copytree(source_home / '.tmp' / 'plugins', target_home / '.tmp' / 'plugins')
+    (target_home / '.tmp' / 'plugins' / 'plugins-clone-residue').mkdir(parents=True, exist_ok=True)
+    (target_home / '.tmp' / 'plugins.sha').write_text('shared-plugin-sha\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+    )
+
+    bundle = project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'shared-plugin-sha'
+    assert (target_home / '.tmp' / 'plugins').is_symlink()
+    assert (target_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (target_home / '.tmp' / 'plugins.ccb-projection.json').is_file()
+    assert (target_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'shared-plugin-sha\n'
+
+
+def test_materialize_codex_profile_routes_plugins_through_shared_bundle(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('model = "gpt-5"\n', encoding='utf-8')
+    _write_codex_plugin_source(source_home, sha='profile-plugin-sha')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    bundle = project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / 'profile-plugin-sha'
+    assert (bundle / '.agents' / 'plugins' / 'marketplace.json').is_file()
+    assert (runtime_home / '.tmp' / 'plugins').is_symlink()
+    assert (runtime_home / '.tmp' / 'plugins').resolve() == bundle.resolve()
+    assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'profile-plugin-sha\n'
+
+
+def test_materialize_codex_profile_preserves_explicit_runtime_home(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    explicit_home = tmp_path / 'explicit-codex-home'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('model = "gpt-5"\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                home=str(explicit_home),
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    assert Path(profile.runtime_home or '') == explicit_home.resolve()
+    assert Path(profile.profile_root or '') == explicit_home.resolve()
+    assert (explicit_home / 'config.toml').is_file()
+    assert (explicit_home / 'sessions').is_dir()
+
+
+def test_materialize_codex_profile_migrates_legacy_profile_runtime_home(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"source-key"}\n', encoding='utf-8')
+    _write_codex_plugin_source(source_home, plugin_name='source-plugin', sha='source-sha', skill_body='source skill\n')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session = legacy_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    (legacy_home / 'auth.json').write_text('{"OPENAI_API_KEY":"legacy-key"}\n', encoding='utf-8')
+    _write_codex_plugin_source(legacy_home, plugin_name='legacy-plugin', sha='source-sha')
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(legacy_home),
+                'codex_session_root': str(legacy_home / 'sessions'),
+                'codex_session_path': str(legacy_session),
+                'start_cmd': (
+                    f'CODEX_HOME={legacy_home} '
+                    f'CODEX_SESSION_ROOT={legacy_home / "sessions"} '
+                    f'UNCHANGED={legacy_home}-suffix '
+                    f'codex resume old'
+                ),
+                'codex_start_cmd': f'CODEX_HOME={legacy_home} CODEX_SESSION_ROOT={legacy_home / "sessions"} codex resume old',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    migrated_session = runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    assert runtime_home == layout.agent_provider_state_dir('agent1', 'codex') / 'home'
+    assert profile.profile_root is None
+    assert migrated_session.read_text(encoding='utf-8') == '{"type":"session"}\n'
+    assert (runtime_home / 'auth.json').read_text(encoding='utf-8') == '{"OPENAI_API_KEY":"source-key"}\n'
+    assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'source-sha\n'
+    assert (runtime_home / '.tmp' / 'plugins' / 'plugins' / 'source-plugin' / 'skills' / 'source-plugin' / 'SKILL.md').read_text(encoding='utf-8') == 'source skill\n'
+    assert not (runtime_home / '.tmp' / 'plugins' / 'plugins' / 'legacy-plugin').exists()
+    assert not (legacy_home / 'sessions').exists()
+    payload = json.loads(session_file.read_text(encoding='utf-8'))
+    assert payload['codex_home'] == str(runtime_home)
+    assert payload['codex_session_root'] == str(runtime_home / 'sessions')
+    assert payload['codex_session_path'] == str(migrated_session)
+    assert f'CODEX_HOME={runtime_home}' in payload['start_cmd']
+    assert f'CODEX_SESSION_ROOT={runtime_home / "sessions"}' in payload['start_cmd']
+    assert str(legacy_home) not in payload['codex_start_cmd']
+    assert f'UNCHANGED={legacy_home}-suffix' in payload['start_cmd']
+    events = [
+        json.loads(line)
+        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    assert events[-1]['event_type'] == 'codex_profile_migration'
+    assert events[-1]['status'] == 'migrated'
+    assert events[-1]['reason'] == 'legacy_profile_runtime_home_migrated'
+
+
+def test_materialize_codex_profile_migration_respects_inherit_auth_false(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"source-key"}\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session = legacy_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    (legacy_home / 'auth.json').write_text('{"OPENAI_API_KEY":"legacy-key"}\n', encoding='utf-8')
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(legacy_home),
+                'codex_session_root': str(legacy_home / 'sessions'),
+                'codex_session_path': str(legacy_session),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec(
+            'agent1',
+            provider_profile=ProviderProfileSpec(mode='isolated', inherit_auth=False),
+        ),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').is_file()
+    assert not (runtime_home / 'auth.json').exists()
+    assert not (legacy_home / 'sessions').exists()
+
+
+def test_materialize_codex_profile_does_not_migrate_when_session_authority_is_malformed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session = legacy_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text('{not json}\n', encoding='utf-8')
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert legacy_session.is_file()
+    assert not (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').exists()
+    events = [
+        json.loads(line)
+        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    assert events[-1]['event_type'] == 'codex_profile_migration'
+    assert events[-1]['status'] == 'skipped'
+    assert events[-1]['reason'] == 'session_authority_preflight_failed'
+    assert session_file.read_text(encoding='utf-8') == '{not json}\n'
+
+
+def test_materialize_codex_profile_migrates_legacy_sessions_with_unrelated_tmp_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session = legacy_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    outside = tmp_path / 'outside'
+    outside.mkdir(parents=True, exist_ok=True)
+    tmp_dir = legacy_home / 'tmp' / 'arg0'
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(outside, tmp_dir / 'linked-outside')
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(legacy_home),
+                'codex_session_root': str(legacy_home / 'sessions'),
+                'codex_session_path': str(legacy_session),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert not legacy_session.exists()
+    assert (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').is_file()
+    assert (tmp_dir / 'linked-outside').is_symlink()
+    events = [
+        json.loads(line)
+        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    assert events[-1]['event_type'] == 'codex_profile_migration'
+    assert events[-1]['status'] == 'migrated'
+    assert events[-1]['reason'] == 'legacy_profile_runtime_home_migrated'
+
+
+def test_materialize_codex_profile_does_not_migrate_session_material_with_symlink(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session_root = legacy_home / 'sessions'
+    legacy_session = legacy_session_root / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    outside = tmp_path / 'outside'
+    outside.mkdir(parents=True, exist_ok=True)
+    try:
+        os.symlink(outside, legacy_session_root / 'linked-outside')
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(legacy_home),
+                'codex_session_root': str(legacy_session_root),
+                'codex_session_path': str(legacy_session),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert legacy_session.is_file()
+    assert not (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').exists()
+    events = [
+        json.loads(line)
+        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    assert events[-1]['event_type'] == 'codex_profile_migration'
+    assert events[-1]['status'] == 'skipped'
+    assert events[-1]['reason'] == 'legacy_home_contains_symlink'
+
+
+def test_materialize_codex_profile_does_not_migrate_when_agent_runtime_is_active(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session = legacy_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    runtime_path = layout.agent_runtime_path('agent1')
+    runtime_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_path.write_text(
+        json.dumps({'state': 'idle', 'pid': os.getpid()}, ensure_ascii=False) + '\n',
+        encoding='utf-8',
+    )
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(legacy_home),
+                'codex_session_root': str(legacy_home / 'sessions'),
+                'codex_session_path': str(legacy_session),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert legacy_session.is_file()
+    assert not (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').exists()
+    events = [
+        json.loads(line)
+        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    assert events[-1]['event_type'] == 'codex_profile_migration'
+    assert events[-1]['status'] == 'skipped'
+    assert events[-1]['reason'] == 'agent_runtime_active'
+
+
+def test_materialize_codex_profile_migrates_with_stale_idle_runtime_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    layout = PathLayout(project_root)
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    legacy_home = layout.provider_profiles_dir / 'agent1' / 'codex'
+    legacy_session = legacy_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl'
+    legacy_session.parent.mkdir(parents=True, exist_ok=True)
+    legacy_session.write_text('{"type":"session"}\n', encoding='utf-8')
+    runtime_path = layout.agent_runtime_path('agent1')
+    runtime_path.parent.mkdir(parents=True, exist_ok=True)
+    runtime_path.write_text('{"state":"idle","pid":0}\n', encoding='utf-8')
+    session_file = layout.ccb_dir / session_filename_for_agent('codex', 'agent1')
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                'codex_home': str(legacy_home),
+                'codex_session_root': str(legacy_home / 'sessions'),
+                'codex_session_path': str(legacy_session),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=project_root,
+    )
+
+    runtime_home = Path(profile.runtime_home or '')
+    assert (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').is_file()
+    assert not legacy_session.exists()
 
 
 def test_materialize_codex_profile_writes_agent_local_provider_config_for_explicit_api(
@@ -178,6 +980,7 @@ def test_materialize_codex_profile_writes_agent_local_provider_config_for_explic
     assert 'base_url = "https://api.rootflowai.com"' in config_text
     assert 'wire_api = "responses"' in config_text
     assert 'requires_openai_auth = false' in config_text
+    assert 'external_migration = false' in config_text
     assert 'https://stale.example.test/v1' not in config_text
     assert 'env_key' not in config_text
     assert codex_provider_authority_fingerprint(profile)
@@ -270,7 +1073,9 @@ def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marke
     runtime_home = Path(profile.runtime_home or '')
     marketplace_path = runtime_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json'
     skill_path = runtime_home / '.tmp' / 'plugins' / 'plugins' / 'weatherpromise' / 'skills' / 'weatherpromise' / 'SKILL.md'
-    assert not (runtime_home / '.tmp' / 'plugins.sha').exists()
+    first_marker = (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8').strip()
+    assert first_marker
+    assert (project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / first_marker).is_dir()
     assert skill_path.read_text(encoding='utf-8') == 'plugin skill no sha v1\n'
 
     _write_codex_plugin_source(
@@ -290,7 +1095,10 @@ def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marke
     marketplace_payload = json.loads(marketplace_path.read_text(encoding='utf-8'))
     assert marketplace_payload['name'] == 'market-no-sha-v2'
     assert skill_path.read_text(encoding='utf-8') == 'plugin skill no sha v2 updated\n'
-    assert not (runtime_home / '.tmp' / 'plugins.sha').exists()
+    second_marker = (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8').strip()
+    assert second_marker
+    assert second_marker != first_marker
+    assert (project_root / '.ccb' / 'shared-cache' / 'codex' / 'plugin-bundles' / second_marker).is_dir()
 
 
 def test_materialize_codex_profile_skips_plugin_recopy_when_sha_is_unchanged(tmp_path: Path, monkeypatch) -> None:
@@ -308,7 +1116,7 @@ def test_materialize_codex_profile_skips_plugin_recopy_when_sha_is_unchanged(tmp
     )
 
     copied_sources: list[Path] = []
-    real_copytree = codex_home_config.shutil.copytree
+    real_copytree = projected_assets.shutil.copytree
 
     def tracking_copytree(src, dst, *args, **kwargs):
         src_path = Path(src)
@@ -316,7 +1124,7 @@ def test_materialize_codex_profile_skips_plugin_recopy_when_sha_is_unchanged(tmp
             copied_sources.append(src_path)
         return real_copytree(src, dst, *args, **kwargs)
 
-    monkeypatch.setattr(codex_home_config.shutil, 'copytree', tracking_copytree)
+    monkeypatch.setattr(projected_assets.shutil, 'copytree', tracking_copytree)
 
     materialize_provider_profile(
         layout=PathLayout(project_root),
@@ -370,7 +1178,7 @@ def test_materialize_codex_profile_repairs_incomplete_plugin_projection_even_whe
     assert marketplace_payload['name'] == 'market-repair'
 
 
-def test_materialize_claude_profile_creates_runtime_home(tmp_path: Path) -> None:
+def test_materialize_claude_profile_keeps_runtime_home_managed_by_agent_state(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
 
     profile = materialize_provider_profile(
@@ -386,8 +1194,142 @@ def test_materialize_claude_profile_creates_runtime_home(tmp_path: Path) -> None
         workspace_path=project_root,
     )
 
-    runtime_home = Path(profile.runtime_home or '')
-    assert runtime_home.is_dir()
+    assert profile.runtime_home is None
+
+
+def test_route_claude_binary_cache_links_empty_versions_dir(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'linked_empty'
+    assert versions.is_symlink()
+    assert versions.resolve() == (shared_cache / 'versions').resolve()
+    assert (versions.parent / 'versions.ccb-projection.json').is_file()
+
+
+def test_route_claude_binary_cache_refuses_conflicting_shared_version(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    (versions / '2.1.137').mkdir(parents=True, exist_ok=True)
+    (versions / '2.1.137' / 'claude').write_text('local binary\n', encoding='utf-8')
+    shared_version = shared_cache / 'versions' / '2.1.137'
+    shared_version.mkdir(parents=True, exist_ok=True)
+    (shared_version / 'claude').write_text('different shared binary\n', encoding='utf-8')
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    assert result['status'] == 'skipped'
+    assert result['reason'] == 'shared_version_content_conflict'
+    assert versions.is_dir()
+    assert not versions.is_symlink()
+    assert (versions / '2.1.137' / 'claude').read_text(encoding='utf-8') == 'local binary\n'
+    assert (shared_version / 'claude').read_text(encoding='utf-8') == 'different shared binary\n'
+
+
+def test_route_claude_binary_cache_migrates_executable_version_files(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.mkdir(parents=True, exist_ok=True)
+    binary = versions / '2.1.139'
+    binary.write_text('current executable\n', encoding='utf-8')
+    binary.chmod(0o755)
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    shared_binary = shared_cache / 'versions' / '2.1.139'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'migrated'
+    assert result['version_names'] == ('2.1.139',)
+    assert versions.is_symlink()
+    assert versions.resolve() == (shared_cache / 'versions').resolve()
+    assert shared_binary.read_text(encoding='utf-8') == 'current executable\n'
+    assert shared_binary.stat().st_mode & 0o111
+
+
+def test_route_claude_binary_cache_migrates_legacy_shared_symlink(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    legacy_cache = tmp_path / 'legacy-shared-cache' / 'claude'
+    external_cache = tmp_path / 'external-cache' / 'claude'
+    legacy_versions = legacy_cache / 'versions'
+    legacy_binary = legacy_versions / '2.1.139'
+    legacy_binary.parent.mkdir(parents=True, exist_ok=True)
+    legacy_binary.write_text('legacy executable\n', encoding='utf-8')
+    legacy_binary.chmod(0o755)
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.parent.mkdir(parents=True, exist_ok=True)
+    versions.symlink_to(legacy_versions, target_is_directory=True)
+
+    result = route_claude_binary_cache(home, external_cache)
+
+    external_binary = external_cache / 'versions' / '2.1.139'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'migrated_symlink'
+    assert versions.is_symlink()
+    assert versions.resolve() == (external_cache / 'versions').resolve()
+    assert external_binary.read_text(encoding='utf-8') == 'legacy executable\n'
+    assert legacy_binary.exists()
+
+
+def test_route_claude_binary_cache_points_existing_shared_home_to_latest_version(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    shared_versions = shared_cache / 'versions'
+    old_binary = shared_versions / '2.1.139'
+    new_binary = shared_versions / '2.1.140'
+    old_binary.parent.mkdir(parents=True, exist_ok=True)
+    old_binary.write_text('old executable\n', encoding='utf-8')
+    new_binary.write_text('new executable\n', encoding='utf-8')
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.parent.mkdir(parents=True, exist_ok=True)
+    versions.symlink_to(shared_versions, target_is_directory=True)
+    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
+    (home / '.local' / 'bin' / 'claude').symlink_to(old_binary)
+
+    result = route_claude_binary_cache(home, shared_cache)
+
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'already_shared'
+    assert result['active_version_name'] == '2.1.140'
+    assert (home / '.local' / 'bin' / 'claude').resolve() == new_binary.resolve()
+
+
+def test_route_claude_binary_cache_prefers_source_home_active_version(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    source_home = tmp_path / 'source-home'
+    shared_cache = tmp_path / 'shared-cache' / 'claude'
+    shared_versions = shared_cache / 'versions'
+    old_shared = shared_versions / '2.1.139'
+    newer_shared = shared_versions / '2.1.140'
+    source_active = source_home / '.local' / 'share' / 'claude' / 'versions' / '2.1.138'
+    old_shared.parent.mkdir(parents=True, exist_ok=True)
+    old_shared.write_text('old shared executable\n', encoding='utf-8')
+    newer_shared.write_text('newer shared executable\n', encoding='utf-8')
+    source_active.parent.mkdir(parents=True, exist_ok=True)
+    source_active.write_text('source active executable\n', encoding='utf-8')
+    source_active.chmod(0o755)
+    (source_home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
+    (source_home / '.local' / 'bin' / 'claude').symlink_to(source_active)
+    versions = home / '.local' / 'share' / 'claude' / 'versions'
+    versions.parent.mkdir(parents=True, exist_ok=True)
+    versions.symlink_to(shared_versions, target_is_directory=True)
+    (home / '.local' / 'bin').mkdir(parents=True, exist_ok=True)
+    (home / '.local' / 'bin' / 'claude').symlink_to(newer_shared)
+
+    result = route_claude_binary_cache(home, shared_cache, source_home=source_home)
+
+    copied_active = shared_versions / '2.1.138'
+    assert result['status'] == 'ok'
+    assert result['reason'] == 'already_shared'
+    assert result['active_version_name'] == '2.1.138'
+    assert copied_active.read_text(encoding='utf-8') == 'source active executable\n'
+    assert copied_active.stat().st_mode & 0o111
+    assert (home / '.local' / 'bin' / 'claude').resolve() == copied_active.resolve()
 
 
 def test_materialize_claude_home_config_projects_system_settings_into_managed_home(tmp_path: Path) -> None:
@@ -559,9 +1501,160 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
         '-a',
         'mac-user',
         '-s',
-        'Claude Code',
+        'Claude Code-credentials',
         '-w',
     ]
+
+
+def test_materialize_claude_home_config_projects_macos_keychain_preferences(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_plist = source_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    source_plist.parent.mkdir(parents=True, exist_ok=True)
+    source_plist.write_text(
+        '<plist><dict><key>DefaultKeychain</key><array/></dict></plist>\n',
+        encoding='utf-8',
+    )
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    assert target_plist.read_text(encoding='utf-8') == source_plist.read_text(encoding='utf-8')
+
+
+def test_materialize_claude_home_config_projects_macos_keychains_when_preferences_absent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_keychains = source_home / 'Library' / 'Keychains'
+    source_keychains.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    target_keychains = target_home / 'Library' / 'Keychains'
+    assert target_keychains.is_symlink()
+    assert target_keychains.resolve() == source_keychains.resolve()
+
+
+def test_materialize_claude_home_config_does_not_copy_keychain_preferences_on_non_darwin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_plist = source_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    source_plist.parent.mkdir(parents=True, exist_ok=True)
+    source_plist.write_text('<plist/>\n', encoding='utf-8')
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Linux')
+
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    assert not target_plist.exists()
+
+
+def test_materialize_claude_home_config_removes_keychain_preferences_when_auth_not_inherited(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_plist = source_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    target_plist = target_home / 'Library' / 'Preferences' / 'com.apple.security.plist'
+    source_plist.parent.mkdir(parents=True, exist_ok=True)
+    target_plist.parent.mkdir(parents=True, exist_ok=True)
+    source_plist.write_text('<plist><dict><key>DefaultKeychain</key><array/></dict></plist>\n', encoding='utf-8')
+    target_plist.write_text('<plist><dict><key>OldKeychain</key><array/></dict></plist>\n', encoding='utf-8')
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+
+    materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False),
+        source_home=source_home,
+    )
+
+    assert not target_plist.exists()
+
+
+def test_materialize_claude_home_config_removes_macos_keychains_when_auth_not_inherited(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_keychains = source_home / 'Library' / 'Keychains'
+    target_keychains = target_home / 'Library' / 'Keychains'
+    source_keychains.mkdir(parents=True, exist_ok=True)
+    target_keychains.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(source_keychains, target_keychains)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+
+    materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_auth=False, inherit_api=False),
+        source_home=source_home,
+    )
+
+    assert not target_keychains.exists()
+    assert not target_keychains.is_symlink()
+
+
+def test_materialize_claude_home_config_falls_back_to_legacy_macos_keychain_service(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def fake_run(argv, **kwargs):
+        calls.append([str(part) for part in argv])
+        service = calls[-1][calls[-1].index('-s') + 1]
+        if service == 'Claude Code':
+            return Result(0, json.dumps({'claudeAiOauth': {'refreshToken': 'legacy-refresh-token'}}))
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
+    assert payload['claudeAiOauth']['refreshToken'] == 'legacy-refresh-token'
+    queried_services = [call[call.index('-s') + 1] for call in calls]
+    assert queried_services == ['Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code']
+    assert all('-a' in call for call in calls)
+
+
+def test_macos_keychain_services_keep_current_credentials_first_when_custom_oauth_enabled(monkeypatch) -> None:
+    monkeypatch.setenv('CLAUDE_CODE_CUSTOM_OAUTH_URL', 'https://oauth.example.test')
+
+    assert claude_home_runtime._macos_keychain_services() == (
+        'Claude Code-credentials',
+        'Claude Code-custom-oauth',
+        'Claude Code',
+    )
 
 
 def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(tmp_path: Path) -> None:
@@ -617,7 +1710,7 @@ def test_materialize_claude_home_config_refreshes_inherited_skill_assets(tmp_pat
 
     assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v1\n'
     assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v1\n'
-    assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v1\n'
+    assert not (layout.claude_dir / 'CLAUDE.md').exists()
 
     (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill-v2\n', encoding='utf-8')
     (source_claude_dir / 'commands' / 'check.md').write_text('command-v2\n', encoding='utf-8')
@@ -627,7 +1720,175 @@ def test_materialize_claude_home_config_refreshes_inherited_skill_assets(tmp_pat
 
     assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill-v2\n'
     assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command-v2\n'
-    assert (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8') == 'claude-md-v2\n'
+    assert not (layout.claude_dir / 'CLAUDE.md').exists()
+
+
+def test_materialize_claude_home_config_writes_project_memory_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-home'
+    target_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
+    source_claude_dir = source_home / '.claude'
+    source_claude_dir.mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'CLAUDE.md').write_text('user claude memory\n', encoding='utf-8')
+    project_root.mkdir(parents=True, exist_ok=True)
+    _write_project_memory(project_root, 'shared ask memory\n')
+    (project_root / 'CLAUDE.md').write_text('project claude memory\n', encoding='utf-8')
+    private_memory = project_root / '.ccb' / 'agents' / 'reviewer' / 'memory.md'
+    private_memory.parent.mkdir(parents=True, exist_ok=True)
+    private_memory.write_text('reviewer private memory\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='reviewer',
+        workspace_path=tmp_path / 'worktree',
+    )
+
+    text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
+    assert '# CCB Managed Agent Memory' in text
+    assert '## Provider User Memory' in text
+    assert 'user claude memory' in text
+    assert '## CCB Shared Project Memory' in text
+    assert 'shared ask memory' in text
+    assert '## Provider-Native Project Memory' not in text
+    assert 'project claude memory' not in text
+    assert '## Agent Private Memory' in text
+    assert 'reviewer private memory' in text
+
+
+def test_materialize_claude_home_config_respects_inherit_memory_flag(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    source_claude_dir.mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'review').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill\n', encoding='utf-8')
+    (source_claude_dir / 'CLAUDE.md').write_text('claude-md\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_skills=True, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (layout.claude_dir / 'skills' / 'review' / 'SKILL.md').read_text(encoding='utf-8') == 'skill\n'
+    assert not (layout.claude_dir / 'CLAUDE.md').exists()
+
+
+def test_materialize_claude_home_config_projects_inherited_skills_and_commands(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    (source_claude_dir / 'skills' / 'ask').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'commands').mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'skills' / 'ask' / 'SKILL.md').write_text('ask skill\n', encoding='utf-8')
+    (source_claude_dir / 'commands' / 'ask.md').write_text('ask command\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
+    assert (layout.claude_dir / 'commands' / 'ask.md').read_text(encoding='utf-8') == 'ask command\n'
+    assert (layout.claude_dir / 'skills.ccb-projection.json').is_file()
+    assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
+
+
+def test_materialize_claude_home_config_skips_memory_without_project_context(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_claude_dir = source_home / '.claude'
+    source_claude_dir.mkdir(parents=True, exist_ok=True)
+    (source_claude_dir / 'CLAUDE.md').write_text('source-only memory\n', encoding='utf-8')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert not (layout.claude_dir / 'CLAUDE.md').exists()
+
+
+def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-factory-home'
+    target_home = tmp_path / 'managed-factory-home'
+    (source_home / 'skills' / 'ask').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'ask' / 'SKILL.md').write_text('ask skill\n', encoding='utf-8')
+
+    materialize_droid_home_config(target_home, source_home=source_home)
+
+    assert (target_home / 'sessions').is_dir()
+    assert (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8') == 'ask skill\n'
+    assert (target_home / 'skills.ccb-projection.json').is_file()
+
+
+def test_materialize_codex_home_config_writes_project_memory_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    target_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'AGENTS.md').write_text('user codex memory\n', encoding='utf-8')
+    project_root.mkdir(parents=True, exist_ok=True)
+    _write_project_memory(project_root, 'shared ask memory\n')
+    (project_root / 'AGENTS.md').write_text('project codex memory\n', encoding='utf-8')
+    private_memory = project_root / '.ccb' / 'agents' / 'agent1' / 'memory.md'
+    private_memory.parent.mkdir(parents=True, exist_ok=True)
+    private_memory.write_text('agent1 private memory\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+        workspace_path=tmp_path / 'worktree',
+    )
+
+    text = (target_home / 'AGENTS.md').read_text(encoding='utf-8')
+    assert '# CCB Managed Agent Memory' in text
+    assert 'provider: codex' in text
+    assert '## CCB Runtime Coordination Rules' in text
+    assert 'CCB `ask` is submit-only' in text
+    assert 'Do not wait, poll, or run `pend`/`watch`/`ping`' in text
+    assert text.index('## CCB Runtime Coordination Rules') < text.index('## CCB Shared Project Memory')
+    assert '## Provider User Memory' in text
+    assert 'user codex memory' in text
+    assert '## CCB Shared Project Memory' in text
+    assert 'shared ask memory' in text
+    assert '## Provider-Native Project Memory' in text
+    assert 'project codex memory' in text
+    assert '## Agent Private Memory' in text
+    assert 'agent1 private memory' in text
+
+
+def test_materialize_codex_home_config_respects_inherit_memory_flag(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    target_home.mkdir(parents=True, exist_ok=True)
+    (target_home / 'AGENTS.md').write_text('stale managed memory\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='agent1',
+    )
+
+    assert not (target_home / 'AGENTS.md').exists()
+
+
+def test_materialize_codex_home_config_skips_memory_without_project_context(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    target_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'AGENTS.md').write_text('source-only memory\n', encoding='utf-8')
+    (target_home / 'AGENTS.md').write_text('existing managed memory\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert (target_home / 'AGENTS.md').read_text(encoding='utf-8') == 'existing managed memory\n'
 
 
 def test_materialize_claude_home_config_projects_referenced_home_hook_assets(tmp_path: Path) -> None:
@@ -693,24 +1954,32 @@ def test_materialize_claude_home_config_does_not_project_home_hook_assets_withou
     assert not (layout.home_root / '.codeisland').exists()
 
 
-def test_materialize_claude_home_config_respects_inherit_skills_flag(tmp_path: Path) -> None:
+def test_materialize_claude_home_config_respects_inherit_skills_without_disabling_memory(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-home'
-    target_home = tmp_path / 'managed-home'
+    target_home = project_root / '.ccb' / 'agents' / 'reviewer' / 'provider-state' / 'claude' / 'home'
     source_claude_dir = source_home / '.claude'
     (source_claude_dir / 'skills' / 'review').mkdir(parents=True, exist_ok=True)
     (source_claude_dir / 'commands').mkdir(parents=True, exist_ok=True)
     (source_claude_dir / 'skills' / 'review' / 'SKILL.md').write_text('skill\n', encoding='utf-8')
     (source_claude_dir / 'commands' / 'check.md').write_text('command\n', encoding='utf-8')
     (source_claude_dir / 'CLAUDE.md').write_text('claude-md\n', encoding='utf-8')
+    project_root.mkdir(parents=True, exist_ok=True)
+    _write_project_memory(project_root, 'shared memory\n')
 
     layout = materialize_claude_home_config(
         target_home,
         profile=ProviderProfileSpec(inherit_skills=False, inherit_commands=True),
         source_home=source_home,
+        project_root=project_root,
+        agent_name='reviewer',
     )
 
     assert not (layout.claude_dir / 'skills').exists()
-    assert not (layout.claude_dir / 'CLAUDE.md').exists()
+    memory_text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
+    assert '# CCB Managed Agent Memory' in memory_text
+    assert 'claude-md' in memory_text
+    assert 'shared memory' in memory_text
     assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command\n'
 
 
@@ -883,27 +2152,46 @@ def test_materialize_gemini_profile_keeps_runtime_home_unset_without_explicit_ov
     assert profile.runtime_home is None
 
 
-def test_materialize_gemini_profile_uses_explicit_home_override(tmp_path: Path) -> None:
+def test_materialize_gemini_profile_rejects_explicit_home_override(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     explicit_home = tmp_path / 'gemini-home'
 
-    profile = materialize_provider_profile(
-        layout=PathLayout(project_root),
-        spec=_spec(
-            'agent1',
-            provider='gemini',
-            provider_profile=ProviderProfileSpec(
-                mode='isolated',
-                home=str(explicit_home),
-                inherit_api=False,
+    with pytest.raises(ValueError, match='provider_profile.home is supported only for codex'):
+        materialize_provider_profile(
+            layout=PathLayout(project_root),
+            spec=_spec(
+                'agent1',
+                provider='gemini',
+                provider_profile=ProviderProfileSpec(
+                    mode='isolated',
+                    home=str(explicit_home),
+                    inherit_api=False,
+                ),
             ),
-        ),
-        workspace_path=project_root,
-    )
+            workspace_path=project_root,
+        )
 
-    runtime_home = Path(profile.runtime_home or '')
-    assert runtime_home == explicit_home.resolve()
-    assert (runtime_home / '.gemini' / 'tmp').is_dir()
+
+def test_validate_provider_runtime_home_uniqueness_rejects_duplicate_codex_home(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    shared_home = tmp_path / 'shared-codex-home'
+
+    with pytest.raises(ValueError, match='duplicate effective codex_home'):
+        validate_provider_runtime_home_uniqueness(
+            layout=PathLayout(project_root),
+            specs=(
+                _spec(
+                    'agent1',
+                    provider='codex',
+                    provider_profile=ProviderProfileSpec(mode='isolated', home=str(shared_home)),
+                ),
+                _spec(
+                    'agent2',
+                    provider='codex',
+                    provider_profile=ProviderProfileSpec(mode='isolated', home=str(shared_home)),
+                ),
+            ),
+        )
 
 
 def test_materialize_gemini_home_config_projects_system_settings_into_managed_home(tmp_path: Path) -> None:
@@ -1164,3 +2452,159 @@ def test_materialize_gemini_home_config_merges_trusted_folders(tmp_path: Path) -
     payload = json.loads(layout.trusted_folders_path.read_text(encoding='utf-8'))
     assert payload['/system/project'] == 'TRUST_FOLDER'
     assert payload['/managed/project'] == 'TRUST_FOLDER'
+
+
+def test_materialize_gemini_home_config_writes_project_memory_bundle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_gemini = source_home / '.gemini'
+    source_gemini.mkdir(parents=True, exist_ok=True)
+    (source_gemini / 'GEMINI.md').write_text('user gemini memory\n', encoding='utf-8')
+    project_root.mkdir(parents=True, exist_ok=True)
+    _write_project_memory(project_root, 'shared ask memory\n')
+    (project_root / 'GEMINI.md').write_text('project gemini memory\n', encoding='utf-8')
+    private_memory = project_root / '.ccb' / 'agents' / 'reviewer' / 'memory.md'
+    private_memory.parent.mkdir(parents=True, exist_ok=True)
+    private_memory.write_text('reviewer private memory\n', encoding='utf-8')
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='reviewer',
+        workspace_path=tmp_path / 'worktree',
+    )
+
+    text = (layout.gemini_dir / 'GEMINI.md').read_text(encoding='utf-8')
+    settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert '# CCB Managed Agent Memory' in text
+    assert '## Provider User Memory' in text
+    assert 'user gemini memory' in text
+    assert '## CCB Shared Project Memory' in text
+    assert 'shared ask memory' in text
+    assert '## Provider-Native Project Memory' in text
+    assert 'project gemini memory' in text
+    assert '## Agent Private Memory' in text
+    assert 'reviewer private memory' in text
+    assert settings['contextFileName'] == 'GEMINI.md'
+
+
+def test_materialize_gemini_home_config_respects_inherit_memory_flag(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    target_gemini = target_home / '.gemini'
+    target_gemini.mkdir(parents=True, exist_ok=True)
+    (target_gemini / 'GEMINI.md').write_text('stale managed memory\n', encoding='utf-8')
+    (target_gemini / 'settings.json').write_text('{"contextFileName":"GEMINI.md"}\n', encoding='utf-8')
+
+    layout = materialize_gemini_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+        project_root=project_root,
+        agent_name='reviewer',
+    )
+
+    settings = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert not (layout.gemini_dir / 'GEMINI.md').exists()
+    assert 'contextFileName' not in settings
+
+
+def test_materialize_gemini_home_config_skips_memory_without_project_context(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_gemini = source_home / '.gemini'
+    target_gemini = target_home / '.gemini'
+    source_gemini.mkdir(parents=True, exist_ok=True)
+    target_gemini.mkdir(parents=True, exist_ok=True)
+    (source_gemini / 'GEMINI.md').write_text('source-only memory\n', encoding='utf-8')
+
+    layout = materialize_gemini_home_config(target_home, source_home=source_home)
+
+    assert not (layout.gemini_dir / 'GEMINI.md').exists()
+
+
+def test_render_toml_value_handles_dict_inline_table() -> None:
+    from provider_profiles.codex_home_config import _render_toml_value
+    result = _render_toml_value({'name': 'test', 'enabled': False})
+    assert result == '{ name = "test", enabled = false }'
+
+
+def test_render_toml_value_handles_empty_dict() -> None:
+    from provider_profiles.codex_home_config import _render_toml_value
+    result = _render_toml_value({})
+    assert result == '{}'
+
+
+def test_render_toml_value_handles_dict_in_mixed_list() -> None:
+    from provider_profiles.codex_home_config import _render_toml_value
+    result = _render_toml_value(['literal', {'name': 'test'}])
+    assert result == '["literal", { name = "test" }]'
+
+
+def test_render_toml_sections_handles_inline_table_arrays() -> None:
+    from provider_profiles.codex_home_config import _render_toml_document
+    payload = {
+        'skills': {
+            'config': [
+                {'path': '/a/skill.md', 'enabled': False},
+                {'name': 'plugin:skill', 'enabled': True},
+            ]
+        }
+    }
+    rendered = _render_toml_document(payload)
+    assert 'config = [{ path = "/a/skill.md", enabled = false }, { name = "plugin:skill", enabled = true }]' in rendered
+    assert tomllib.loads(rendered) == payload
+
+
+def test_render_toml_sections_handles_array_of_tables_with_only_child_tables() -> None:
+    from provider_profiles.codex_home_config import _render_toml_document
+    payload = {
+        'items': [
+            {'child': {'x': 1}},
+            {'child': {'x': 2}},
+        ]
+    }
+    rendered = _render_toml_document(payload)
+    assert tomllib.loads(rendered) == {
+        'items': [
+            {'child': {'x': 1}},
+            {'child': {'x': 2}},
+        ]
+    }
+
+
+def test_materialize_codex_home_config_with_skills_config_array(tmp_path: Path) -> None:
+    source_home = tmp_path / 'codex-home'
+    target_home = tmp_path / 'target-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        'model = "gpt-5.5"\n'
+        '\n'
+        '[[skills.config]]\n'
+        'path = "/a/skill.md"\n'
+        'enabled = false\n'
+        '\n'
+        '[[skills.config]]\n'
+        'name = "plugin:other"\n'
+        'enabled = true\n'
+        '\n'
+        '[features]\n'
+        'unified_exec = true\n',
+        encoding='utf-8',
+    )
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        source_home=source_home,
+    )
+
+    text = (target_home / 'config.toml').read_text(encoding='utf-8')
+    assert 'config = [{ path = "/a/skill.md", enabled = false }, { name = "plugin:other", enabled = true }]' in text
+    parsed = tomllib.loads(text)
+    assert parsed['skills']['config'] == [
+        {'path': '/a/skill.md', 'enabled': False},
+        {'name': 'plugin:other', 'enabled': True},
+    ]

@@ -10,6 +10,7 @@ _MAX_REQUEST_BYTES = 1024 * 1024
 
 def handle_connection(server, conn) -> str | None:
     request = None
+    after_response_action = None
     try:
         conn.settimeout(_REQUEST_READ_TIMEOUT_S)
         raw = _recv_request_line(conn)
@@ -26,13 +27,18 @@ def handle_connection(server, conn) -> str | None:
             if rejection:
                 response = RpcResponse.failure(rejection)
             else:
-                response = RpcResponse.success(handler(request.request))
+                payload = handler(request.request)
+                if isinstance(payload, tuple) and len(payload) == 2:
+                    payload, after_response_action = payload
+                response = RpcResponse.success(payload)
     except Exception as exc:
         response = RpcResponse.failure(str(exc))
     try:
         conn.sendall((json.dumps(response.to_record(), ensure_ascii=False) + '\n').encode('utf-8'))
     except OSError:
+        _queue_after_response_action(server, after_response_action)
         return getattr(request, 'op', None)
+    _queue_after_response_action(server, after_response_action)
     return getattr(request, 'op', None)
 
 
@@ -46,6 +52,15 @@ def _recv_request_line(conn) -> bytes:
         if len(raw) > _MAX_REQUEST_BYTES:
             raise ValueError('ccbd request exceeds maximum size')
     return raw
+
+
+def _queue_after_response_action(server, action) -> None:
+    if action is None:
+        return
+    try:
+        server.queue_after_response_action(action)
+    except Exception:
+        pass
 
 
 __all__ = ['handle_connection']

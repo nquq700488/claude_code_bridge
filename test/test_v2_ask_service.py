@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
+import re
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +12,7 @@ from ccbd.socket_client import CcbdClientError
 from cli.context import CliContextBuilder
 from cli.models import ParsedAskCommand
 from cli.services import ask as ask_service
+from cli.services.ask_runtime.submission import message_with_reply_guidance
 from cli.services.daemon import CcbdServiceError
 from project.ids import compute_project_id
 
@@ -52,6 +54,7 @@ def test_submit_ask_maps_broadcast_payload_and_submission(monkeypatch: pytest.Mo
             captured['message_type'] = envelope.message_type
             captured['delivery_scope'] = envelope.delivery_scope
             captured['silence_on_success'] = envelope.silence_on_success
+            captured['route_options'] = envelope.route_options
             return {
                 'submission_id': 'sub_1',
                 'jobs': [
@@ -97,43 +100,129 @@ def test_submit_ask_maps_broadcast_payload_and_submission(monkeypatch: pytest.Mo
         'message_type': 'notify',
         'delivery_scope': DeliveryScope.BROADCAST,
         'silence_on_success': True,
+        'route_options': {},
     }
 
 
-def test_submit_ask_preserves_explicit_cmd_sender(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    project_root = tmp_path / 'repo-ask-explicit-cmd'
+def test_submit_ask_maps_callback_route_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-callback'
     project_root.mkdir()
     context = _build_context(project_root)
     captured: dict[str, object] = {}
 
     class _FakeClient:
         def submit(self, envelope) -> dict:
-            captured['from_actor'] = envelope.from_actor
+            captured['route_options'] = envelope.route_options
             return {
                 'job_id': 'job_1',
-                'agent_name': 'agent1',
-                'target_kind': 'agent',
-                'target_name': 'agent1',
+                'agent_name': 'agent2',
+                'target_name': 'agent2',
                 'status': 'accepted',
             }
 
     monkeypatch.setattr(
         ask_service,
         'load_project_config',
-        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}}, cmd_enabled=True)),
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
     )
+    monkeypatch.setattr(ask_service, 'resolve_ask_sender', lambda context, sender: 'agent1')
     monkeypatch.setattr(
         ask_service,
         'invoke_mounted_daemon',
         lambda context, allow_restart_stale, request_fn: request_fn(_FakeClient()),
     )
 
-    ask_service.submit_ask(
+    summary = ask_service.submit_ask(
         context,
-        ParsedAskCommand(project=None, target='agent1', sender='cmd', message='hello'),
+        ParsedAskCommand(project=None, target='agent2', sender=None, message='collect evidence', callback=True),
     )
 
-    assert captured['from_actor'] == 'cmd'
+    assert summary.jobs[0]['job_id'] == 'job_1'
+    assert captured['route_options'] == {'mode': 'callback'}
+
+
+def test_message_with_reply_guidance_appends_compact_default() -> None:
+    body = message_with_reply_guidance('review the diff', message_type='ask')
+
+    assert body.startswith('review the diff\n\nCCB reply guidance:')
+    assert 'Answer directly and concisely.' in body
+    assert 'Include only relevant conclusions' in body
+    assert 'CCB nested ask routing:' not in body
+    assert 'ask --callback' not in body
+    assert 'no more than' not in body
+
+
+def test_message_with_reply_guidance_appends_explicit_compact_guidance() -> None:
+    body = message_with_reply_guidance('review the diff', message_type='ask', compact=True)
+
+    assert body.startswith('review the diff\n\nCCB reply guidance:')
+    assert 'Distill aggressively and lead with the answer.' in body
+    assert 'Keep only details needed for this ask.' in body
+    assert 'Omit empty sections' in body
+
+
+def test_message_with_reply_guidance_respects_explicit_output_requirements() -> None:
+    body = message_with_reply_guidance(
+        'review the diff\n\nOutput requirements:\n- Write a full report.',
+        message_type='ask',
+    )
+
+    assert body == 'review the diff\n\nOutput requirements:\n- Write a full report.'
+
+
+def test_message_with_reply_guidance_respects_chinese_explicit_output_requirements() -> None:
+    body = message_with_reply_guidance(
+        '\u8bf7\u5b8c\u6574\u8f93\u51fa\u6d4b\u8bd5\u65e5\u5fd7\uff0c\u4e0d\u8981\u603b\u7ed3\u3002',
+        message_type='ask',
+        compact=True,
+    )
+
+    assert body == '\u8bf7\u5b8c\u6574\u8f93\u51fa\u6d4b\u8bd5\u65e5\u5fd7\uff0c\u4e0d\u8981\u603b\u7ed3\u3002'
+
+
+def test_message_with_reply_guidance_respects_additional_english_output_requirements() -> None:
+    body = message_with_reply_guidance(
+        'Run the audit. Include everything and leave nothing out.',
+        message_type='ask',
+        compact=True,
+    )
+
+    assert body == 'Run the audit. Include everything and leave nothing out.'
+
+
+def test_message_with_reply_guidance_uses_silent_hint_for_silenced_asks() -> None:
+    body = message_with_reply_guidance('run smoke test', message_type='ask', silence_on_success=True)
+
+    assert 'Silent-on-success requested.' in body
+    assert 'Reply with the shortest useful status.' in body
+    assert 'CCB nested ask routing:' not in body
+
+
+def test_ask_guidance_source_has_no_literal_chinese_characters() -> None:
+    source = Path('lib/cli/services/ask_runtime/submission.py').read_text(encoding='utf-8')
+    assert re.search(r'[\u4e00-\u9fff]', source) is None
+
+
+def test_message_with_reply_guidance_skips_non_ask_modes() -> None:
+    assert message_with_reply_guidance('ship it', message_type='notify') == 'ship it'
+
+
+def test_submit_ask_rejects_explicit_cmd_sender(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-explicit-cmd'
+    project_root.mkdir()
+    context = _build_context(project_root)
+
+    monkeypatch.setattr(
+        ask_service,
+        'load_project_config',
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
+    )
+
+    with pytest.raises(ValueError, match='unknown sender agent: cmd'):
+        ask_service.submit_ask(
+            context,
+            ParsedAskCommand(project=None, target='agent1', sender='cmd', message='hello'),
+        )
 
 
 def test_submit_ask_translates_client_reset_during_shutdown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -172,7 +261,7 @@ def test_submit_ask_translates_client_reset_during_shutdown(monkeypatch: pytest.
         )
 
 
-def test_resolve_ask_sender_defaults_to_cmd_for_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_resolve_ask_sender_defaults_to_user_for_project_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-ask-default-cmd'
     project_root.mkdir()
     context = _build_context(project_root)
@@ -180,7 +269,7 @@ def test_resolve_ask_sender_defaults_to_cmd_for_project_root(monkeypatch: pytest
     for env_name in ('CCB_CALLER_ACTOR', 'CCB_CALLER_RUNTIME_DIR', 'CODEX_RUNTIME_DIR', 'CCB_SESSION_ID'):
         monkeypatch.delenv(env_name, raising=False)
 
-    assert ask_service.resolve_ask_sender(context, None) == 'cmd'
+    assert ask_service.resolve_ask_sender(context, None) == 'user'
 
 
 def test_resolve_ask_sender_prefers_runtime_dir_actor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -276,10 +365,15 @@ def test_watch_ask_job_reconnects_and_preserves_cursor(monkeypatch: pytest.Monke
     flaky = _FlakyClient()
     stable = _StableClient()
     handles = iter([SimpleNamespace(client=flaky), SimpleNamespace(client=stable)])
+    seen: list[bool] = []
 
-    monkeypatch.setattr(ask_service, 'connect_mounted_daemon', lambda context, allow_restart_stale: next(handles))
-    monkeypatch.setattr(ask_service, 'ask_wait_timeout_seconds', lambda: 1.0)
-    monkeypatch.setattr(ask_service, 'ask_wait_poll_interval_seconds', lambda: 0.0)
+    def _connect(context, allow_restart_stale):
+        seen.append(allow_restart_stale)
+        return next(handles)
+
+    monkeypatch.setattr(ask_service, 'connect_mounted_daemon', _connect)
+    monkeypatch.setattr(ask_service, 'watch_timeout_seconds', lambda: 1.0)
+    monkeypatch.setattr(ask_service, 'watch_poll_interval_seconds', lambda: 0.0)
     monkeypatch.setattr(ask_service, 'render_watch_batch', lambda batch: (f'{batch.job_id}:{batch.cursor}:{batch.terminal}',))
     monkeypatch.setattr(ask_service, 'write_lines', lambda out, lines: rendered.append(lines))
     monkeypatch.setattr(ask_service.time, 'sleep', lambda seconds: None)
@@ -292,6 +386,7 @@ def test_watch_ask_job_reconnects_and_preserves_cursor(monkeypatch: pytest.Monke
     assert flaky.calls == [0, 2]
     assert stable.calls == [2]
     assert rendered == [('job_1:2:False',), ('job_1:4:True',)]
+    assert seen == [False, False]
 
 
 def test_watch_ask_job_times_out_after_reconnect_failures(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -305,20 +400,27 @@ def test_watch_ask_job_times_out_after_reconnect_failures(monkeypatch: pytest.Mo
             del job_id, cursor
             raise CcbdClientError('socket closed')
 
+    seen: list[bool] = []
+
+    def _connect(context, allow_restart_stale):
+        seen.append(allow_restart_stale)
+        return SimpleNamespace(client=_FlakyClient())
+
     monkeypatch.setattr(
         ask_service,
         'connect_mounted_daemon',
-        lambda context, allow_restart_stale: SimpleNamespace(client=_FlakyClient()),
+        _connect,
     )
-    monkeypatch.setattr(ask_service, 'ask_wait_timeout_seconds', lambda: 1.0)
-    monkeypatch.setattr(ask_service, 'ask_wait_poll_interval_seconds', lambda: 0.0)
+    monkeypatch.setattr(ask_service, 'watch_timeout_seconds', lambda: 1.0)
+    monkeypatch.setattr(ask_service, 'watch_poll_interval_seconds', lambda: 0.0)
     monkeypatch.setattr(ask_service.time, 'monotonic', lambda: next(clock))
     monkeypatch.setattr(ask_service.time, 'sleep', lambda seconds: None)
 
     with pytest.raises(RuntimeError) as exc_info:
         ask_service.watch_ask_job(context, 'job_1', StringIO(), timeout=None, emit_output=False)
 
-    assert str(exc_info.value) == 'wait timed out for job_1'
+    assert str(exc_info.value) == 'watch timed out for job_1'
+    assert seen == [False, False]
 
 
 def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
@@ -361,9 +463,11 @@ def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
     flaky = _FlakyClient()
     stable = _StableClient()
     connects = {'count': 0}
+    seen: list[bool] = []
 
     def _connect(context, allow_restart_stale):
-        del context, allow_restart_stale
+        del context
+        seen.append(allow_restart_stale)
         connects['count'] += 1
         if connects['count'] == 1:
             return SimpleNamespace(client=flaky)
@@ -372,8 +476,8 @@ def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
         return SimpleNamespace(client=stable)
 
     monkeypatch.setattr(ask_service, 'connect_mounted_daemon', _connect)
-    monkeypatch.setattr(ask_service, 'ask_wait_timeout_seconds', lambda: 1.0)
-    monkeypatch.setattr(ask_service, 'ask_wait_poll_interval_seconds', lambda: 0.0)
+    monkeypatch.setattr(ask_service, 'watch_timeout_seconds', lambda: 1.0)
+    monkeypatch.setattr(ask_service, 'watch_poll_interval_seconds', lambda: 0.0)
     monkeypatch.setattr(ask_service.time, 'monotonic', lambda: next(clock))
     monkeypatch.setattr(ask_service.time, 'sleep', lambda seconds: None)
 
@@ -383,6 +487,7 @@ def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
     assert batch.reply == 'done'
     assert flaky.calls == [0]
     assert stable.calls == [0]
+    assert seen == [False, False, False]
 
 
 def test_write_ask_output_appends_newline(tmp_path: Path) -> None:

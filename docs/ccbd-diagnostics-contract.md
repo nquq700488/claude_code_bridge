@@ -14,6 +14,8 @@ It is the authoritative design anchor for:
 - `.ccb/ccbd/heartbeats/<subject-kind>/*.json`
 - project-scoped backend log retention under `.ccb/ccbd/`
 - `ccb doctor`
+- `ccb doctor ps`
+- `ccb doctor logs <agent>`
 - `ccb doctor --bundle`
 
 The repo-local memory file [AGENTS.md](/home/bfly/yunwei/ccb_source/AGENTS.md) must point to this document instead of duplicating the rules.
@@ -97,6 +99,7 @@ Rules:
 - normal server-side stop/shutdown must write a shutdown report
 - CLI fallback kill must also write a shutdown report
 - the final persisted shutdown report must reflect post-shutdown state, not an intermediate pre-unmount snapshot
+- remote `ccb kill` must finalize lifecycle state before recording the final shutdown report, so `inspection_after` reflects `phase=unmounted` / `desired_state=stopped` rather than a transient `stopping` state
 
 ### 3.4 Backend Logs
 
@@ -128,13 +131,18 @@ Rules:
 - `start-policy.json` records the persisted project recovery startup policy, including inherited `auto_permission` and forced recovery-restore semantics
 - `lifecycle.jsonl` records namespace creation/destruction and later runtime lifecycle events
 - `heartbeats/<subject-kind>/*.json` records non-lease heartbeat state for long-lived supervised subjects such as running jobs; these files are diagnostics/evidence, not backend ownership authority
+- running-job heartbeat observations stay in diagnostics/events and must not be emitted as caller-visible mailbox replies; after three consecutive no-progress observations, the terminal `heartbeat_timeout` reply is the caller-visible outcome
 - daemon lease heartbeat and subject heartbeat must remain separate concepts and separate files
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
 - `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
-- `doctor` must also surface preferred/effective socket path byte lengths and an equivalent `tmux -S <effective-socket> start-server` command when a project tmux socket path is known, so macOS and WSL socket pathname failures can be diagnosed from one report
+- `doctor` must also surface preferred/effective socket path byte lengths and an equivalent isolated-config `tmux -f /dev/null -S <effective-socket> start-server` command when a project tmux socket path is known, so macOS and WSL socket pathname failures can be diagnosed from one report
 - malformed namespace diagnostics must surface as diagnostics errors, not silently disappear
+- supervision diagnostics must preserve mount-attempt distinctions:
+  - `mount_started` details should include `mount_attempt_id` when present
+  - superseded finalize paths should remain visible as `mount_superseded`
+    instead of collapsing into missing history
 
 ### 3.6 Doctor Read Path
 
@@ -143,12 +151,34 @@ Rules:
 Rules:
 
 - it must summarize current backend inspection plus latest persisted reports
+- `doctor ps` and `doctor logs <agent>` are converged diagnostics subviews of
+  the same diagnostics surface
+- if top-level `ps` and `logs` are retained, they must remain compatibility
+  entrypoints over the same diagnostics meaning rather than drifting into a
+  second independent diagnostics surface
+- it should surface current mailbox summary authority for configured agents when
+  present, including at minimum summary version/source/freshness plus head and
+  queue facts needed to diagnose summary-vs-ledger drift
+- it should also surface mailbox summary consistency status for configured
+  agents by comparing persisted summary authority against a diagnostics-grade
+  ledger projection without mutating mailbox artifacts
+- missing, unreadable, or drifted mailbox summaries must remain visible in
+  doctor output as explicit consistency mismatch/error state rather than being
+  silently repaired during the read path
 - agent binding diagnostics must include both `tmux_socket_name` and `tmux_socket_path` when known so project-scoped namespace bugs can be diagnosed from logs alone
 - startup failure diagnostics must retain chained cause detail in CLI output and in `ccbd_startup_last_failure_reason` when the backend recorded it
 - Codex agent diagnostics should surface managed in-pane session-switch state
   when `.ccb/agents/<agent>/provider-runtime/codex/session-switch.json`
   exists, including state, reason, commit status, and candidate session
   identity
+- `doctor storage` must surface the effective `shared_cache_root`,
+  `shared_cache_root_usable`, and shared-cache status/reason, so WSL relocation
+  and future provider cache sharing decisions are diagnosable from the same
+  storage view. When the reason is `wsl_drvfs_requires_runtime_relocation`, the
+  root must be reported as unavailable instead of pointing at an unsafe drvfs
+  path. The current disabled reason code is
+  `wsl_drvfs_requires_runtime_relocation`; relocated WSL projects should report
+  shared cache as enabled.
 - it must not crash only because one diagnostics artifact is missing or malformed
 - malformed diagnostics files must surface as diagnostics errors, not silent omission
 
@@ -175,6 +205,8 @@ The support bundle must include:
 - backend stdout/stderr logs
 - per-agent runtime authority and recent agent/provider logs
 - non-secret project-local provider-state evidence such as managed Codex homes, session roots, session logs, and config overlays
+- a generated storage classification snapshot at
+  `generated/storage-summary.json`
 - relevant external session files when discoverable from runtime authority
 
 Rules:
@@ -187,6 +219,18 @@ Rules:
   tokens and provider-managed credential files like `auth.json` or
   `oauth_creds.json`; Gemini projected auth artifacts such as `.env` and
   `google_accounts.json` must also be excluded
+- provider-state export must use the storage classification model from
+  [docs/ccb-provider-state-storage-boundary-plan.md](/home/bfly/yunwei/ccb_source/docs/ccb-provider-state-storage-boundary-plan.md)
+  to exclude `SECRET`, `REBUILDABLE_CACHE`, and
+  `STARTUP_AUTHORITY_BUNDLE` payload files from the archive while preserving
+  their path/class/size metadata in `generated/storage-summary.json`
+- if storage classification fails, provider-state export must still apply a
+  conservative path hard-filter for known cache/startup-bundle directories such
+  as Codex `.tmp/plugins/`, Claude `.local/share/claude/versions/`, and
+  Gemini/npm rebuildable cache paths; classification failure must not turn
+  excluded payloads into archive entries
+- provider-state export must not follow symlinks while walking provider-state
+  trees
 - Codex managed-home violations must remain visible as diagnostics evidence; bundle export must not hide them by silently replacing the managed reader source with global `~/.codex/sessions`
 
 ### 3.8 Keeper Child Reaping

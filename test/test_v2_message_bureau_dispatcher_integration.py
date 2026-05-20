@@ -18,7 +18,8 @@ from agents.models import (
     WorkspaceMode,
 )
 from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope
-from ccbd.services.dispatcher import JobDispatcher
+from ccbd.services.dispatcher import DispatchError, JobDispatcher
+from ccbd.services.dispatcher_runtime.finalization_runtime.persistence import persist_terminal_completion
 from ccbd.services.dispatcher_runtime.reply_delivery import prepare_reply_deliveries
 from ccbd.services.job_heartbeat import JobHeartbeatService
 from ccbd.services.registry import AgentRegistry
@@ -41,7 +42,16 @@ from mailbox_kernel import (
     MailboxState,
     MailboxStore,
 )
-from message_bureau import AttemptState, AttemptStore, MessageState, MessageStore, ReplyStore, ReplyTerminalStatus
+from message_bureau import (
+    AttemptState,
+    AttemptStore,
+    CallbackEdgeState,
+    CallbackEdgeStore,
+    MessageState,
+    MessageStore,
+    ReplyStore,
+    ReplyTerminalStatus,
+)
 from message_bureau.reply_payloads import delivery_job_id_from_payload
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
@@ -328,6 +338,11 @@ def test_dispatcher_routes_reply_into_registered_caller_mailbox(tmp_path: Path) 
     assert mailbox.mailbox_state is MailboxState.BLOCKED
     assert mailbox.queue_depth == 1
     assert mailbox.pending_reply_count == 1
+    queue_summary = dispatcher.queue('claude')
+    assert queue_summary['target'] == 'claude'
+    assert queue_summary['agent']['queue_depth'] == 1
+    assert queue_summary['agent']['pending_reply_count'] == 1
+    assert 'queued_events' not in queue_summary['agent']
 
 
 def test_dispatcher_silence_hides_success_reply_body_for_caller_mailbox(tmp_path: Path) -> None:
@@ -417,7 +432,814 @@ def test_dispatcher_silence_does_not_hide_failure_reply_body(tmp_path: Path) -> 
     assert replies[0].diagnostics.get('silence_on_success') is True
 
 
-def test_dispatcher_routes_cmd_reply_into_command_mailbox(tmp_path: Path) -> None:
+def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-happy'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='review with help',
+            task_id='task-callback',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='collect evidence',
+            task_id='task-callback',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    assert edge.parent_job_id == parent_job_id
+
+    dispatcher.complete(parent_job_id, _decision(reply='delegated to claude'))
+    parent_job = dispatcher.get(parent_job_id)
+    assert parent_job is not None
+    assert parent_job.terminal_decision['delegated'] is True
+    assert ReplyStore(layout).list_message(edge.parent_message_id) == []
+    assert MessageStore(layout).get_latest(edge.parent_message_id).message_state is MessageState.RUNNING
+
+    dispatcher.tick()
+    dispatcher.complete(child_job_id, _decision(reply='evidence found'))
+
+    edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert edge is not None
+    assert edge.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+    assert edge.continuation_job_id
+    assert MessageStore(layout).get_latest(edge.child_message_id).message_state is MessageState.COMPLETED
+    assert InboundEventStore(layout).list_agent('codex')[-1].event_type is InboundEventType.TASK_REQUEST
+
+    dispatcher.tick()
+    continuation_job = dispatcher.get(edge.continuation_job_id)
+    assert continuation_job is not None
+    assert continuation_job.request.from_actor == 'user'
+    assert continuation_job.request.message_type == 'callback_continuation'
+    assert 'evidence found' in continuation_job.request.body
+
+    dispatcher.complete(edge.continuation_job_id, _decision(reply='final answer'))
+    final_edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert final_edge is not None
+    assert final_edge.state is CallbackEdgeState.DONE
+    assert MessageStore(layout).get_latest(edge.parent_message_id).message_state is MessageState.COMPLETED
+    assert [reply.reply for reply in ReplyStore(layout).list_message(edge.parent_message_id)] == ['final answer']
+
+
+def test_dispatcher_callback_rejects_without_active_parent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-no-parent'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    with pytest.raises(Exception, match='active parent job'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='claude',
+                from_actor='codex',
+                body='collect evidence',
+                task_id='task-callback',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                route_options={'mode': 'callback'},
+            )
+        )
+    assert MessageStore(layout).list_all() == []
+    assert CallbackEdgeStore(layout).list_all() == []
+
+
+def test_dispatcher_rejects_plain_nested_ask_from_active_parent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-plain-nested-ask'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-plain-nested',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    dispatcher.tick()
+
+    with pytest.raises(DispatchError, match='plain ask from an active CCB task requires --callback'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='claude',
+                from_actor='codex',
+                body='child task',
+                task_id='task-plain-nested',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+            )
+        )
+
+    assert dispatcher._job_store.list_agent('claude') == []
+    assert CallbackEdgeStore(layout).list_all() == []
+
+
+def test_dispatcher_allows_silent_nested_ask_from_active_parent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-silent-nested-ask'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-silent-nested',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    dispatcher.tick()
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='independent child task',
+            task_id='task-silent-nested',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            silence_on_success=True,
+        )
+    )
+
+    assert receipt.jobs[0].agent_name == 'claude'
+    assert receipt.jobs[0].status is JobStatus.ACCEPTED
+    assert CallbackEdgeStore(layout).list_all() == []
+
+
+def test_dispatcher_callback_child_failure_still_continues_parent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-child-failure'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='review with help',
+            task_id='task-callback-fail',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='collect evidence',
+            task_id='task-callback-fail',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+    dispatcher.tick()
+    dispatcher.complete(
+        child_job_id,
+        _failed_decision(
+            reason='api_error',
+            diagnostics={
+                'error_type': 'provider_api_error',
+                'error_code': 'unauthorized',
+                'error_message': 'login required',
+            },
+        ),
+    )
+
+    edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert edge is not None
+    assert edge.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+    continuation = dispatcher.get(edge.continuation_job_id)
+    assert continuation is not None
+    assert 'Child status: failed' in continuation.request.body
+
+
+def test_dispatcher_callback_chain_waits_for_nested_child_message(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-chain'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    registry.upsert(_runtime('gemini', project_id=ctx.project_id, layout=layout, pid=103))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    a_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-chain',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    b_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='middle task',
+            task_id='task-chain',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge_ab = CallbackEdgeStore(layout).get_latest_for_child_job(b_job)
+    assert edge_ab is not None
+    dispatcher.complete(a_job, _decision(reply='delegated to b'))
+    dispatcher.tick()
+
+    c_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='gemini',
+            from_actor='claude',
+            body='leaf task',
+            task_id='task-chain',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge_bc = CallbackEdgeStore(layout).get_latest_for_child_job(c_job)
+    assert edge_bc is not None
+    dispatcher.complete(b_job, _decision(reply='delegated to c'))
+
+    edge_ab = CallbackEdgeStore(layout).get_latest(edge_ab.edge_id)
+    assert edge_ab is not None
+    assert edge_ab.state is CallbackEdgeState.PENDING
+
+    dispatcher.tick()
+    dispatcher.complete(c_job, _decision(reply='leaf result'))
+    edge_bc = CallbackEdgeStore(layout).get_latest(edge_bc.edge_id)
+    assert edge_bc is not None
+    assert edge_bc.continuation_job_id
+
+    dispatcher.tick()
+    dispatcher.complete(edge_bc.continuation_job_id, _decision(reply='middle final'))
+    edge_bc = CallbackEdgeStore(layout).get_latest(edge_bc.edge_id)
+    assert edge_bc is not None
+    assert edge_bc.state is CallbackEdgeState.DONE
+    edge_ab = CallbackEdgeStore(layout).get_latest(edge_ab.edge_id)
+    assert edge_ab is not None
+    assert edge_ab.continuation_job_id
+
+    dispatcher.tick()
+    continuation_a = dispatcher.get(edge_ab.continuation_job_id)
+    assert continuation_a is not None
+    assert 'middle final' in continuation_a.request.body
+
+
+def test_dispatcher_callback_repair_submits_missing_continuation_once(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-repair'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-repair',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='child task',
+            task_id='task-repair',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+    dispatcher.tick()
+
+    terminal_child = dispatcher.complete(child_job_id, _decision(reply='child result'))
+    edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert edge is not None and edge.continuation_job_id
+    reply = ReplyStore(layout).list_message(edge.child_message_id)[0]
+
+    crash_window_store = CallbackEdgeStore(layout)
+    crash_window_store.append(
+        replace(
+            edge,
+            state=CallbackEdgeState.CHILD_COMPLETED,
+            child_reply_id=reply.reply_id,
+            child_status=terminal_child.status.value,
+            continuation_job_id=None,
+            continuation_message_id=None,
+            updated_at='2026-03-30T00:00:11Z',
+        )
+    )
+
+    dispatcher.tick()
+    repaired = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert repaired is not None
+    assert repaired.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+    assert repaired.continuation_job_id
+    first_continuation = repaired.continuation_job_id
+
+    dispatcher.tick()
+    repaired_again = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert repaired_again is not None
+    assert repaired_again.continuation_job_id == first_continuation
+
+
+def test_dispatcher_callback_repair_uses_persisted_child_reply_from_pending_edge(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-repair-pending'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-repair-pending',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='child task',
+            task_id='task-repair-pending',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+    dispatcher.tick()
+
+    decision = _decision(reply='child result')
+    running_child = dispatcher.get(child_job_id)
+    assert running_child is not None
+    terminal_child, terminal_decision, _ = persist_terminal_completion(
+        dispatcher,
+        running_child,
+        decision,
+        finished_at=decision.finished_at,
+    )
+    dispatcher._message_bureau.record_attempt_terminal(
+        terminal_child,
+        terminal_decision,
+        finished_at=decision.finished_at,
+    )
+    reply_id = dispatcher._message_bureau.record_reply(
+        terminal_child,
+        terminal_decision,
+        finished_at=decision.finished_at,
+        deliver_to_caller=False,
+    )
+    assert reply_id is not None
+    reply = ReplyStore(layout).get_latest(reply_id)
+    assert reply is not None
+    assert CallbackEdgeStore(layout).get_latest(edge.edge_id).state is CallbackEdgeState.PENDING
+
+    dispatcher.tick()
+    repaired = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert repaired is not None
+    assert repaired.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+    assert repaired.child_reply_id == reply.reply_id
+    assert repaired.child_status == terminal_child.status.value
+    assert repaired.continuation_job_id
+
+
+def test_dispatcher_callback_repair_reuses_existing_continuation_job(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-repair-existing-continuation'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-repair-existing',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='child task',
+            task_id='task-repair-existing',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+    dispatcher.tick()
+    terminal_child = dispatcher.complete(child_job_id, _decision(reply='child result'))
+    completed_edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert completed_edge is not None and completed_edge.continuation_job_id
+    reply = ReplyStore(layout).list_message(edge.child_message_id)[0]
+    codex_job_count = len(dispatcher._job_store.list_agent('codex'))
+
+    CallbackEdgeStore(layout).append(
+        replace(
+            edge,
+            state=CallbackEdgeState.CHILD_COMPLETED,
+            child_reply_id=reply.reply_id,
+            child_status=terminal_child.status.value,
+            continuation_job_id=None,
+            continuation_message_id=None,
+            updated_at='2026-03-30T00:00:13Z',
+        )
+    )
+
+    dispatcher.tick()
+    repaired = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert repaired is not None
+    assert repaired.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+    assert repaired.continuation_job_id == completed_edge.continuation_job_id
+    latest_codex_jobs = dispatcher._job_store.list_agent('codex')
+    latest_codex_job_ids = {job.job_id for job in latest_codex_jobs}
+    original_codex_job_ids = {job.job_id for job in dispatcher._job_store.list_agent('codex')[:codex_job_count]}
+    assert completed_edge.continuation_job_id in latest_codex_job_ids
+    assert latest_codex_job_ids == original_codex_job_ids
+
+
+def test_dispatcher_callback_timeout_fails_parent_message_and_notifies_original_caller(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-timeout'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    object.__setattr__(config, 'callback_timeout_s', 1.0)
+    now = {'value': '2026-03-30T00:00:00Z'}
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: now['value'])
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-timeout',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='child task',
+            task_id='task-timeout',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    assert edge.timeout_at == '2026-03-30T00:00:01Z'
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+
+    now['value'] = '2026-03-30T00:00:02Z'
+    dispatcher.tick()
+
+    edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert edge is not None
+    assert edge.state is CallbackEdgeState.TIMED_OUT
+    parent_message = MessageStore(layout).get_latest(edge.parent_message_id)
+    assert parent_message is not None
+    assert parent_message.message_state is MessageState.FAILED
+    replies = ReplyStore(layout).list_message(edge.parent_message_id)
+    assert len(replies) == 1
+    assert replies[0].terminal_status is ReplyTerminalStatus.FAILED
+    assert replies[0].diagnostics.get('callback_failure') is True
+
+
+def test_dispatcher_callback_rejects_depth_limit(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-depth'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini', 'opencode')
+    object.__setattr__(config, 'max_callback_depth', 2)
+    registry = AgentRegistry(layout, config)
+    for index, agent_name in enumerate(config.agents, start=1):
+        registry.upsert(_runtime(agent_name, project_id=ctx.project_id, layout=layout, pid=100 + index))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    a_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-depth',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    b_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='middle task',
+            task_id='task-depth',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    dispatcher.complete(a_job, _decision(reply='delegated to b'))
+    dispatcher.tick()
+    c_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='gemini',
+            from_actor='claude',
+            body='leaf task',
+            task_id='task-depth',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    dispatcher.complete(b_job, _decision(reply='delegated to c'))
+    dispatcher.tick()
+
+    with pytest.raises(DispatchError, match='max callback depth 2'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='opencode',
+                from_actor='gemini',
+                body='too deep',
+                task_id='task-depth',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                route_options={'mode': 'callback'},
+            )
+        )
+
+    assert CallbackEdgeStore(layout).get_latest_for_child_job(c_job) is not None
+    assert CallbackEdgeStore(layout).get_latest_for_child_job('job_missing') is None
+
+
+def test_dispatcher_callback_rejects_actor_cycle(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-cycle'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    registry.upsert(_runtime('gemini', project_id=ctx.project_id, layout=layout, pid=103))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    a_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-cycle',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    b_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='middle task',
+            task_id='task-cycle',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    dispatcher.complete(a_job, _decision(reply='delegated to b'))
+    dispatcher.tick()
+    dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='gemini',
+            from_actor='claude',
+            body='leaf task',
+            task_id='task-cycle',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    )
+    dispatcher.complete(b_job, _decision(reply='delegated to c'))
+    dispatcher.tick()
+
+    with pytest.raises(DispatchError, match='cycle detected'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='codex',
+                from_actor='gemini',
+                body='cycle back',
+                task_id='task-cycle',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                route_options={'mode': 'callback'},
+            )
+        )
+
+
+def test_dispatcher_callback_continuation_submit_failure_marks_edge_failed(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-submit-failure'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-submit-failure',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='child task',
+            task_id='task-submit-failure',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    ).jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+    dispatcher.tick()
+
+    object.__setattr__(config, 'agents', {'claude': config.agents['claude']})
+    dispatcher.complete(child_job_id, _decision(reply='child result'))
+
+    edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert edge is not None
+    assert edge.state is CallbackEdgeState.FAILED
+    assert edge.continuation_job_id is None
+    parent_message = MessageStore(layout).get_latest(edge.parent_message_id)
+    assert parent_message is not None
+    assert parent_message.message_state is MessageState.FAILED
+    replies = ReplyStore(layout).list_message(edge.parent_message_id)
+    assert len(replies) == 1
+    assert replies[0].terminal_status is ReplyTerminalStatus.FAILED
+    assert replies[0].diagnostics.get('reason') == 'callback_continuation_submit_failed'
+
+
+def test_dispatcher_rejects_cmd_sender(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-cmd-caller'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -426,35 +1248,19 @@ def test_dispatcher_routes_cmd_reply_into_command_mailbox(tmp_path: Path) -> Non
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
     dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
 
-    receipt = dispatcher.submit(
-        MessageEnvelope(
-            project_id=ctx.project_id,
-            to_agent='codex',
-            from_actor='cmd',
-            body='hello from cmd',
-            task_id='task-cmd-1',
-            reply_to=None,
-            message_type='ask',
-            delivery_scope=DeliveryScope.SINGLE,
+    with pytest.raises(Exception, match='unknown sender agent: cmd'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='codex',
+                from_actor='cmd',
+                body='hello from cmd',
+                task_id='task-cmd-1',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+            )
         )
-    )
-    job_id = receipt.jobs[0].job_id
-    dispatcher.tick()
-    dispatcher.complete(job_id, _decision(reply='done for cmd'))
-
-    message = MessageStore(layout).list_all()[-1]
-    assert message.from_actor == 'cmd'
-    assert InboundEventStore(layout).list_agent('codex')[-1].event_type is InboundEventType.TASK_REQUEST
-    assert MailboxStore(layout).load('codex') is not None
-    queue_cmd = dispatcher.queue('cmd')
-    assert queue_cmd['target'] == 'cmd'
-    assert queue_cmd['agent']['agent_name'] == 'cmd'
-    assert queue_cmd['agent']['queue_depth'] == 1
-    assert queue_cmd['agent']['pending_reply_count'] == 1
-    assert queue_cmd['agent']['queued_events'][0]['event_type'] == 'task_reply'
-    assert dispatcher.inbox('cmd')['head']['reply'] == 'done for cmd'
-    queue_all = dispatcher.queue('all')
-    assert {item['agent_name'] for item in queue_all['agents']} == {'claude', 'cmd', 'codex', 'gemini'}
 
 
 def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_path: Path) -> None:
@@ -482,7 +1288,7 @@ def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_p
     job_id = receipt.jobs[0].job_id
     dispatcher.tick()
 
-    queue_running = dispatcher.queue('codex')
+    queue_running = dispatcher.queue('codex', detail=True)
     agent_running = queue_running['agent']
     assert agent_running['agent_name'] == 'codex'
     assert agent_running['mailbox_state'] == 'delivering'
@@ -494,7 +1300,7 @@ def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_p
 
     dispatcher.complete(job_id, _decision(reply='reply for claude'))
 
-    queue_reply = dispatcher.queue('claude')
+    queue_reply = dispatcher.queue('claude', detail=True)
     agent_reply = queue_reply['agent']
     assert agent_reply['agent_name'] == 'claude'
     assert agent_reply['mailbox_state'] == 'blocked'
@@ -566,13 +1372,8 @@ def test_dispatcher_queue_summary_ignores_stale_cmd_mailbox_residue(tmp_path: Pa
         encoding='utf-8',
     )
 
-    queue_cmd = dispatcher.queue('cmd')
-    assert queue_cmd['target'] == 'cmd'
-    assert queue_cmd['agent']['agent_name'] == 'cmd'
-    assert queue_cmd['agent']['queue_depth'] == 0
-    assert queue_cmd['agent']['pending_reply_count'] == 0
-    assert queue_cmd['agent']['runtime_state'] == 'stopped'
-    assert queue_cmd['agent']['runtime_health'] == 'stopped'
+    with pytest.raises(ValueError, match='unknown mailbox target: cmd'):
+        dispatcher.queue('cmd')
 
     queue_all = dispatcher.queue('all')
     assert {item['agent_name'] for item in queue_all['agents']} == {'claude', 'codex', 'gemini'}
@@ -1108,7 +1909,7 @@ def test_dispatcher_timeout_delivers_inspection_notice_to_caller(tmp_path: Path)
     assert 'timed out before a confirmed terminal reply' in ack['reply']
 
 
-def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_state(tmp_path: Path) -> None:
+def test_job_heartbeat_records_internal_progress_without_replying_before_terminal_message(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-job-heartbeat'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -1161,7 +1962,6 @@ def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_s
     heartbeat_clock = StepClock(
         '2026-03-30T00:09:59Z',
         '2026-03-30T00:10:00Z',
-        '2026-03-30T00:15:00Z',
         '2026-03-30T00:20:00Z',
         '2026-03-30T00:21:00Z',
     )
@@ -1199,20 +1999,12 @@ def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_s
 
     heartbeats.tick(dispatcher)
     replies = ReplyStore(layout).list_message(message.message_id)
-    assert len(replies) == 1
-    assert replies[0].terminal_status is ReplyTerminalStatus.INCOMPLETE
-    assert replies[0].diagnostics.get('notice_kind') == 'heartbeat'
-    assert 'CCB_HEARTBEAT ' in replies[0].reply
-    assert MessageStore(layout).list_all()[-1].message_state is MessageState.PARTIALLY_REPLIED
+    assert replies == []
+    assert MessageStore(layout).list_all()[-1].message_state is MessageState.RUNNING
     assert heartbeat_path.exists()
 
     heartbeats.tick(dispatcher)
-    assert len(ReplyStore(layout).list_message(message.message_id)) == 1
-
-    heartbeats.tick(dispatcher)
-    replies = ReplyStore(layout).list_message(message.message_id)
-    assert len(replies) == 2
-    assert all(reply.diagnostics.get('notice_kind') == 'heartbeat' for reply in replies)
+    assert ReplyStore(layout).list_message(message.message_id) == []
 
     dispatcher.complete(
         job_id,
@@ -1224,10 +2016,107 @@ def test_job_heartbeat_delivers_progress_notice_and_preserves_terminal_message_s
     heartbeats.tick(dispatcher)
 
     replies = ReplyStore(layout).list_message(message.message_id)
-    assert len(replies) == 3
+    assert len(replies) == 1
     assert replies[-1].terminal_status is ReplyTerminalStatus.COMPLETED
     assert replies[-1].reply == 'final answer'
     assert MessageStore(layout).list_all()[-1].message_state is MessageState.COMPLETED
+    assert heartbeat_path.exists() is False
+
+
+def test_job_heartbeat_terminalizes_after_three_internal_no_progress_intervals(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-job-heartbeat-timeout'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+
+    class SilentExecutionService:
+        def start(self, job, *, runtime_context=None) -> None:
+            del job, runtime_context
+
+        def cancel(self, job_id: str) -> None:
+            del job_id
+
+        def finish(self, job_id: str) -> None:
+            del job_id
+
+        def acknowledge(self, job_id: str) -> None:
+            del job_id
+
+        def acknowledge_item(self, job_id: str, *, event_seq: int | None) -> None:
+            del job_id, event_seq
+
+        def poll(self):
+            return ()
+
+    class StepClock:
+        def __init__(self, *values: str) -> None:
+            self._values = list(values)
+            self._index = 0
+            self._last = values[-1] if values else '2026-03-30T00:00:00Z'
+
+        def __call__(self) -> str:
+            if self._index < len(self._values):
+                self._last = self._values[self._index]
+                self._index += 1
+            return self._last
+
+    provider_catalog = build_default_provider_catalog()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=SilentExecutionService(),
+        completion_tracker=CompletionTrackerService(config, provider_catalog, request_timeout_s=0.0),
+        provider_catalog=provider_catalog,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+    heartbeats = JobHeartbeatService(
+        layout,
+        policy=HeartbeatPolicy(silence_start_after_s=600.0, repeat_interval_s=600.0),
+        store=HeartbeatStateStore(layout),
+        clock=StepClock(
+            '2026-03-30T00:10:00Z',
+            '2026-03-30T00:20:00Z',
+            '2026-03-30T00:30:00Z',
+        ),
+    )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='long running task',
+            task_id='task-job-heartbeat-timeout',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    message = MessageStore(layout).list_all()[-1]
+    job_id = receipt.jobs[0].job_id
+    heartbeat_path = layout.heartbeat_subject_path('job_progress', job_id)
+
+    assert dispatcher.tick()[0].job_id == job_id
+
+    heartbeats.tick(dispatcher)
+    heartbeats.tick(dispatcher)
+    assert ReplyStore(layout).list_message(message.message_id) == []
+    assert dispatcher.get(job_id).status is JobStatus.RUNNING
+
+    heartbeats.tick(dispatcher)
+
+    replies = ReplyStore(layout).list_message(message.message_id)
+    assert len(replies) == 1
+    assert replies[0].terminal_status is ReplyTerminalStatus.INCOMPLETE
+    assert replies[0].diagnostics['reason'] == 'heartbeat_timeout'
+    assert 'Task stopped after 3 no-progress heartbeat intervals' in replies[0].reply
+    assert 'send a small communication test' in replies[0].reply
+    assert dispatcher.get(job_id).status is JobStatus.INCOMPLETE
+    assert MessageStore(layout).list_all()[-1].message_state is MessageState.INCOMPLETE
     assert heartbeat_path.exists() is False
 
 
@@ -1967,7 +2856,7 @@ def test_dispatcher_does_not_start_task_request_behind_pending_reply_head(tmp_pa
     assert current is not None
     assert current.status.value == 'accepted'
 
-    queue = dispatcher.queue('claude')
+    queue = dispatcher.queue('claude', detail=True)
     agent = queue['agent']
     assert agent['queue_depth'] == 2
     assert agent['queued_events'][0]['event_type'] == 'task_reply'
@@ -2006,13 +2895,16 @@ def test_dispatcher_inbox_exposes_head_reply_body_and_ack_drains_mailbox(tmp_pat
     assert inbox['item_count'] == 1
     assert inbox['head']['event_type'] == 'task_reply'
     assert inbox['head']['reply'] == 'done for inbox'
-    assert inbox['items'][0]['reply_preview'] == 'done for inbox'
+    assert inbox['items'] == []
+
+    inbox_detail = dispatcher.inbox('claude', detail=True)
+    assert inbox_detail['items'][0]['reply_preview'] == 'done for inbox'
 
     acked = dispatcher.ack_reply('claude')
 
     assert acked['acknowledged_inbound_event_id'] == inbox['head']['inbound_event_id']
     assert acked['reply'] == 'done for inbox'
-    queue = dispatcher.queue('claude')
+    queue = dispatcher.queue('claude', detail=True)
     assert queue['agent']['mailbox_state'] == 'idle'
     assert queue['agent']['queue_depth'] == 0
     assert queue['agent']['pending_reply_count'] == 0
@@ -2063,9 +2955,91 @@ def test_dispatcher_ack_reply_unblocks_next_task_request_after_tick(tmp_path: Pa
 
     assert len(started) == 1
     assert started[0].job_id == blocked_job_id
-    queue = dispatcher.queue('claude')
+    queue = dispatcher.queue('claude', detail=True)
     assert queue['agent']['mailbox_state'] == 'delivering'
     assert queue['agent']['active']['job_id'] == blocked_job_id
+
+
+def test_dispatcher_ack_clears_terminal_task_request_head(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ack-terminal-task-request'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='user',
+            body='stale task request',
+            task_id='task-stale-request',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    attempt = dispatcher._message_bureau._attempt_store.get_latest_by_job_id(job_id)
+    assert attempt is not None
+    dispatcher._message_bureau._attempt_store.append(
+        replace(attempt, attempt_state=AttemptState.INCOMPLETE, updated_at='2026-03-30T00:00:05Z')
+    )
+
+    acked = dispatcher.ack_reply('claude')
+
+    assert acked['acknowledged_event_type'] == 'task_request'
+    assert acked['attempt_state'] == 'incomplete'
+    assert acked['job_id'] == job_id
+    queue = dispatcher.queue('claude', detail=True)
+    assert queue['agent']['mailbox_state'] == 'idle'
+    assert queue['agent']['queue_depth'] == 0
+    assert queue['agent']['active_inbound_event_id'] is None
+    latest = InboundEventStore(layout).get_latest_for_attempt('claude', attempt.attempt_id)
+    assert latest is not None
+    assert latest.status is InboundEventStatus.CONSUMED
+
+
+def test_dispatcher_queue_summary_discards_stale_terminal_task_request_head(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-discard-terminal-task-request'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='user',
+            body='auto discard stale request',
+            task_id='task-auto-discard',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    attempt = dispatcher._message_bureau._attempt_store.get_latest_by_job_id(job_id)
+    assert attempt is not None
+    dispatcher._message_bureau._attempt_store.append(
+        replace(attempt, attempt_state=AttemptState.INCOMPLETE, updated_at='2026-03-30T00:00:05Z')
+    )
+
+    queue = dispatcher.queue('claude', detail=True)
+
+    assert queue['agent']['mailbox_state'] == 'idle'
+    assert queue['agent']['queue_depth'] == 0
+    assert queue['agent']['active_inbound_event_id'] is None
+    latest = InboundEventStore(layout).get_latest_for_attempt('claude', attempt.attempt_id)
+    assert latest is not None
+    assert latest.status is InboundEventStatus.ABANDONED
 
 
 def test_dispatcher_pending_reply_on_one_agent_does_not_block_other_agent_start(tmp_path: Path) -> None:
@@ -2131,7 +3105,7 @@ def test_dispatcher_pending_reply_on_one_agent_does_not_block_other_agent_start(
     assert blocked_state is not None and blocked_state.status.value == 'accepted'
     assert codex_state is not None and codex_state.status.value == 'running'
 
-    claude_queue = dispatcher.queue('claude')
+    claude_queue = dispatcher.queue('claude', detail=True)
     assert claude_queue['agent']['queue_depth'] == 2
     assert claude_queue['agent']['queued_events'][0]['event_type'] == 'task_reply'
     assert claude_queue['agent']['queued_events'][1]['job_id'] == blocked_job_id
@@ -2194,10 +3168,15 @@ def test_dispatcher_tick_promotes_head_reply_into_tracked_delivery_before_queued
     head_record = InboundEventStore(layout).get_latest('claude', inbox['head']['inbound_event_id'])
     assert head_record is not None
     assert delivery_job_id_from_payload(head_record.payload_ref) == delivery_job.job_id
+    mailbox = MailboxStore(layout).load('claude')
+    assert mailbox is not None
+    assert mailbox.summary_source == 'transition-claim'
+    assert mailbox.head_status == 'delivering'
+    assert delivery_job_id_from_payload(mailbox.head_payload_ref) == delivery_job.job_id
 
     dispatcher.complete(delivery_job.job_id, _decision(reply='reply delivered'))
 
-    queue_after = dispatcher.queue('claude')
+    queue_after = dispatcher.queue('claude', detail=True)
     assert queue_after['agent']['mailbox_state'] == 'blocked'
     assert queue_after['agent']['queue_depth'] == 1
     assert queue_after['agent']['queued_events'][0]['event_type'] == 'task_request'
@@ -2262,6 +3241,10 @@ def test_dispatcher_failed_reply_delivery_requeues_original_reply_head(tmp_path:
     head_record = InboundEventStore(layout).get_latest('claude', inbox['head']['inbound_event_id'])
     assert head_record is not None
     assert delivery_job_id_from_payload(head_record.payload_ref) is None
+    mailbox = MailboxStore(layout).load('claude')
+    assert mailbox is not None
+    assert mailbox.summary_source == 'transition-rewrite-head'
+    assert delivery_job_id_from_payload(mailbox.head_payload_ref) is None
 
 
 def test_dispatcher_ack_rejects_reply_after_auto_delivery_is_scheduled(tmp_path: Path) -> None:
@@ -2355,7 +3338,7 @@ def test_dispatcher_tick_auto_consumes_reply_delivery_head_with_execution_servic
     assert inbox_after['item_count'] == 1
     assert inbox_after['head']['event_type'] == 'task_request'
 
-    queue_after = dispatcher.queue('claude')
+    queue_after = dispatcher.queue('claude', detail=True)
     assert queue_after['agent']['mailbox_state'] == 'blocked'
     assert queue_after['agent']['queue_depth'] == 1
     assert queue_after['agent']['queued_events'][0]['event_type'] == 'task_request'
@@ -2470,3 +3453,76 @@ def test_dispatcher_tick_repairs_stale_running_reply_delivery_head_with_executio
     assert stale.status.value == 'incomplete'
     assert any(job.request.message_type == 'reply_delivery' and job.status.value == 'completed' for job in repaired)
     assert dispatcher.inbox('claude')['item_count'] == 0
+
+
+def test_dispatcher_shutdown_terminalizes_reply_delivery_without_spawning_replacement(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-reply-delivery-shutdown'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    execution_service = DeferredReplyDeliveryExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        auto_reply_delivery_on_complete=True,
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+
+    reply_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='question for codex',
+            task_id='task-reply-shutdown',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    reply_job_id = reply_receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(reply_job_id, _decision(reply='reply for claude'))
+
+    started = dispatcher.tick()
+    assert len(started) == 1
+    delivery_job = started[0]
+    assert delivery_job.request.message_type == 'reply_delivery'
+    assert delivery_job.status.value == 'running'
+
+    dispatcher.disable_auto_reply_delivery()
+    terminated = dispatcher.terminate_nonterminal_jobs(shutdown_reason='stop_all', forced=False)
+
+    assert len(terminated) == 1
+    terminal = dispatcher.get(delivery_job.job_id)
+    assert terminal is not None
+    assert terminal.status is JobStatus.INCOMPLETE
+    assert terminal.terminal_decision is not None
+    assert terminal.terminal_decision['reason'] == 'project_shutdown'
+    latest_by_job = {
+        record.job_id: record
+        for record in dispatcher._job_store.list_agent('claude')
+    }
+    reply_delivery_jobs = [
+        record
+        for record in latest_by_job.values()
+        if record.request.message_type == 'reply_delivery'
+    ]
+    pending_delivery_jobs = [
+        record
+        for record in reply_delivery_jobs
+        if record.status in {JobStatus.ACCEPTED, JobStatus.QUEUED, JobStatus.RUNNING}
+    ]
+    assert [record.job_id for record in reply_delivery_jobs] == [delivery_job.job_id]
+    assert pending_delivery_jobs == []
+    inbox = dispatcher.inbox('claude')
+    assert inbox['head'] is not None
+    head = InboundEventStore(layout).get_latest('claude', inbox['head']['inbound_event_id'])
+    assert head is not None
+    assert head.status is InboundEventStatus.QUEUED
+    assert delivery_job_id_from_payload(head.payload_ref) is None

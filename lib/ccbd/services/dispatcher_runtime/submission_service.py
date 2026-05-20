@@ -4,6 +4,7 @@ from agents.models import AgentState
 from ccbd.api_models import DeliveryScope, JobRecord, MessageEnvelope, TargetKind
 from message_bureau import AttemptState, AttemptStore, MessageStore
 
+from .callbacks import validate_callback_request
 from .submission_models import _JobDraft, _message_for_agent, _SubmissionPlan
 
 _TERMINAL_ATTEMPT_STATES = frozenset(
@@ -20,6 +21,7 @@ _TERMINAL_ATTEMPT_STATES = frozenset(
 
 def _plan_agent_submission(dispatcher, request: MessageEnvelope) -> _SubmissionPlan:
     dispatcher._validate_sender(request.from_actor)
+    validate_callback_request(dispatcher, request)
     targets = dispatcher._resolve_targets(request)
     if not targets:
         raise dispatcher._dispatch_error('no eligible target agents are alive for this request')
@@ -86,11 +88,6 @@ def _latest_attempts_by_agent(dispatcher, message_id: str) -> dict[str, object]:
 
 def _ensure_agent_target_ready(dispatcher, agent_name: str) -> None:
     dispatcher._registry.spec_for(agent_name)
-    runtime = dispatcher._registry.get(agent_name)
-    if runtime is None or runtime.state in {AgentState.STOPPED, AgentState.FAILED}:
-        if dispatcher._runtime_service is None:
-            raise dispatcher._dispatch_error(f'agent {agent_name} is not running')
-        dispatcher._runtime_service.ensure_ready(agent_name)
 
 
 def _drafts_for_agents(dispatcher, request: MessageEnvelope, targets) -> list[_JobDraft]:
@@ -161,6 +158,7 @@ def _resubmission_request(original_message, jobs: list[JobRecord]) -> MessageEnv
         message_type=source.message_type,
         delivery_scope=delivery_scope,
         silence_on_success=source.silence_on_success,
+        route_options=dict(source.route_options or {}),
     )
 
 

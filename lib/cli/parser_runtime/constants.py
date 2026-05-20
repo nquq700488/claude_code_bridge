@@ -3,6 +3,7 @@ from __future__ import annotations
 SUBCOMMANDS = {
     'ask',
     'cancel',
+    'cleanup',
     'kill',
     'ps',
     'ping',
@@ -19,18 +20,19 @@ SUBCOMMANDS = {
     'ack',
     'logs',
     'doctor',
+    'repair',
     'config',
     'fault',
 }
 
-ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode', '--output', '--timeout'}
-ASK_FLAG_OPTIONS = {'--silence', '--wait'}
+ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode'}
+ASK_FLAG_OPTIONS = {'--callback', '--compact', '--silence'}
 WAIT_COMMAND_TO_MODE = {
     'wait-any': 'any',
     'wait-all': 'all',
     'wait-quorum': 'quorum',
 }
-ASK_JOB_ACTIONS = {'wait', 'get', 'cancel'}
+ASK_JOB_ACTIONS = {'get', 'cancel'}
 
 
 __all__ = [

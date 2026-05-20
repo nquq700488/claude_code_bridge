@@ -28,6 +28,7 @@ from provider_core.contracts import ProviderSessionBinding
 from provider_core.catalog import build_default_provider_catalog
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionRestoreResult, ExecutionService
+from provider_execution.service_runtime.models import ExecutionUpdate
 from provider_execution.state_store import ExecutionStateStore
 from storage.paths import PathLayout
 
@@ -178,6 +179,20 @@ class FailingRestoreExecutionService(RecordingExecutionService):
             reason='provider_resume_unsupported',
             resume_capable=False,
         )
+
+
+class LateUpdateExecutionService:
+    def __init__(self, state_store: ExecutionStateStore, *updates: ExecutionUpdate) -> None:
+        self._state_store = state_store
+        self._updates = list(updates)
+        self.finished: list[str] = []
+
+    def poll(self):
+        return tuple(self._updates)
+
+    def finish(self, job_id: str) -> None:
+        self.finished.append(job_id)
+        self._state_store.remove(job_id)
 
 
 @pytest.mark.parametrize('provider', ['codex', 'claude', 'gemini'])
@@ -1028,7 +1043,7 @@ def test_dispatcher_persists_completion_items_and_state_updates_for_fake_provide
     assert watch_terminal['terminal'] is True
 
 
-def test_dispatcher_single_target_lazy_restores_stopped_agent(tmp_path: Path) -> None:
+def test_dispatcher_single_target_submit_keeps_stopped_agent_queued_until_tick(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
@@ -1072,7 +1087,120 @@ def test_dispatcher_single_target_lazy_restores_stopped_agent(tmp_path: Path) ->
     assert receipt.jobs[0].agent_name == 'codex'
     runtime = registry.get('codex')
     assert runtime is not None
-    assert runtime.state is AgentState.IDLE
+    assert runtime.state is AgentState.STOPPED
+    assert runtime.health == 'stopped'
+
+    started = dispatcher.tick()
+    assert len(started) == 1
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.BUSY
+    assert runtime.health == 'restored'
+
+
+def test_dispatcher_single_target_submit_keeps_failed_agent_queued_until_tick(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-failed'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101)
+    runtime.state = AgentState.FAILED
+    runtime.health = 'failed'
+    registry.upsert(runtime)
+
+    from agents.models import AgentRestoreState, RestoreMode, RestoreStatus
+    from agents.store import AgentRestoreStore
+
+    restore_store = AgentRestoreStore(layout)
+    restore_store.save(
+        'codex',
+        AgentRestoreState(
+            restore_mode=RestoreMode.AUTO,
+            last_checkpoint='checkpoint-1',
+            conversation_summary='resume me',
+            open_tasks=['continue'],
+            files_touched=['README.md'],
+            last_restore_status=RestoreStatus.CHECKPOINT,
+        ),
+    )
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, restore_store, clock=lambda: '2026-03-18T00:00:00Z')
+    dispatcher = JobDispatcher(layout, config, registry, runtime_service=runtime_service, clock=lambda: '2026-03-18T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='hello',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    assert receipt.jobs[0].agent_name == 'codex'
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.FAILED
+    assert runtime.health == 'failed'
+
+    started = dispatcher.tick()
+    assert len(started) == 1
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.BUSY
+    assert runtime.health == 'restored'
+
+
+def test_dispatcher_single_target_submit_with_missing_runtime_and_restore_state_starts_via_tick_handoff(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-missing-runtime'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+
+    from agents.models import AgentRestoreState, RestoreMode, RestoreStatus
+    from agents.store import AgentRestoreStore
+
+    restore_store = AgentRestoreStore(layout)
+    restore_store.save(
+        'codex',
+        AgentRestoreState(
+            restore_mode=RestoreMode.AUTO,
+            last_checkpoint='checkpoint-1',
+            conversation_summary='resume me',
+            open_tasks=['continue'],
+            files_touched=['README.md'],
+            last_restore_status=RestoreStatus.CHECKPOINT,
+        ),
+    )
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, restore_store, clock=lambda: '2026-03-18T00:00:00Z')
+    dispatcher = JobDispatcher(layout, config, registry, runtime_service=runtime_service, clock=lambda: '2026-03-18T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='hello',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    assert receipt.jobs[0].agent_name == 'codex'
+    assert registry.get('codex') is None
+
+    started = dispatcher.tick()
+    assert len(started) == 1
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.BUSY
     assert runtime.health == 'restored'
 
 
@@ -1211,6 +1339,96 @@ def test_dispatcher_terminate_nonterminal_jobs_prevents_retry_and_restart_restor
     assert restarted.restore_running_jobs() == ()
 
 
+def test_dispatcher_startup_cleans_execution_state_for_terminal_jobs(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-stale-execution-terminal'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _fake_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('demo', project_id=ctx.project_id, layout=layout, pid=301))
+    state_store = ExecutionStateStore(layout)
+    execution_service = ExecutionService(
+        build_default_execution_registry(),
+        clock=lambda: '2026-03-18T00:00:00Z',
+        state_store=state_store,
+    )
+    dispatcher = JobDispatcher(layout, config, registry, execution_service=execution_service)
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='stale terminal execution',
+            task_id='fake;latency_ms=1500',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    assert state_store.load(job_id) is not None
+
+    dispatcher.cancel(job_id)
+    assert state_store.load(job_id) is None
+
+    execution_service.start(dispatcher.get(job_id))
+    assert state_store.load(job_id) is not None
+
+    JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-18T00:00:01Z',
+    )
+
+    assert state_store.load(job_id) is None
+    assert state_store.summary()['active_execution_count'] == 0
+
+
+def test_dispatcher_poll_finishes_late_update_for_terminal_job(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-late-terminal-update'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _fake_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('demo', project_id=ctx.project_id, layout=layout, pid=401))
+    state_store = ExecutionStateStore(layout)
+    execution_service = ExecutionService(
+        build_default_execution_registry(),
+        clock=lambda: '2026-03-18T00:00:00Z',
+        state_store=state_store,
+    )
+    dispatcher = JobDispatcher(layout, config, registry, execution_service=execution_service)
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='late provider update',
+            task_id='fake;latency_ms=1500',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.cancel(job_id)
+
+    execution_service.start(dispatcher.get(job_id))
+    assert state_store.load(job_id) is not None
+    late_service = LateUpdateExecutionService(state_store, ExecutionUpdate(job_id=job_id, items=(), decision=None))
+    dispatcher._execution_service = late_service
+
+    assert dispatcher.poll_completions() == ()
+    assert late_service.finished == [job_id]
+    assert state_store.load(job_id) is None
+
+
 def test_dispatcher_broadcast_does_not_lazy_restore_offline_agents(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     ctx = _bootstrap_test_project(project_root)
@@ -1237,3 +1455,53 @@ def test_dispatcher_broadcast_does_not_lazy_restore_offline_agents(tmp_path: Pat
         )
     )
     assert [job.agent_name for job in receipt.jobs] == ['codex']
+
+
+def test_dispatcher_single_target_submit_without_restore_state_starts_via_tick_handoff(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-no-restore-state'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    runtime = _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101)
+    runtime.state = AgentState.STOPPED
+    runtime.health = 'stopped'
+    registry.upsert(runtime)
+
+    runtime_service = RuntimeService(layout, registry, ctx.project_id, clock=lambda: '2026-03-18T00:00:00Z')
+    execution_service = RecordingExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        runtime_service=runtime_service,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='hello',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    assert receipt.jobs[0].agent_name == 'codex'
+    queued = dispatcher.get(receipt.jobs[0].job_id)
+    assert queued is not None
+    assert queued.status is JobStatus.ACCEPTED
+
+    started = dispatcher.tick()
+    assert len(started) == 1
+    assert started[0].job_id == receipt.jobs[0].job_id
+    assert len(execution_service.calls) == 1
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.BUSY
+    assert runtime.health == 'healthy'

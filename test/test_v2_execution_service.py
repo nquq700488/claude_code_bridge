@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -1827,6 +1828,124 @@ def test_execution_service_codex_adapter_persists_log_switch_without_immediate_e
     assert update.decision is None
 
 
+def test_execution_service_codex_adapter_follows_rebound_session_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    fixed_req_id = '20260318-000000-000-1-rebound'
+    work_dir = tmp_path / 'repo'
+    old_log = tmp_path / 'home' / 'sessions' / 'old-session' / 'old-session.jsonl'
+    new_log = tmp_path / 'home' / 'sessions' / 'new-session' / 'new-session.jsonl'
+    for path in (old_log, new_log):
+        path.parent.mkdir(parents=True, exist_ok=True)
+    old_log.write_text(
+        json.dumps({"type": "session_meta", "payload": {"cwd": str(work_dir)}}) + "\n",
+        encoding='utf-8',
+    )
+    new_log.write_text(
+        "\n".join(
+            [
+                json.dumps({"type": "session_meta", "payload": {"cwd": str(work_dir)}}),
+                json.dumps(
+                    {
+                        "timestamp": "2026-03-18T00:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "turn_id": f"turn-{fixed_req_id}",
+                            "task_id": f"task-{fixed_req_id}",
+                            "content": [{"type": "input_text", "text": f"CCB_REQ_ID: {fixed_req_id}\n\nprompt"}],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-03-18T00:00:02Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "agent_message",
+                            "role": "assistant",
+                            "turn_id": f"turn-{fixed_req_id}",
+                            "task_id": f"task-{fixed_req_id}",
+                            "phase": "final_answer",
+                            "message": "rebound reply",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-03-18T00:00:03Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": f"turn-{fixed_req_id}",
+                            "task_id": f"task-{fixed_req_id}",
+                            "reason": "task_complete",
+                            "last_agent_message": "rebound reply",
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding='utf-8',
+    )
+    work_dir_str = str(work_dir)
+
+    class FakeBackend:
+        def send_text_to_pane(self, pane_id: str, text: str) -> None:
+            assert pane_id == '%33'
+            assert fixed_req_id in text
+
+        def is_tmux_pane_alive(self, pane_id: str) -> bool:
+            return pane_id == '%33'
+
+    class FakeSession:
+        data = {
+            'terminal': 'tmux',
+            'codex_session_root': str(tmp_path / 'home' / 'sessions'),
+            'codex_session_path': str(old_log),
+            'codex_session_id': 'old-session',
+        }
+        codex_session_path = str(old_log)
+        codex_session_id = 'old-session'
+        work_dir = work_dir_str
+
+        def ensure_pane(self):
+            return True, '%33'
+
+    session = FakeSession()
+
+    def load_session(work_dir_arg, instance=None):
+        del work_dir_arg, instance
+        return session
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', load_session)
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    job = _anchored_job_for_provider('codex', fixed_req_id, body='prompt')
+    service.start(job, runtime_context=_runtime_context(work_dir))
+
+    session.codex_session_path = str(new_log)
+    session.codex_session_id = 'new-session'
+    session.data = {**session.data, 'codex_session_path': str(new_log), 'codex_session_id': 'new-session'}
+
+    update = service.poll()[0]
+
+    assert [item.kind for item in update.items] == [
+        CompletionItemKind.SESSION_ROTATE,
+        CompletionItemKind.ANCHOR_SEEN,
+        CompletionItemKind.ASSISTANT_CHUNK,
+        CompletionItemKind.TURN_BOUNDARY,
+    ]
+    assert update.items[-1].payload['last_agent_message'] == 'rebound reply'
+    assert update.decision is None
+
+
 def test_execution_service_gemini_adapter_fails_without_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from provider_execution import gemini as gemini_adapter_module
 
@@ -3096,6 +3215,7 @@ def test_execution_service_droid_adapter_emits_legacy_items_from_events(monkeypa
 
     fixed_req_id = '20260318-000000-000-7-1'
     sent: list[tuple[str, str]] = []
+    reader_inits: list[dict[str, object]] = []
 
     class FakeBackend:
         def send_text(self, pane_id: str, text: str) -> None:
@@ -3105,7 +3225,7 @@ def test_execution_service_droid_adapter_emits_legacy_items_from_events(monkeypa
             return pane_id == '%5'
 
     class FakeSession:
-        data = {}
+        data = {'droid_sessions_root': str(tmp_path / 'factory-home' / 'sessions')}
         droid_session_path = str(tmp_path / 'droid-session.jsonl')
         droid_session_id = 'droid-session-id'
         work_dir = str(tmp_path)
@@ -3115,7 +3235,8 @@ def test_execution_service_droid_adapter_emits_legacy_items_from_events(monkeypa
 
     class FakeReader:
         def __init__(self, *args, **kwargs) -> None:
-            del args, kwargs
+            del args
+            reader_inits.append(dict(kwargs))
             self._events = [
                 ('user', f'CCB_REQ_ID: {fixed_req_id}\n\nprompt'),
                 ('assistant', 'partial'),
@@ -3145,6 +3266,7 @@ def test_execution_service_droid_adapter_emits_legacy_items_from_events(monkeypa
     service.start(_anchored_job_for_provider('droid', fixed_req_id, body='real droid'), runtime_context=_runtime_context(tmp_path))
     update = service.poll()[0]
 
+    assert reader_inits[0]['root'] == tmp_path / 'factory-home' / 'sessions'
     assert sent and sent[0][0] == '%5'
     assert fixed_req_id in sent[0][1]
     assert [item.kind for item in update.items] == [
