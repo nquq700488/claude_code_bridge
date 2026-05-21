@@ -92,10 +92,11 @@ def test_ccb_config_skill_uses_current_config_authority() -> None:
             / "ccb-config.md"
         ).read_text(encoding="utf-8")
 
-        assert "The current CCB project config is `.ccb/ccb.config`" in skill_text
+        assert "CCB config precedence is built-in default < user config" in skill_text
+        assert "Only write `~/.ccb/ccb.config`" in skill_text
         assert "Never write `.ccb_config/ccb.config`" in skill_text
         assert "Never run `ccb`, `ccb -s`, `ccb kill`" in skill_text
-        assert "result.used_default" in skill_text
+        assert "result.source_kind" in skill_text
         assert "Do not write `.ccb_config/ccb.config`" in reference_text
 
 

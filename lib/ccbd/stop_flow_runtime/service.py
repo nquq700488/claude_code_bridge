@@ -35,14 +35,14 @@ def stop_all_project(
     configured_agent_names = tuple(registry.list_known_agents())
     extra_agent_names = extra_agent_dir_names(paths, configured_agent_names)
     actions_taken: list[str] = []
+    deferred_actions = []
 
     if project_namespace is not None:
-        namespace_destroy = project_namespace.destroy(reason='stop_all', force=force)
-        actions_taken.append(
-            'destroy_namespace:'
-            f'destroyed={str(namespace_destroy.destroyed).lower()}'
-            f',epoch={namespace_destroy.namespace_epoch}'
-        )
+        def _destroy_namespace() -> None:
+            project_namespace.destroy(reason='stop_all', force=force)
+
+        deferred_actions.append(_destroy_namespace)
+        actions_taken.append('destroy_namespace:deferred')
 
     for agent_name in (*configured_agent_names, *extra_agent_names):
         runtime = best_effort_runtime(
@@ -122,6 +122,7 @@ def stop_all_project(
         stopped_agents=tuple(stopped_agents),
         actions_taken=tuple(actions_taken),
         cleanup_summaries=cleanup_summaries,
+        deferred_actions=tuple(deferred_actions),
     )
 
 

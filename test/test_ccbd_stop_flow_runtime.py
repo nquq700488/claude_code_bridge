@@ -5,10 +5,53 @@ from types import SimpleNamespace
 
 from ccbd.stop_flow_runtime.pid_cleanup import collect_pid_candidates
 from ccbd.stop_flow_runtime.pid_cleanup import collect_project_process_candidates
+from ccbd.stop_flow_runtime.service import stop_all_project
 from cli.services.kill_runtime.pid_cleanup import collect_project_authority_pid_candidates
 from ccbd.stop_flow_runtime.pid_cleanup import terminate_runtime_pids
 from ccbd.stop_flow_runtime.runtime_records import extra_agent_dir_names
 from runtime_pid_cleanup.termination import terminate_runtime_pids as terminate_runtime_pids_impl
+
+
+def test_stop_all_project_defers_namespace_destroy_until_after_response(tmp_path: Path) -> None:
+    events: list[str] = []
+
+    class FakeNamespace:
+        def destroy(self, **kwargs):
+            events.append(f"destroy:{kwargs['reason']}:{kwargs['force']}")
+            return SimpleNamespace(destroyed=True, namespace_epoch=3)
+
+    class FakeRegistry:
+        def list_known_agents(self):
+            return ()
+
+    paths = SimpleNamespace(
+        agents_dir=tmp_path / '.ccb' / 'agents',
+        ccbd_socket_path=tmp_path / '.ccb' / 'ccbd' / 'ccbd.sock',
+        agent_dir=lambda agent_name: tmp_path / '.ccb' / 'agents' / agent_name,
+        agent_runtime_path=lambda agent_name: tmp_path / '.ccb' / 'agents' / agent_name / 'runtime.json',
+        agent_helper_path=lambda agent_name: tmp_path / '.ccb' / 'agents' / agent_name / 'helper.json',
+    )
+    paths.agents_dir.mkdir(parents=True)
+
+    execution = stop_all_project(
+        project_root=tmp_path,
+        project_id='proj-1',
+        paths=paths,
+        registry=FakeRegistry(),
+        project_namespace=FakeNamespace(),
+        clock=lambda: '2026-05-21T00:00:00Z',
+        force=True,
+        cleanup_project_tmux_orphans_by_socket_fn=lambda **kwargs: (),
+        tmux_cleanup_history_store_cls=lambda paths: SimpleNamespace(append=lambda event: None),
+    )
+
+    assert execution.summary.state == 'unmounted'
+    assert execution.actions_taken == ('destroy_namespace:deferred', 'cleanup_tmux_orphans:skipped', 'terminate_runtime_pids:0')
+    assert events == []
+
+    execution.deferred_actions[0]()
+
+    assert events == ['destroy:stop_all:True']
 
 
 def test_extra_agent_dir_names_skips_configured_names(tmp_path: Path) -> None:

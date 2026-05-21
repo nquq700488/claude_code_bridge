@@ -9,17 +9,22 @@ It is the authoritative design anchor for:
 - `.ccb/ccb.config`
 - `.ccb/ccb_memory.md` and `.ccb/agents/<agent>/memory.md` project memory placement
 - compact layout grammar
-- built-in default config fallback
+- config source precedence and fallback
 - pane naming and pane color identity
 - tmux split sizing rules for the project UI
 
 ## 2. User-Facing Config Contract
 
-- `.ccb/ccb.config` is the only user-facing project config file.
+- Effective config is resolved in three layers:
+  1. built-in default config from code;
+  2. user config at `~/.ccb/ccb.config`;
+  3. project config at `.ccb/ccb.config`.
+- Higher layers override lower layers by replacing the whole effective config; CCB does not merge partial config documents across layers.
+- `.ccb/ccb.config` is the highest-priority user-facing project config file.
+- `~/.ccb/ccb.config` is the user-level config file used only when project config is absent.
 - CCB must not auto-create, reconstruct, or rewrite `.ccb/ccb.config`; it is a user-authored project file.
-- When `.ccb/ccb.config` is absent, config loading must use the built-in default project config from code and report the source as `<default>`.
-- CCB must not read an implicit global `~/.ccb/ccb.config` or install-location config as a fallback.
-- User help text, validation output, diagnostics, and docs must point to `.ccb/ccb.config`.
+- When both `.ccb/ccb.config` and `~/.ccb/ccb.config` are absent, config loading must use the built-in default project config from code and report the source kind as `builtin_default`.
+- User help text, validation output, diagnostics, and docs must report the active config source kind: `project_config`, `user_config`, or `builtin_default`.
 - `.ccb/config.yaml` is not part of the contract and must not be read or written by current code.
 
 ### 2.1 Project Shared Memory Files

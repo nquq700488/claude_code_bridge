@@ -46,7 +46,7 @@ def test_runtime_supervisor_stop_all_ignores_invalid_runtime_file_for_unknown_ag
         runtime_service=None,
     )
 
-    summary = supervisor.stop_all(force=True)
+    execution = supervisor.stop_all(force=True)
 
-    assert summary.state == 'unmounted'
+    assert execution.summary.state == 'unmounted'
     assert seen == ['demo']

@@ -81,7 +81,7 @@ class CcbdApp:
     def finalize_project_stop(
         self,
         *,
-        summary,
+        execution,
         terminated_jobs,
         trigger: str,
         forced: bool,
@@ -90,7 +90,7 @@ class CcbdApp:
     ) -> None:
         finalize_project_stop_impl(
             self,
-            summary=summary,
+            execution=execution,
             terminated_jobs=terminated_jobs,
             trigger=trigger,
             forced=forced,

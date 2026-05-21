@@ -122,8 +122,11 @@ Out of scope:
 
 ### 5.3 Desired Agent Set
 
-- `.ccb/ccb.config` is the only forward authority for the project's desired agent mount set and foreground layout.
-- `.ccb/ccb.config` logical names are also the only forward authority for project-namespace pane display names.
+- Effective config is resolved in three layers: built-in default, user config at `~/.ccb/ccb.config`, then project config at `.ccb/ccb.config`.
+- `.ccb/ccb.config` is the highest-priority forward authority for the project's desired agent mount set and foreground layout when it exists.
+- When `.ccb/ccb.config` is absent, `~/.ccb/ccb.config` is the user-level forward authority for the project's desired agent mount set and foreground layout when it exists.
+- When both files are absent, the built-in default config is the forward authority for the desired agent mount set and foreground layout.
+- Effective config logical names are the only forward authority for project-namespace pane display names.
 - Until a future explicit `enabled` or `desired_state` field exists, all configured agents are desired agents.
 - `default_agents` and CLI `requested_agents` do not redefine long-lived backend ownership.
 - `requested_agents` may affect foreground behavior or warm-start order only.
@@ -132,7 +135,7 @@ Out of scope:
 
 Authority order must be enforced exactly as follows:
 
-1. `.ccb/ccb.config`
+1. effective config, resolved as `.ccb/ccb.config` > `~/.ccb/ccb.config` > built-in default
 2. `.ccb/ccbd/lifecycle.json`
 3. `.ccb/ccbd/lease.json`
 4. `.ccb/ccbd/start-policy.json`

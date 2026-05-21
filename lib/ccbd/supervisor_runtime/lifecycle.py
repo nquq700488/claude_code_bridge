@@ -124,7 +124,7 @@ def stop_all_supervisor(
     tmux_cleanup_history_store_cls,
     stop_all_project_fn,
 ):
-    execution = stop_all_project_fn(
+    return stop_all_project_fn(
         project_root=supervisor._project_root,
         project_id=supervisor._project_id,
         paths=supervisor._paths,
@@ -135,7 +135,6 @@ def stop_all_supervisor(
         cleanup_project_tmux_orphans_by_socket_fn=cleanup_project_tmux_orphans_by_socket_fn,
         tmux_cleanup_history_store_cls=tmux_cleanup_history_store_cls,
     )
-    return execution.summary
 
 
 __all__ = ['start_supervisor', 'stop_all_supervisor']

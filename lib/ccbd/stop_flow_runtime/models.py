@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable
 
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
 
@@ -40,6 +41,7 @@ class StopAllExecution:
     stopped_agents: tuple[str, ...]
     actions_taken: tuple[str, ...]
     cleanup_summaries: tuple[ProjectTmuxCleanupSummary, ...]
+    deferred_actions: tuple[Callable[[], None], ...] = ()
 
 
 __all__ = ['StopAllExecution', 'StopAllSummary']

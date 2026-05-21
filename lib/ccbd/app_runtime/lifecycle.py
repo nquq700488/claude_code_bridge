@@ -165,7 +165,7 @@ def execute_project_stop(
     reason: str,
     clear_start_policy: bool,
 ):
-    summary, terminated_jobs = prepare_project_stop(
+    execution, terminated_jobs = prepare_project_stop(
         app,
         force=force,
         trigger=trigger,
@@ -173,14 +173,14 @@ def execute_project_stop(
     )
     finalize_project_stop(
         app,
-        summary=summary,
+        execution=execution,
         terminated_jobs=terminated_jobs,
         trigger=trigger,
         forced=force,
         reason=reason,
         clear_start_policy=clear_start_policy,
     )
-    return summary
+    return execution.summary
 
 
 def prepare_project_stop(
@@ -205,7 +205,7 @@ def prepare_project_stop(
     except Exception:
         terminated_jobs = ()
     try:
-        summary = app.runtime_supervisor.stop_all(force=force)
+        execution = app.runtime_supervisor.stop_all(force=force)
     except Exception as exc:
         record_shutdown_report(
             app,
@@ -222,19 +222,20 @@ def prepare_project_stop(
             failure_reason=str(exc),
         )
         raise
-    return summary, terminated_jobs
+    return execution, terminated_jobs
 
 
 def finalize_project_stop(
     app,
     *,
-    summary,
+    execution,
     terminated_jobs,
     trigger: str,
     forced: bool,
     reason: str,
     clear_start_policy: bool,
 ) -> None:
+    summary = execution.summary
     app.project_stop_requested = True
     app.lease = release_backend_ownership(app, desired_state='stopped')
     if clear_start_policy:
@@ -256,6 +257,8 @@ def finalize_project_stop(
         cleanup_summaries=summary.cleanup_summaries,
         failure_reason=None,
     )
+    for action in getattr(execution, 'deferred_actions', ()) or ():
+        action()
 
 
 def record_shutdown_report(

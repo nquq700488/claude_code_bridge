@@ -404,6 +404,51 @@ def test_stop_all_after_response_finalize_is_queued_when_response_write_fails() 
     assert order == ['handler', 'sendall_failed', 'finalize']
 
 
+def test_stop_all_destructive_finalize_runs_after_response_write() -> None:
+    order: list[str] = []
+
+    class _Conn:
+        def __init__(self) -> None:
+            self._recv_count = 0
+
+        def settimeout(self, timeout):
+            del timeout
+
+        def recv(self, size):
+            del size
+            self._recv_count += 1
+            if self._recv_count == 1:
+                return b'{"api_version":2,"op":"stop-all","request":{"force":false}}\n'
+            return b''
+
+        def sendall(self, data: bytes) -> None:
+            del data
+            order.append('sendall')
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    server = CcbdSocketServer('/tmp/test.sock')
+
+    def _handler(payload):
+        order.append('prepare')
+        assert payload == {'force': False}
+        return {'state': 'unmounted'}, lambda: order.append('destroy_namespace')
+
+    server.register_handler('stop-all', _handler)
+    handled = server._handle_connection(_Conn())
+
+    assert handled == 'stop-all'
+    assert order == ['prepare', 'sendall']
+
+    run_after_response_actions(server)
+
+    assert order == ['prepare', 'sendall', 'destroy_namespace']
+
+
 def test_run_after_response_actions_drains_all_actions_once() -> None:
     server = CcbdSocketServer('/tmp/test.sock')
     seen: list[str] = []

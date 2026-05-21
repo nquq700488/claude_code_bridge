@@ -2,7 +2,17 @@
 
 ## Authority Files
 
-`.ccb/ccb.config` is the only user-facing project config authority. When it is missing, CCB uses a built-in default and does not write a new file automatically.
+Effective config precedence is:
+
+1. built-in default config from code;
+2. user config at `~/.ccb/ccb.config`;
+3. project config at `.ccb/ccb.config`.
+
+Higher layers replace the whole lower-layer config; CCB does not merge partial config documents across layers.
+
+`.ccb/ccb.config` is the highest-priority project config authority. When it is missing, CCB uses `~/.ccb/ccb.config` if present, then the built-in default. CCB does not write a new project config automatically.
+
+Only write `~/.ccb/ccb.config` when the user explicitly wants a user-level or system-wide default CCB team. For ordinary project setup, write `.ccb/ccb.config`.
 
 Do not write `.ccb_config/ccb.config`. That path is legacy residue in older or migrated workspaces. You may read it as migration evidence, but the current config must be created or updated at `.ccb/ccb.config`.
 

@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/模型皆可控-CF1322?style=for-the-badge" alt="模型皆可控">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.2.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.2.7-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 [English](README.md) | **中文**
@@ -74,9 +74,9 @@
 <details>
 <summary><b>最新版本亮点</b></summary>
 
-- **CCB tmux 默认隔离用户配置**：managed tmux 命令现在使用 `tmux -f /dev/null ...`，避免用户 `~/.tmux.conf` 插件、hook 或 sidebar 改写 CCB pane layout。
-- **源码安装更稳定**：source/dev 安装使用 Python wrapper，支持 `CCB_PYTHON_BIN`，安装后执行真实 entrypoint smoke test，并给 Droid MCP 注册加超时。
-- **Provider 启动保持兼容和可靠**：restore-fresh 正确生效，Claude trust 写入 managed home，Claude auto-permission 继续使用 `--permission-mode bypassPermissions`。
+- **配置来源显式化**：CCB 现在会报告当前配置来自内置默认、用户 `~/.ccb/ccb.config`，还是项目 `.ccb/ccb.config`。
+- **`ccb config validate` 显示生效层级**：validate 输出新增 `config_source_kind` 和 `used_builtin_default`，README/docs/`ccb_config` 说明也对齐三层优先级。
+- **`ccb kill` 清理顺序修复**：project tmux namespace destroy 延后到 `stop_all` 回包后的 finalize 阶段，避免从 CCB tmux pane 执行 kill 时清理只跑一半。
 
 完整历史见 [新版本记录](#新版本记录)。
 
@@ -98,7 +98,7 @@ tmux 复制粘贴：鼠标左键拖拽即可复制，`Ctrl+Shift+V` 粘贴。
 
 ## 配置控制
 
-`ccb` 的行为由 `.ccb/ccb.config` 控制。它是项目级、用户自己维护的配置文件；如果不存在，CCB 会使用代码内置默认配置，不会自动写入新文件。
+`ccb` 按三层解析配置：代码内置默认配置、用户配置 `~/.ccb/ccb.config`、项目配置 `.ccb/ccb.config`。项目配置优先级最高；如果项目配置不存在，CCB 会优先使用用户配置，再回退到代码内置默认配置，并且不会自动写入新的项目配置文件。
 
 `.ccb/ccb_memory.md` 是项目全局记忆文档。
 
@@ -117,7 +117,7 @@ tmux 复制粘贴：鼠标左键拖拽即可复制，`Ctrl+Shift+V` 粘贴。
 $ccb_config 为一个 Python library 设计团队：一个 coordinator、两个 worktree 实现 agent、一个 reviewer。
 ```
 
-这个 skill 会帮助选择 agent 名称、provider、`inplace` / `git-worktree`、compact layout 语法，以及哪些说明应写入共享记忆或 per-agent memory。它会验证 `.ccb/ccb.config` 是当前配置 authority，并在文件修改完成后提醒你重启 CCB。
+这个 skill 会帮助选择 agent 名称、provider、`inplace` / `git-worktree`、compact layout 语法，以及哪些说明应写入共享记忆或 per-agent memory。它会验证当前生效的配置层，并在文件修改完成后提醒你重启 CCB。
 
 </details>
 
@@ -329,6 +329,15 @@ ccb reinstall
 历史说明：下面较旧的发布记录里仍可能出现 `askd`、旧 flag 或已移除命令。这些内容仅作为 changelog 历史保留，不代表当前 CLI 入口。
 
 <details open>
+<summary><b>v6.2.7</b> - Config Source And Stop Cleanup Release</summary>
+
+- 显式报告配置来源：内置默认、用户 `~/.ccb/ccb.config`、项目 `.ccb/ccb.config`，并保持项目配置优先级最高。
+- 更新 `ccb config validate`、README/docs 和继承的 `ccb_config` skill 说明，统一描述当前生效的配置层。
+- 将 project tmux namespace destroy 延后到 stop-all response finalizer 之后，让从 CCB pane 执行的 `ccb kill` / `ccb kill -f` 能完成后台清理。
+
+</details>
+
+<details>
 <summary><b>v6.2.6</b> - Tmux Isolation And Startup Hardening Release</summary>
 
 - managed tmux 命令默认使用 `tmux -f /dev/null ...`，避免用户 tmux 配置、插件、hook 或 sidebar 改变 CCB-managed layout。

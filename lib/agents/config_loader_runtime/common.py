@@ -6,6 +6,10 @@ from pathlib import Path
 from agents.models import ProjectConfig
 
 CONFIG_FILENAME = 'ccb.config'
+CONFIG_SOURCE_PROJECT = 'project_config'
+CONFIG_SOURCE_USER = 'user_config'
+CONFIG_SOURCE_BUILTIN_DEFAULT = 'builtin_default'
+CONFIG_SOURCE_KINDS = (CONFIG_SOURCE_PROJECT, CONFIG_SOURCE_USER, CONFIG_SOURCE_BUILTIN_DEFAULT)
 DEFAULT_AGENT_ORDER = ('agent1', 'agent2', 'agent3')
 DEFAULT_DEFAULT_AGENTS = DEFAULT_AGENT_ORDER
 ALLOWED_TOP_LEVEL_KEYS = {'version', 'default_agents', 'agents', 'cmd_enabled', 'layout'}
@@ -51,6 +55,7 @@ class ConfigValidationError(ValueError):
 class ConfigLoadResult:
     config: ProjectConfig
     source_path: Path | None
+    source_kind: str
     used_default: bool = False
 
 
@@ -59,6 +64,10 @@ __all__ = [
     'ALLOWED_PROVIDER_PROFILE_KEYS',
     'ALLOWED_TOP_LEVEL_KEYS',
     'CONFIG_FILENAME',
+    'CONFIG_SOURCE_BUILTIN_DEFAULT',
+    'CONFIG_SOURCE_KINDS',
+    'CONFIG_SOURCE_PROJECT',
+    'CONFIG_SOURCE_USER',
     'DEFAULT_AGENT_ORDER',
     'DEFAULT_DEFAULT_AGENTS',
     'ConfigLoadResult',

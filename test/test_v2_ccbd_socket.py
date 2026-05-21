@@ -425,12 +425,16 @@ def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> N
     project_root = tmp_path / 'repo-stop-all'
     ctx = _prepare_project(project_root, _single_agent_config_text('demo', 'fake'))
     app = CcbdApp(project_root)
+    destroy_events: list[str] = []
     app.project_namespace.ensure = lambda: SimpleNamespace(  # type: ignore[method-assign]
         tmux_socket_path=str(app.paths.ccbd_tmux_socket_path),
         tmux_session_name=app.paths.ccbd_tmux_session_name,
         namespace_epoch=1,
     )
-    app.project_namespace.destroy = lambda **kwargs: SimpleNamespace(destroyed=True, namespace_epoch=1)  # type: ignore[method-assign]
+    app.project_namespace.destroy = (  # type: ignore[method-assign]
+        lambda **kwargs: destroy_events.append('destroy')
+        or SimpleNamespace(destroyed=True, namespace_epoch=1)
+    )
 
     thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
     thread.start()
@@ -443,9 +447,11 @@ def test_ccbd_stop_all_does_not_run_post_shutdown_heartbeat(tmp_path: Path) -> N
 
     stopped = client.stop_all(force=False)
     assert stopped['state'] == 'unmounted'
+    assert destroy_events == []
 
     thread.join(timeout=2)
     assert not thread.is_alive()
+    assert destroy_events == ['destroy']
 
     runtime = AgentRuntimeStore(app.paths).load('demo')
     assert runtime is not None

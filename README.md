@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/Every_Model_Controllable-CF1322?style=for-the-badge" alt="Every Model Controllable">
 </p>
 
-[![Version](https://img.shields.io/badge/version-6.2.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-6.2.7-orange.svg)]()
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20Windows-lightgrey.svg)]()
 
 **English** | [Chinese](README_zh.md)
@@ -74,9 +74,9 @@ Build project-local teams with roles, pane layout, provider state, worktree isol
 <details>
 <summary><b>Latest release highlights</b></summary>
 
-- **CCB tmux is isolated from user config by default**: managed tmux commands now use `tmux -f /dev/null ...`, preventing user `~/.tmux.conf` plugins and hooks from changing CCB pane layout.
-- **Source installs are more deterministic**: source/dev installs use a Python wrapper, honor `CCB_PYTHON_BIN`, run post-install entrypoint smoke checks, and bound Droid MCP registration with a timeout.
-- **Provider startup stays compatible and reliable**: restore-fresh takes effect, Claude trust state is written in the managed home, and Claude auto-permission continues to use `--permission-mode bypassPermissions`.
+- **Config sources are explicit**: CCB now reports whether the effective config came from the built-in default, user `~/.ccb/ccb.config`, or project `.ccb/ccb.config`.
+- **`ccb config validate` shows the active layer**: validation output now includes `config_source_kind` and `used_builtin_default`, and docs/`ccb_config` guidance match the three-layer precedence.
+- **`ccb kill` cleanup is ordered after the response**: project tmux namespace destruction is deferred until after `stop_all` finalization, so cleanup completes even when kill is launched from a CCB tmux pane.
 
 See [Release Notes](#release-notes) for the full history.
 
@@ -98,7 +98,7 @@ Tmux copy/paste: drag with the left mouse button to copy, and use `Ctrl+Shift+V`
 
 ## Config Control
 
-`ccb` is controlled by `.ccb/ccb.config`. This file is project-local and user-authored; if it is missing, CCB uses the built-in default without writing a new config file.
+`ccb` resolves config in three layers: built-in default, user config at `~/.ccb/ccb.config`, then project config at `.ccb/ccb.config`. Project config has highest priority; if it is missing, CCB uses the user config when present, then the built-in default, without writing a new project config file.
 
 `.ccb/ccb_memory.md` is the project-wide shared memory document.
 
@@ -117,7 +117,7 @@ Invoke it from a supported provider skill surface, for example:
 $ccb_config Design a team for a Python library with one coordinator, two worktree implementation agents, and one reviewer.
 ```
 
-The skill helps choose agent names, providers, `inplace` versus `git-worktree`, compact layout syntax, and whether role instructions belong in shared or per-agent memory. It validates that `.ccb/ccb.config` is the active authority and tells you to restart CCB after file changes are complete.
+The skill helps choose agent names, providers, `inplace` versus `git-worktree`, compact layout syntax, and whether role instructions belong in shared or per-agent memory. It validates which config layer is active and tells you to restart CCB after file changes are complete.
 
 </details>
 
@@ -338,6 +338,15 @@ Thanks to the [Linux.do community](https://linux.do) for testing, feedback, and 
 Historical note: older release notes below may mention `askd`, legacy flags, or removed commands. Those references are kept only as changelog history and do not redefine the current CLI surface.
 
 <details open>
+<summary><b>v6.2.7</b> - Config Source And Stop Cleanup Release</summary>
+
+- Reports explicit config source kinds for built-in defaults, user `~/.ccb/ccb.config`, and project `.ccb/ccb.config`, with project config taking highest priority.
+- Updates `ccb config validate`, README/docs, and inherited `ccb_config` skill guidance to describe the active config layer.
+- Defers project tmux namespace destruction until after the stop-all response finalizer so `ccb kill` / `ccb kill -f` can complete cleanup from inside a CCB pane.
+
+</details>
+
+<details>
 <summary><b>v6.2.6</b> - Tmux Isolation And Startup Hardening Release</summary>
 
 - Runs managed tmux commands with `tmux -f /dev/null ...` by default so user tmux config, plugins, hooks, and sidebars cannot reshape CCB-managed layouts.

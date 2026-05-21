@@ -32,6 +32,14 @@
 
 ## Unreleased
 
+## v6.2.7 (2026-05-21)
+
+### Config Source And Stop Cleanup Release
+
+- **Three-Layer Config Sources Added**: config resolution now reports explicit source kinds for built-in defaults, user config at `~/.ccb/ccb.config`, and project config at `.ccb/ccb.config`, with project config taking highest priority.
+- **Config Validate Output Clarified**: `ccb config validate` now surfaces `config_source_kind` and `used_builtin_default`, and README/docs/`ccb_config` skill guidance describe the active config layer instead of assuming only project config.
+- **Kill Cleanup Ordering Fixed**: `stop_all` now defers project tmux namespace destruction until after the socket response finalizer, so `ccb kill` and `ccb kill -f` launched from a CCB tmux pane can finish daemon cleanup before their pane is destroyed.
+
 ## v6.2.6 (2026-05-20)
 
 ### Tmux Isolation And Startup Hardening Release

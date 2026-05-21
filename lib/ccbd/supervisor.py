@@ -5,7 +5,7 @@ from pathlib import Path
 from agents.config_identity import project_config_identity_payload
 from ccbd.lifecycle_report_store import CcbdShutdownReportStore, CcbdStartupReportStore
 from ccbd.start_flow import StartFlowSummary, run_start_flow
-from ccbd.stop_flow import StopAllSummary, stop_all_project
+from ccbd.stop_flow import StopAllExecution, stop_all_project
 from ccbd.system import utc_now
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
@@ -66,7 +66,7 @@ class RuntimeSupervisor(SupervisorRuntimeStateMixin):
             run_start_flow_fn=run_start_flow,
         )
 
-    def stop_all(self, *, force: bool) -> StopAllSummary:
+    def stop_all(self, *, force: bool) -> StopAllExecution:
         return stop_all_supervisor(
             self,
             force=force,
@@ -76,4 +76,4 @@ class RuntimeSupervisor(SupervisorRuntimeStateMixin):
         )
 
 
-__all__ = ['RuntimeSupervisor', 'StopAllSummary']
+__all__ = ['RuntimeSupervisor', 'StopAllExecution']

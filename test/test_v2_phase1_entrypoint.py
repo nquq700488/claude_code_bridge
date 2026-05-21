@@ -34,6 +34,8 @@ def test_ccb_config_validate_success(tmp_path: Path) -> None:
     proc = _run_ccb(['config', 'validate'], cwd=project_root)
     assert proc.returncode == 0
     assert 'config_status: valid' in proc.stdout
+    assert 'config_source_kind: project_config' in proc.stdout
+    assert 'used_builtin_default: false' in proc.stdout
     assert 'default_agents: agent1' in proc.stdout
     assert 'agents: agent1' in proc.stdout
     assert 'cmd_enabled: true' in proc.stdout
@@ -49,6 +51,30 @@ def test_ccb_config_validate_rejects_provider_only_list(tmp_path: Path) -> None:
     assert proc.returncode == 1
     assert 'config_status: invalid' in proc.stderr
     assert 'expected' in proc.stderr
+
+
+def test_ccb_config_validate_reports_user_config_source_kind(tmp_path: Path) -> None:
+    home = tmp_path / 'home'
+    project_root = tmp_path / 'repo'
+    (project_root / '.ccb').mkdir(parents=True)
+    _write(home / '.ccb' / 'ccb.config', 'cmd; userdefault:claude\n')
+
+    env = dict(os.environ)
+    env['HOME'] = str(home)
+    proc = subprocess.run(
+        [sys.executable, str(_repo_root() / 'ccb'), 'config', 'validate'],
+        cwd=str(project_root),
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+    assert proc.returncode == 0
+    assert 'config_source_kind: user_config' in proc.stdout
+    assert f'config_source: {home / ".ccb" / "ccb.config"}' in proc.stdout
+    assert 'used_builtin_default: false' in proc.stdout
+    assert 'default_agents: userdefault' in proc.stdout
 
 
 def test_ccb_config_validate_accepts_named_simple_agent_map(tmp_path: Path) -> None:
