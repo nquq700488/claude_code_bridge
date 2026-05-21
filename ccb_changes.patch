@@ -1,0 +1,447 @@
+diff --git a/lib/cli/models_mailbox.py b/lib/cli/models_mailbox.py
+index 8c90ea2..f5fae72 100644
+--- a/lib/cli/models_mailbox.py
++++ b/lib/cli/models_mailbox.py
+@@ -32,6 +32,7 @@ class ParsedPendCommand:
+     count: int | None = None
+     observer_mode: str = 'snapshot'
+     detail: bool = False
++    timeout_s: float | None = None
+     kind: str = 'pend'
+ 
+ 
+diff --git a/lib/cli/parser_runtime/commands.py b/lib/cli/parser_runtime/commands.py
+index e22d761..db32ab1 100644
+--- a/lib/cli/parser_runtime/commands.py
++++ b/lib/cli/parser_runtime/commands.py
+@@ -67,6 +67,7 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
+     parser.add_argument('--inbox', action='store_true')
+     parser.add_argument('--queue', action='store_true')
+     parser.add_argument('--detail', action='store_true')
++    parser.add_argument('--timeout', type=float, default=None)
+     parser.add_argument('target')
+     parser.add_argument('count', nargs='?')
+     namespace = parse_args(parser, tokens, error_message='invalid pend command', error_type=error_type)
+@@ -92,12 +93,18 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
+             raise error_type('pend count must be positive')
+     if count is not None and observer_mode != 'snapshot':
+         raise error_type('pend count is only supported for snapshot mode')
++    timeout_s = float(namespace.timeout) if namespace.timeout is not None else None
++    if timeout_s is not None and timeout_s <= 0:
++        raise error_type('pend --timeout must be positive')
++    if timeout_s is not None and observer_mode != 'watch':
++        raise error_type('pend --timeout is only supported for --watch')
+     return ParsedPendCommand(
+         project=project,
+         target=str(namespace.target),
+         count=count,
+         observer_mode=observer_mode,
+         detail=bool(namespace.detail),
++        timeout_s=timeout_s,
+     )
+ 
+ 
+diff --git a/lib/cli/phase2_runtime/handlers_mailbox.py b/lib/cli/phase2_runtime/handlers_mailbox.py
+index 06182e7..1053615 100644
+--- a/lib/cli/phase2_runtime/handlers_mailbox.py
++++ b/lib/cli/phase2_runtime/handlers_mailbox.py
+@@ -12,7 +12,7 @@ def handle_ping(context, command, out, services) -> int:
+ def handle_pend(context, command, out, services) -> int:
+     if getattr(command, 'observer_mode', 'snapshot') == 'watch':
+         services.write_lines(out, services.render_observer_notice(view='watch', terminal=False))
+-        watch_command = SimpleNamespace(target=command.target)
++        watch_command = SimpleNamespace(target=command.target, timeout=getattr(command, 'timeout_s', None))
+         for batch in services.watch_target(context, watch_command):
+             services.write_lines(out, services.render_watch_batch(batch))
+         return 0
+diff --git a/lib/cli/router.py b/lib/cli/router.py
+index 779fc67..92d715d 100644
+--- a/lib/cli/router.py
++++ b/lib/cli/router.py
+@@ -132,13 +132,15 @@ _COMMAND_HELP = {
+           ccb ping ccbd      Show cached project daemon status.
+     """,
+     "pend": """
+-        usage: ccb pend [--watch|--inbox|--queue] [--detail] <agent|job_id|all> [N]
++        usage: ccb pend [--watch|--inbox|--queue] [--detail] [--timeout S] <agent|job_id|all> [N]
+ 
+         Weak observer surface:
+           Primary weak observer entrypoint:
+             ccb pend <agent>                    Show a non-authoritative observer snapshot for one agent.
+             ccb pend <job_id>                   Show a non-authoritative observer snapshot for one submitted job.
+             ccb pend --watch <agent|job_id>     Stream non-authoritative observer events via the converged observer entrypoint.
++            ccb pend --watch --timeout 300 <agent|job_id>
++                                                Stream with a 300-second timeout (default from CCB_WATCH_TIMEOUT_S, or 10s).
+             ccb pend --inbox <agent>            Show a non-authoritative inbox summary via the converged observer entrypoint.
+             ccb pend --inbox --detail <agent>   Expand inbox-item detail via the converged observer entrypoint.
+             ccb pend --queue <agent|all>        Show the same non-authoritative backlog summary exposed by `ccb queue`.
+diff --git a/lib/cli/services/ask_runtime/watch.py b/lib/cli/services/ask_runtime/watch.py
+index 1a683b8..3130efd 100644
+--- a/lib/cli/services/ask_runtime/watch.py
++++ b/lib/cli/services/ask_runtime/watch.py
+@@ -86,11 +86,25 @@ def watch_ask_job(
+                 write_lines_fn(out, render_watch_batch_fn(batch))
+             return batch
+         if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
+-            fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+-            if fallback is not None:
++            # Final attempt: give the daemon one last chance to sync terminal
++            # state before we bail out.
++            final_fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
++            if final_fallback is not None:
+                 if emit_output:
+-                    write_lines_fn(out, render_watch_batch_fn(fallback))
+-                return fallback
++                    write_lines_fn(out, render_watch_batch_fn(final_fallback))
++                return final_fallback
++
++            # Try an explicit fresh watch call as a last-ditch probe.
++            try:
++                fresh_payload = client.watch(job_id, cursor=cursor)
++                fresh_batch = _watch_batch_from_payload(job_id, fresh_payload)
++                if fresh_batch.terminal:
++                    if emit_output and not fresh_batch.events:
++                        write_lines_fn(out, render_watch_batch_fn(fresh_batch))
++                    return fresh_batch
++            except Exception:
++                pass
++
+             raise RuntimeError(f'watch timed out for {job_id}')
+ 
+         # Periodic health check: detect pane death or degraded agent early
+diff --git a/lib/cli/services/watch.py b/lib/cli/services/watch.py
+index a9c2a4b..253a233 100644
+--- a/lib/cli/services/watch.py
++++ b/lib/cli/services/watch.py
+@@ -23,6 +23,12 @@ def _watch_poll_interval_seconds() -> float:
+ 
+ 
+ def watch_target(context, command):
++    def _resolve_timeout_seconds() -> float:
++        explicit = getattr(command, 'timeout', None)
++        if explicit is not None:
++            return float(explicit)
++        return _watch_timeout_seconds()
++
+     return _watch_target_impl(
+         context,
+         command,
+@@ -30,7 +36,7 @@ def watch_target(context, command):
+         reconnect_error_classes=(CcbdClientError, CcbdServiceError),
+         time_fn=time.time,
+         sleep_fn=time.sleep,
+-        timeout_seconds_fn=_watch_timeout_seconds,
++        timeout_seconds_fn=_resolve_timeout_seconds,
+         poll_interval_seconds_fn=_watch_poll_interval_seconds,
+     )
+ 
+diff --git a/lib/cli/services/watch_runtime.py b/lib/cli/services/watch_runtime.py
+index 238c8a2..b3deece 100644
+--- a/lib/cli/services/watch_runtime.py
++++ b/lib/cli/services/watch_runtime.py
+@@ -95,10 +95,28 @@ def watch_target(
+                 yield batch
+             return
+         if _deadline_exceeded(deadline, time_fn=time_fn):
+-            fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
+-            if fallback is not None:
+-                yield fallback
++            # Final attempt: give the daemon one last chance to sync terminal
++            # state before we bail out. This avoids false timeouts when the
++            # agent finished just before the deadline but observer state hasn't
++            # caught up yet.
++            final_fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
++            if final_fallback is not None:
++                yield final_fallback
+                 return
++
++            # Try an explicit fresh watch call with current cursor as a last-ditch
++            # probe (some daemon implementations flush terminal state on fresh
++            # watch requests that are not long-polling).
++            try:
++                fresh_payload = handle.client.watch(command.target, cursor=cursor)
++                fresh_batch = _watch_batch_from_payload(command.target, fresh_payload)
++                if fresh_batch.terminal:
++                    if not fresh_batch.events:
++                        yield fresh_batch
++                    return
++            except Exception:
++                pass
++
+             raise RuntimeError(f"watch timed out for target {command.target}")
+         sleep_fn(poll_interval)
+ 
+diff --git a/lib/provider_backends/codex/bridge_runtime/service.py b/lib/provider_backends/codex/bridge_runtime/service.py
+index b89c729..9879026 100644
+--- a/lib/provider_backends/codex/bridge_runtime/service.py
++++ b/lib/provider_backends/codex/bridge_runtime/service.py
+@@ -9,6 +9,7 @@ from typing import Any
+ from .env import env_float
+ from .runtime_io import process_request, read_request
+ from .runtime_state import build_bridge_runtime_state
++from .socket_server import start_bridge_socket_server
+ 
+ 
+ class DualBridge:
+@@ -21,6 +22,7 @@ class DualBridge:
+ 
+         self._runtime = build_bridge_runtime_state(runtime_dir, pane_id=pane_id)
+         self._running = True
++        self._socket_server = None
+         signal.signal(signal.SIGTERM, self._handle_signal)
+         signal.signal(signal.SIGINT, self._handle_signal)
+ 
+@@ -60,6 +62,7 @@ class DualBridge:
+     def run(self) -> int:
+         self._log_console('Codex bridge started, waiting for Claude commands...')
+         self.binding_tracker.start()
++        self._start_socket_server()
+         idle_sleep = env_float('CCB_BRIDGE_IDLE_SLEEP', 0.05)
+         error_backoff_min = env_float('CCB_BRIDGE_ERROR_BACKOFF_MIN', 0.05)
+         error_backoff_max = env_float('CCB_BRIDGE_ERROR_BACKOFF_MAX', 0.2)
+@@ -84,6 +87,7 @@ class DualBridge:
+                     if error_backoff_max:
+                         error_backoff = min(error_backoff_max, max(error_backoff_min, error_backoff * 2))
+         finally:
++            self._stop_socket_server()
+             self.binding_tracker.stop()
+ 
+         self._log_console('Codex bridge exited')
+@@ -95,6 +99,20 @@ class DualBridge:
+     def _process_request(self, payload) -> None:
+         process_request(self._runtime, payload, log_console_fn=self._log_console)
+ 
++    def _start_socket_server(self) -> None:
++        from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
++        artifacts = codex_runtime_artifact_layout(self.runtime_dir)
++        self._socket_server = start_bridge_socket_server(
++            artifacts.bridge_socket,
++            process_request_fn=self._process_request,
++            log_fn=self._log_console,
++        )
++
++    def _stop_socket_server(self) -> None:
++        if self._socket_server is not None:
++            self._socket_server.stop()
++            self._socket_server = None
++
+     def _log_bridge(self, message: str) -> None:
+         from .runtime_io import log_bridge
+ 
+diff --git a/lib/provider_backends/codex/comm_runtime/communicator_io_runtime/asking.py b/lib/provider_backends/codex/comm_runtime/communicator_io_runtime/asking.py
+index f961a5e..73b11e9 100644
+--- a/lib/provider_backends/codex/comm_runtime/communicator_io_runtime/asking.py
++++ b/lib/provider_backends/codex/comm_runtime/communicator_io_runtime/asking.py
+@@ -1,12 +1,18 @@
+ from __future__ import annotations
+ 
+ import json
++import os
++import socket
+ from datetime import datetime
+ from typing import Any
+ 
+ from .common import ensure_session_health, remember_log_hint
+ 
+ 
++# How long to wait for a socket connection/write before falling back to FIFO.
++_SOCKET_TIMEOUT_S = 5.0
++
++
+ def send_message(comm, content: str) -> tuple[str, dict[str, Any]]:
+     marker = comm._generate_marker()
+     message = {
+@@ -16,10 +22,56 @@ def send_message(comm, content: str) -> tuple[str, dict[str, Any]]:
+     }
+ 
+     state = comm.log_reader.capture_state()
++
++    # Dual-track delivery: prefer Unix Domain Socket, fallback to FIFO.
++    if _try_send_via_socket(comm, message):
++        return marker, state
++
++    # Fallback to legacy FIFO path for backwards compatibility.
++    _send_via_fifo(comm, message)
++    return marker, state
++
++
++def _try_send_via_socket(comm, message: dict[str, Any]) -> bool:
++    """Attempt to send message via Unix Domain Socket.
++
++    Returns True on success, False if socket is unavailable so caller can
++    fallback to FIFO.
++    """
++    sock_path = getattr(comm, "bridge_socket", None)
++    if sock_path is None:
++        return False
++
++    payload = json.dumps(message, ensure_ascii=False) + "\n"
++    payload_bytes = payload.encode("utf-8")
++
++    try:
++        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as sock:
++            sock.settimeout(_SOCKET_TIMEOUT_S)
++            sock.connect(str(sock_path))
++            sock.sendall(payload_bytes)
++            # Wait for a short ACK so we know the bridge actually received it.
++            sock.settimeout(_SOCKET_TIMEOUT_S)
++            ack = sock.recv(1024)
++            if ack:
++                try:
++                    ack_data = json.loads(ack.decode())
++                    return ack_data.get("status") == "ok"
++                except (json.JSONDecodeError, UnicodeDecodeError):
++                    pass
++            # Empty ACK is treated as success (older bridge versions).
++            return True
++    except (OSError, socket.timeout, ConnectionRefusedError):
++        # Socket not available or bridge not listening — caller will fallback.
++        return False
++
++
++def _send_via_fifo(comm, message: dict[str, Any]) -> None:
++    """Legacy FIFO delivery path."""
++    payload = json.dumps(message, ensure_ascii=False) + "\n"
+     with open(comm.input_fifo, "w", encoding="utf-8") as fifo:
+-        fifo.write(json.dumps(message, ensure_ascii=False) + "\n")
++        fifo.write(payload)
+         fifo.flush()
+-    return marker, state
+ 
+ 
+ def ask_async(comm, question: str) -> bool:
+diff --git a/lib/provider_backends/codex/comm_runtime/communicator_state.py b/lib/provider_backends/codex/comm_runtime/communicator_state.py
+index f2be18c..55c965d 100644
+--- a/lib/provider_backends/codex/comm_runtime/communicator_state.py
++++ b/lib/provider_backends/codex/comm_runtime/communicator_state.py
+@@ -92,6 +92,7 @@ def _assign_runtime_state(
+     comm.ccb_session_id = comm.session_info["ccb_session_id"]
+     comm.runtime_dir = Path(comm.session_info["runtime_dir"])
+     comm.input_fifo = Path(comm.session_info["input_fifo"])
++    comm.bridge_socket = Path(comm.session_info.get("bridge_socket") or comm.runtime_dir / "bridge.sock")
+     comm.terminal = _terminal_name(comm.session_info)
+     comm.pane_id = get_pane_id_from_session_fn(comm.session_info) or ""
+     comm.pane_title_marker = comm.session_info.get("pane_title_marker") or ""
+diff --git a/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/health.py b/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/health.py
+index 1dc3719..b3057e9 100644
+--- a/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/health.py
++++ b/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/health.py
+@@ -28,9 +28,13 @@ def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[b
+     if not healthy:
+         return healthy, status
+ 
+-    if not input_fifo.exists():
+-        return False, "Communication pipe does not exist"
+-    return True, "Session healthy"
++    # Dual-track health check: socket or FIFO.
++    bridge_socket = runtime_dir / "bridge.sock"
++    if bridge_socket.exists():
++        return True, "Session healthy (socket)"
++    if input_fifo.exists():
++        return True, "Session healthy (fifo)"
++    return False, "Communication pipe does not exist"
+ 
+ 
+ def _try_read_pid(pid_file: Path, *, missing_message: str, invalid_message: str) -> tuple[int, str | None]:
+diff --git a/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/loading.py b/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/loading.py
+index c05213c..768d7c8 100644
+--- a/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/loading.py
++++ b/lib/provider_backends/codex/comm_runtime/session_runtime_runtime/loading.py
+@@ -21,6 +21,7 @@ def _load_env_session_info(*, session_finder: Callable[[], Path | None]):
+         "runtime_dir": os.environ["CODEX_RUNTIME_DIR"],
+         "input_fifo": os.environ["CODEX_INPUT_FIFO"],
+         "output_fifo": os.environ.get("CODEX_OUTPUT_FIFO", ""),
++        "bridge_socket": os.environ.get("CODEX_BRIDGE_SOCKET", ""),
+         "terminal": os.environ.get("CODEX_TERMINAL", "tmux"),
+         "tmux_session": os.environ.get("CODEX_TMUX_SESSION", ""),
+         "pane_id": os.environ.get("CODEX_TMUX_SESSION", ""),
+diff --git a/lib/provider_backends/codex/launcher.py b/lib/provider_backends/codex/launcher.py
+index c1f46c6..97d4be9 100644
+--- a/lib/provider_backends/codex/launcher.py
++++ b/lib/provider_backends/codex/launcher.py
+@@ -87,6 +87,7 @@ def build_session_payload(
+         'completion_artifact_dir': str(artifacts.completion_dir),
+         'input_fifo': str(input_fifo),
+         'output_fifo': str(output_fifo),
++        'bridge_socket': str(artifacts.bridge_socket),
+         'terminal': 'tmux',
+         'tmux_session': pane_id,
+         'pane_id': pane_id,
+diff --git a/lib/provider_backends/codex/launcher_runtime/bridge.py b/lib/provider_backends/codex/launcher_runtime/bridge.py
+index 712c9e3..abba690 100644
+--- a/lib/provider_backends/codex/launcher_runtime/bridge.py
++++ b/lib/provider_backends/codex/launcher_runtime/bridge.py
+@@ -28,6 +28,7 @@ def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str, prepared_state: dict[
+     env['CODEX_RUNTIME_DIR'] = str(runtime_dir)
+     env['CODEX_INPUT_FIFO'] = str(artifacts.input_fifo)
+     env['CODEX_OUTPUT_FIFO'] = str(artifacts.output_fifo)
++    env['CODEX_BRIDGE_SOCKET'] = str(artifacts.bridge_socket)
+     env['CODEX_TMUX_LOG'] = str(artifacts.bridge_log)
+     env.update(bridge_runtime_env(runtime_dir, prepared_state=prepared_state))
+     existing_pythonpath = env.get('PYTHONPATH', '')
+@@ -64,7 +65,8 @@ def bridge_runtime_env(runtime_dir: Path, *, prepared_state: dict[str, object] |
+ def validate_bridge_bootstrap(runtime_dir: Path) -> None:
+     artifacts = codex_runtime_artifact_layout(runtime_dir)
+     missing: list[str] = []
+-    if not artifacts.input_fifo.exists():
++    # Dual-track: at least one of socket or input_fifo must exist.
++    if not artifacts.bridge_socket.exists() and not artifacts.input_fifo.exists():
+         missing.append(str(artifacts.input_fifo.name))
+     if not artifacts.output_fifo.exists():
+         missing.append(str(artifacts.output_fifo.name))
+diff --git a/lib/provider_backends/codex/runtime_artifacts.py b/lib/provider_backends/codex/runtime_artifacts.py
+index 4134b8e..7f134ce 100644
+--- a/lib/provider_backends/codex/runtime_artifacts.py
++++ b/lib/provider_backends/codex/runtime_artifacts.py
+@@ -9,6 +9,7 @@ class CodexRuntimeArtifacts:
+     runtime_dir: Path
+     input_fifo: Path
+     output_fifo: Path
++    bridge_socket: Path
+     completion_dir: Path
+     history_dir: Path
+     history_file: Path
+@@ -25,6 +26,7 @@ def codex_runtime_artifact_layout(runtime_dir: Path) -> CodexRuntimeArtifacts:
+         runtime_dir=runtime_dir,
+         input_fifo=runtime_dir / 'input.fifo',
+         output_fifo=runtime_dir / 'output.fifo',
++        bridge_socket=runtime_dir / 'bridge.sock',
+         completion_dir=runtime_dir / 'completion',
+         history_dir=runtime_dir / 'history',
+         history_file=runtime_dir / 'history' / 'session.jsonl',
+diff --git a/test/test_v2_cli_parser.py b/test/test_v2_cli_parser.py
+index df2e000..8ff48b9 100644
+--- a/test/test_v2_cli_parser.py
++++ b/test/test_v2_cli_parser.py
+@@ -256,6 +256,7 @@ def test_parse_pend_observer_modes(parser: CliParser) -> None:
+         count=None,
+         observer_mode='watch',
+         detail=False,
++        timeout_s=None,
+     )
+     assert parser.parse(['pend', '--inbox', '--detail', 'agent1']) == ParsedPendCommand(
+         project=None,
+@@ -263,6 +264,7 @@ def test_parse_pend_observer_modes(parser: CliParser) -> None:
+         count=None,
+         observer_mode='inbox',
+         detail=True,
++        timeout_s=None,
+     )
+     assert parser.parse(['pend', '--queue', '--detail', 'all']) == ParsedPendCommand(
+         project=None,
+@@ -270,6 +272,15 @@ def test_parse_pend_observer_modes(parser: CliParser) -> None:
+         count=None,
+         observer_mode='queue',
+         detail=True,
++        timeout_s=None,
++    )
++    assert parser.parse(['pend', '--watch', '--timeout', '300', 'job_123']) == ParsedPendCommand(
++        project=None,
++        target='job_123',
++        count=None,
++        observer_mode='watch',
++        detail=False,
++        timeout_s=300.0,
+     )
+ 
+ 
