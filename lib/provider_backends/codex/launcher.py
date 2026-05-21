@@ -87,6 +87,7 @@ def build_session_payload(
         'completion_artifact_dir': str(artifacts.completion_dir),
         'input_fifo': str(input_fifo),
         'output_fifo': str(output_fifo),
+        'bridge_socket': str(artifacts.bridge_socket),
         'terminal': 'tmux',
         'tmux_session': pane_id,
         'pane_id': pane_id,

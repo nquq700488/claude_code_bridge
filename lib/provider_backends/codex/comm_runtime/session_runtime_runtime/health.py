@@ -28,9 +28,13 @@ def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[b
     if not healthy:
         return healthy, status
 
-    if not input_fifo.exists():
-        return False, "Communication pipe does not exist"
-    return True, "Session healthy"
+    # Dual-track health check: socket or FIFO.
+    bridge_socket = runtime_dir / "bridge.sock"
+    if bridge_socket.exists():
+        return True, "Session healthy (socket)"
+    if input_fifo.exists():
+        return True, "Session healthy (fifo)"
+    return False, "Communication pipe does not exist"
 
 
 def _try_read_pid(pid_file: Path, *, missing_message: str, invalid_message: str) -> tuple[int, str | None]:

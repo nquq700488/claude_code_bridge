@@ -21,6 +21,7 @@ def _load_env_session_info(*, session_finder: Callable[[], Path | None]):
         "runtime_dir": os.environ["CODEX_RUNTIME_DIR"],
         "input_fifo": os.environ["CODEX_INPUT_FIFO"],
         "output_fifo": os.environ.get("CODEX_OUTPUT_FIFO", ""),
+        "bridge_socket": os.environ.get("CODEX_BRIDGE_SOCKET", ""),
         "terminal": os.environ.get("CODEX_TERMINAL", "tmux"),
         "tmux_session": os.environ.get("CODEX_TMUX_SESSION", ""),
         "pane_id": os.environ.get("CODEX_TMUX_SESSION", ""),

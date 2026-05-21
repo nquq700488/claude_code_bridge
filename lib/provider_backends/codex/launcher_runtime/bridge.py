@@ -28,6 +28,7 @@ def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str, prepared_state: dict[
     env['CODEX_RUNTIME_DIR'] = str(runtime_dir)
     env['CODEX_INPUT_FIFO'] = str(artifacts.input_fifo)
     env['CODEX_OUTPUT_FIFO'] = str(artifacts.output_fifo)
+    env['CODEX_BRIDGE_SOCKET'] = str(artifacts.bridge_socket)
     env['CODEX_TMUX_LOG'] = str(artifacts.bridge_log)
     env.update(bridge_runtime_env(runtime_dir, prepared_state=prepared_state))
     existing_pythonpath = env.get('PYTHONPATH', '')
@@ -64,7 +65,8 @@ def bridge_runtime_env(runtime_dir: Path, *, prepared_state: dict[str, object] |
 def validate_bridge_bootstrap(runtime_dir: Path) -> None:
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     missing: list[str] = []
-    if not artifacts.input_fifo.exists():
+    # Dual-track: at least one of socket or input_fifo must exist.
+    if not artifacts.bridge_socket.exists() and not artifacts.input_fifo.exists():
         missing.append(str(artifacts.input_fifo.name))
     if not artifacts.output_fifo.exists():
         missing.append(str(artifacts.output_fifo.name))

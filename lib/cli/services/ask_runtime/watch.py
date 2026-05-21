@@ -86,11 +86,25 @@ def watch_ask_job(
                 write_lines_fn(out, render_watch_batch_fn(batch))
             return batch
         if _deadline_exceeded(deadline, monotonic_fn=monotonic_fn):
-            fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
-            if fallback is not None:
+            # Final attempt: give the daemon one last chance to sync terminal
+            # state before we bail out.
+            final_fallback = _persisted_terminal_batch(context, job_id, cursor=cursor)
+            if final_fallback is not None:
                 if emit_output:
-                    write_lines_fn(out, render_watch_batch_fn(fallback))
-                return fallback
+                    write_lines_fn(out, render_watch_batch_fn(final_fallback))
+                return final_fallback
+
+            # Try an explicit fresh watch call as a last-ditch probe.
+            try:
+                fresh_payload = client.watch(job_id, cursor=cursor)
+                fresh_batch = _watch_batch_from_payload(job_id, fresh_payload)
+                if fresh_batch.terminal:
+                    if emit_output:
+                        write_lines_fn(out, render_watch_batch_fn(fresh_batch))
+                    return fresh_batch
+            except Exception:
+                pass
+
             raise RuntimeError(f'watch timed out for {job_id}')
 
         # Periodic health check: detect pane death or degraded agent early

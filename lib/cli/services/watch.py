@@ -23,6 +23,12 @@ def _watch_poll_interval_seconds() -> float:
 
 
 def watch_target(context, command):
+    def _resolve_timeout_seconds() -> float:
+        explicit = getattr(command, 'timeout', None)
+        if explicit is not None:
+            return float(explicit)
+        return _watch_timeout_seconds()
+
     return _watch_target_impl(
         context,
         command,
@@ -30,7 +36,7 @@ def watch_target(context, command):
         reconnect_error_classes=(CcbdClientError, CcbdServiceError),
         time_fn=time.time,
         sleep_fn=time.sleep,
-        timeout_seconds_fn=_watch_timeout_seconds,
+        timeout_seconds_fn=_resolve_timeout_seconds,
         poll_interval_seconds_fn=_watch_poll_interval_seconds,
     )
 

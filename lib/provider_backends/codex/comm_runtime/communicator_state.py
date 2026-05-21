@@ -92,6 +92,7 @@ def _assign_runtime_state(
     comm.ccb_session_id = comm.session_info["ccb_session_id"]
     comm.runtime_dir = Path(comm.session_info["runtime_dir"])
     comm.input_fifo = Path(comm.session_info["input_fifo"])
+    comm.bridge_socket = Path(comm.session_info.get("bridge_socket") or comm.runtime_dir / "bridge.sock")
     comm.terminal = _terminal_name(comm.session_info)
     comm.pane_id = get_pane_id_from_session_fn(comm.session_info) or ""
     comm.pane_title_marker = comm.session_info.get("pane_title_marker") or ""

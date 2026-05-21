@@ -95,10 +95,27 @@ def watch_target(
                 yield batch
             return
         if _deadline_exceeded(deadline, time_fn=time_fn):
-            fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
-            if fallback is not None:
-                yield fallback
+            # Final attempt: give the daemon one last chance to sync terminal
+            # state before we bail out. This avoids false timeouts when the
+            # agent finished just before the deadline but observer state hasn't
+            # caught up yet.
+            final_fallback = _persisted_terminal_batch(context, command.target, cursor=cursor)
+            if final_fallback is not None:
+                yield final_fallback
                 return
+
+            # Try an explicit fresh watch call with current cursor as a last-ditch
+            # probe (some daemon implementations flush terminal state on fresh
+            # watch requests that are not long-polling).
+            try:
+                fresh_payload = handle.client.watch(command.target, cursor=cursor)
+                fresh_batch = _watch_batch_from_payload(command.target, fresh_payload)
+                if fresh_batch.terminal:
+                    yield fresh_batch
+                    return
+            except Exception:
+                pass
+
             raise RuntimeError(f"watch timed out for target {command.target}")
         sleep_fn(poll_interval)
 

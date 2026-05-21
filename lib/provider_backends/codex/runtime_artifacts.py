@@ -9,6 +9,7 @@ class CodexRuntimeArtifacts:
     runtime_dir: Path
     input_fifo: Path
     output_fifo: Path
+    bridge_socket: Path
     completion_dir: Path
     history_dir: Path
     history_file: Path
@@ -25,6 +26,7 @@ def codex_runtime_artifact_layout(runtime_dir: Path) -> CodexRuntimeArtifacts:
         runtime_dir=runtime_dir,
         input_fifo=runtime_dir / 'input.fifo',
         output_fifo=runtime_dir / 'output.fifo',
+        bridge_socket=runtime_dir / 'bridge.sock',
         completion_dir=runtime_dir / 'completion',
         history_dir=runtime_dir / 'history',
         history_file=runtime_dir / 'history' / 'session.jsonl',

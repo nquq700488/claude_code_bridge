@@ -256,6 +256,7 @@ def test_parse_pend_observer_modes(parser: CliParser) -> None:
         count=None,
         observer_mode='watch',
         detail=False,
+        timeout_s=None,
     )
     assert parser.parse(['pend', '--inbox', '--detail', 'agent1']) == ParsedPendCommand(
         project=None,
@@ -263,6 +264,7 @@ def test_parse_pend_observer_modes(parser: CliParser) -> None:
         count=None,
         observer_mode='inbox',
         detail=True,
+        timeout_s=None,
     )
     assert parser.parse(['pend', '--queue', '--detail', 'all']) == ParsedPendCommand(
         project=None,
@@ -270,6 +272,15 @@ def test_parse_pend_observer_modes(parser: CliParser) -> None:
         count=None,
         observer_mode='queue',
         detail=True,
+        timeout_s=None,
+    )
+    assert parser.parse(['pend', '--watch', '--timeout', '300', 'job_123']) == ParsedPendCommand(
+        project=None,
+        target='job_123',
+        count=None,
+        observer_mode='watch',
+        detail=False,
+        timeout_s=300.0,
     )
 
 

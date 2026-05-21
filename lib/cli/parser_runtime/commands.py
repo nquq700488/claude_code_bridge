@@ -67,6 +67,7 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
     parser.add_argument('--inbox', action='store_true')
     parser.add_argument('--queue', action='store_true')
     parser.add_argument('--detail', action='store_true')
+    parser.add_argument('--timeout', type=float, default=None)
     parser.add_argument('target')
     parser.add_argument('count', nargs='?')
     namespace = parse_args(parser, tokens, error_message='invalid pend command', error_type=error_type)
@@ -92,12 +93,18 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
             raise error_type('pend count must be positive')
     if count is not None and observer_mode != 'snapshot':
         raise error_type('pend count is only supported for snapshot mode')
+    timeout_s = float(namespace.timeout) if namespace.timeout is not None else None
+    if timeout_s is not None and timeout_s <= 0:
+        raise error_type('pend --timeout must be positive')
+    if timeout_s is not None and observer_mode != 'watch':
+        raise error_type('pend --timeout is only supported for --watch')
     return ParsedPendCommand(
         project=project,
         target=str(namespace.target),
         count=count,
         observer_mode=observer_mode,
         detail=bool(namespace.detail),
+        timeout_s=timeout_s,
     )
 
 

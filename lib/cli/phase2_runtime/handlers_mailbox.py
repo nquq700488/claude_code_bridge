@@ -12,7 +12,7 @@ def handle_ping(context, command, out, services) -> int:
 def handle_pend(context, command, out, services) -> int:
     if getattr(command, 'observer_mode', 'snapshot') == 'watch':
         services.write_lines(out, services.render_observer_notice(view='watch', terminal=False))
-        watch_command = SimpleNamespace(target=command.target)
+        watch_command = SimpleNamespace(target=command.target, timeout=getattr(command, 'timeout_s', None))
         for batch in services.watch_target(context, watch_command):
             services.write_lines(out, services.render_watch_batch(batch))
         return 0

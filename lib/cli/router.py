@@ -132,13 +132,15 @@ _COMMAND_HELP = {
           ccb ping ccbd      Show cached project daemon status.
     """,
     "pend": """
-        usage: ccb pend [--watch|--inbox|--queue] [--detail] <agent|job_id|all> [N]
+        usage: ccb pend [--watch|--inbox|--queue] [--detail] [--timeout S] <agent|job_id|all> [N]
 
         Weak observer surface:
           Primary weak observer entrypoint:
             ccb pend <agent>                    Show a non-authoritative observer snapshot for one agent.
             ccb pend <job_id>                   Show a non-authoritative observer snapshot for one submitted job.
             ccb pend --watch <agent|job_id>     Stream non-authoritative observer events via the converged observer entrypoint.
+            ccb pend --watch --timeout 300 <agent|job_id>
+                                                Stream with a 300-second timeout (default from CCB_WATCH_TIMEOUT_S, or 10s).
             ccb pend --inbox <agent>            Show a non-authoritative inbox summary via the converged observer entrypoint.
             ccb pend --inbox --detail <agent>   Expand inbox-item detail via the converged observer entrypoint.
             ccb pend --queue <agent|all>        Show the same non-authoritative backlog summary exposed by `ccb queue`.
