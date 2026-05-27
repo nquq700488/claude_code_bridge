@@ -20,6 +20,7 @@ class RuntimeSupervisionContext:
     event_store: SupervisionEventStore
     mount_missing_runtime_fn: Callable[[str], bool]
     supervision_suspended_fn: Callable[[], bool]
+    webhook: object | None = None
 
 
 def build_runtime_supervision_context(
@@ -36,6 +37,7 @@ def build_runtime_supervision_context(
     event_store: SupervisionEventStore | None = None,
     mount_missing_runtime_fn: Callable[[str], bool] | None = None,
     supervision_suspended_fn: Callable[[], bool] | None = None,
+    webhook=None,
 ) -> RuntimeSupervisionContext:
     return RuntimeSupervisionContext(
         project_id=project_id,
@@ -50,6 +52,7 @@ def build_runtime_supervision_context(
         event_store=event_store or SupervisionEventStore(layout),
         mount_missing_runtime_fn=mount_missing_runtime_fn or (lambda agent_name: True),
         supervision_suspended_fn=supervision_suspended_fn or (lambda: False),
+        webhook=webhook,
     )
 
 

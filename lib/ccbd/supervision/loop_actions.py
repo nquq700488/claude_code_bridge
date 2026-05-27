@@ -19,7 +19,7 @@ from .loop_runtime import (
 
 
 def ensure_agent_mounted(ctx: RuntimeSupervisionContext, agent_name: str, *, runtime):
-    return ensure_mounted_impl(
+    result = ensure_mounted_impl(
         project_id=ctx.project_id,
         agent_name=agent_name,
         runtime=runtime,
@@ -37,6 +37,8 @@ def ensure_agent_mounted(ctx: RuntimeSupervisionContext, agent_name: str, *, run
         align_runtime_authority_fn=partial(align_runtime_authority, ctx),
         normalized_runtime_health_fn=normalized_runtime_health,
     )
+    _notify_webhook_supervision(ctx, agent_name, result, 'mount')
+    return result
 
 
 def persist_mount_failure(
@@ -63,7 +65,7 @@ def persist_mount_failure(
 
 
 def recover_agent_runtime(ctx: RuntimeSupervisionContext, agent_name: str, *, runtime) -> str:
-    return recover_runtime_impl(
+    result = recover_runtime_impl(
         project_id=ctx.project_id,
         agent_name=agent_name,
         runtime=runtime,
@@ -76,6 +78,25 @@ def recover_agent_runtime(ctx: RuntimeSupervisionContext, agent_name: str, *, ru
         upsert_if_changed_fn=partial(upsert_if_changed, ctx),
         is_in_backoff_window_fn=partial(is_in_backoff_window, ctx),
         should_reflow_project_namespace_fn=partial(should_reflow_project_namespace, ctx),
+    )
+    _notify_webhook_supervision(ctx, agent_name, result, 'recovery')
+    return result
+
+
+def _notify_webhook_supervision(ctx: RuntimeSupervisionContext, agent_name: str, result: str, action: str) -> None:
+    webhook = getattr(ctx, 'webhook', None)
+    if webhook is None:
+        return
+    event_type = f'supervision.{action}'
+    is_success = result in {'healthy', 'restored'}
+    webhook.send(
+        event_type,
+        {
+            'agent_name': agent_name,
+            'action': action,
+            'result': result,
+            'success': is_success,
+        },
     )
 
 

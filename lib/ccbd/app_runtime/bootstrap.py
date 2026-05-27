@@ -28,6 +28,7 @@ from ccbd.services.project_namespace import ProjectNamespaceController
 from ccbd.services.project_namespace_state import ProjectNamespaceEventStore, ProjectNamespaceStateStore
 from ccbd.services.start_policy import CcbdStartPolicyStore
 from ccbd.socket_server import CcbdSocketServer
+from ccbd.services.webhook import load_webhook_config_from_env, WebhookSender
 from ccbd.supervision import RuntimeSupervisionLoop
 from ccbd.supervisor import RuntimeSupervisor
 from fault_injection import FaultInjectionService
@@ -84,6 +85,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         clock=app.clock,
     )
     app.project_namespace = ProjectNamespaceController(app.paths, app.project_id, clock=app.clock)
+    app.webhook = WebhookSender(load_webhook_config_from_env())
     app.runtime_supervisor = RuntimeSupervisor(
         project_root=app.project_root,
         project_id=app.project_id,
@@ -106,6 +108,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         generation_getter=lambda: app.lease.generation if app.lease is not None else None,
         mount_missing_runtime_fn=lambda agent_name: app._mount_missing_runtime_requested(agent_name),
         supervision_suspended_fn=lambda: lifecycle_is_stopping(_safe_load_lifecycle(app)),
+        webhook=app.webhook,
     )
     app.snapshot_writer = SnapshotWriter(app.paths, clock=app.clock)
     app.execution_registry = build_default_execution_registry()
@@ -183,6 +186,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
             except Exception:
                 pass
 
+    app.dispatcher._webhook = app.webhook
     app.health_monitor = HealthMonitor(
         app.registry,
         app.ownership_guard,
@@ -193,6 +197,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         namespace_state_store=app.namespace_state_store,
         on_degraded_fn=_cancel_active_job_for_agent,
     )
+    app.health_monitor._webhook = app.webhook
     app.socket_server = CcbdSocketServer(app.paths.ccbd_socket_path)
     app.socket_server._record_request_queue_wait = lambda value: setattr(
         app.control_plane_metrics,

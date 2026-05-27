@@ -17,6 +17,8 @@ def rebind_runtime(
     pane_id_override: str | None = None,
     force_session_ref_update: bool = False,
 ):
+    prior_health = getattr(runtime, 'health', None)
+    prior_state = getattr(runtime, 'state', None)
     facts = monitor._provider_runtime_facts(
         runtime,
         session,
@@ -42,27 +44,52 @@ def rebind_runtime(
             pane_state='alive',
             **updated_fields,
         )
-        return monitor._runtime_service.patch_runtime_state(
+        updated = monitor._runtime_service.patch_runtime_state(
             rebound,
             state=_next_state(runtime),
             last_seen_at=monitor._clock(),
         )
-    updated = replace(
-        runtime,
-        state=_next_state(runtime),
-        pid=_next_pid(runtime=runtime, facts=facts),
-        session_ref=next_session_ref,
-        health=_next_health(runtime),
-        pane_id=pane_id or runtime.pane_id,
-        active_pane_id=pane_id or runtime.active_pane_id,
-        pane_state='alive',
-        last_seen_at=monitor._clock(),
-        **updated_fields,
-    )
-    upsert_authority = getattr(monitor._registry, 'upsert_authority', None)
-    if callable(upsert_authority):
-        return upsert_authority(updated)
-    return monitor._registry.upsert(updated)
+    else:
+        updated = replace(
+            runtime,
+            state=_next_state(runtime),
+            pid=_next_pid(runtime=runtime, facts=facts),
+            session_ref=next_session_ref,
+            health=_next_health(runtime),
+            pane_id=pane_id or runtime.pane_id,
+            active_pane_id=pane_id or runtime.active_pane_id,
+            pane_state='alive',
+            last_seen_at=monitor._clock(),
+            **updated_fields,
+        )
+        upsert_authority = getattr(monitor._registry, 'upsert_authority', None)
+        if callable(upsert_authority):
+            updated = upsert_authority(updated)
+        else:
+            updated = monitor._registry.upsert(updated)
+    _maybe_notify_webhook_rebind(monitor, updated, prior_health, prior_state)
+    return updated
+
+
+def _maybe_notify_webhook_rebind(monitor, runtime, prior_health, prior_state):
+    webhook = getattr(monitor, '_webhook', None)
+    if webhook is None:
+        return
+    new_health = getattr(runtime, 'health', None)
+    new_state = getattr(runtime, 'state', None)
+    if prior_health not in {'healthy', 'restored'} and new_health in {'healthy', 'restored'}:
+        webhook.send(
+            'agent.recovered',
+            {
+                'agent_name': runtime.agent_name,
+                'prior_state': str(prior_state) if prior_state is not None else None,
+                'prior_health': str(prior_health) if prior_health is not None else None,
+                'state': str(new_state) if new_state is not None else None,
+                'health': str(new_health) if new_health is not None else None,
+                'pane_id': getattr(runtime, 'pane_id', None),
+                'pane_state': getattr(runtime, 'pane_state', None),
+            },
+        )
 
 
 def _bound_pane_id(*, facts, pane_id_override: str | None, session) -> str | None:

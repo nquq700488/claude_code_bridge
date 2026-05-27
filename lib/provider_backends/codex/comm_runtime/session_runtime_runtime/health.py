@@ -4,6 +4,8 @@ import os
 import subprocess
 from pathlib import Path
 
+from provider_backends.codex.runtime_artifacts import _bridge_socket_path
+
 
 def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[bool, str]:
     codex_pid, codex_error = _try_read_pid(
@@ -29,7 +31,7 @@ def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[b
         return healthy, status
 
     # Dual-track health check: socket or FIFO.
-    bridge_socket = runtime_dir / "bridge.sock"
+    bridge_socket = _bridge_socket_path(runtime_dir)
     if bridge_socket.exists():
         return True, "Session healthy (socket)"
     if input_fifo.exists():

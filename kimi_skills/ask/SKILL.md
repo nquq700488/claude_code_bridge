@@ -69,6 +69,14 @@ $MESSAGE
 EOF
 ```
 
+Notify-sender on completion: when the caller needs to be notified (via inbox) once the target agent finishes, regardless of success or failure:
+
+```bash
+command ccb ask --notify-sender "$TARGET" <<'EOF'
+$MESSAGE
+EOF
+```
+
 Only if the user explicitly asks to wait for the reply in the same turn:
 
 ```bash
@@ -89,6 +97,7 @@ EOF
 
 - Execute exactly one snippet above, then stop, unless the user explicitly asked to wait.
 - If async output contains `[CCB_ASYNC_SUBMITTED ...]`, end the turn immediately. Do not inspect, summarize follow-up state, or poll for replies in the same turn.
+- When `--notify-sender` is used, the sender's inbox will receive a system notice when the job completes, fails, or is cancelled. The caller can check `ccb inbox <sender>` in a later turn to pick up the notification.
 - Do not add extra filler like "processing...". The command output is the result.
 - Do not run `pend`, `ping`, retries, or other follow-up commands unless the user explicitly asks.
 - Do not rewrite target names. `cmd` is reserved as the control pane name and must not be used as an agent target or mailbox target.
@@ -109,6 +118,9 @@ EOF
   `EOF`
 - `command ccb ask --wait "agent1" <<'EOF'`
   `1+1=?`
+  `EOF`
+- `command ccb ask --notify-sender "designer" <<'EOF'`
+  `请设计登录页面，完成后通知我`
   `EOF`
 
 ## Notes

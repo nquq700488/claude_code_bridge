@@ -117,7 +117,9 @@ def _launch_tmux_runtime(
         assigned_pane_id=assigned_pane_id,
         style_index=style_index,
         tmux_socket_path=tmux_socket_path,
-        allow_detached_fallback=tmux_socket_path is None,
+        # Allow detached fallback so background recovery can create a new pane
+        # when the assigned pane is missing/foreign (e.g. after pane was reclaimed).
+        allow_detached_fallback=True,
     )
 
 

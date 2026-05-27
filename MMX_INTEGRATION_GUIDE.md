@@ -1,6 +1,8 @@
 # CCB 接入 MiniMax (mmx) 完整流程与踩坑记录
 
-> 记录将 MiniMax CLI (`mmx`) 接入 CCB (Claude Code Bridge) v6.0.4 的全过程。
+> 记录将 MiniMax CLI (`mmx`) 接入 CCB (Collaborative Code Bridge) 的全过程。
+>
+> **名称演变**：CCB 最初代表 "Claude Code Bridge"，现在代表 "Collaborative Code Bridge"。
 
 ## 一、环境准备
 

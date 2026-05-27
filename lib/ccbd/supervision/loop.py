@@ -30,6 +30,7 @@ class RuntimeSupervisionLoop:
         event_store: SupervisionEventStore | None = None,
         mount_missing_runtime_fn=None,
         supervision_suspended_fn=None,
+        webhook=None,
     ) -> None:
         self._ctx = build_runtime_supervision_context(
             project_id=project_id,
@@ -44,6 +45,7 @@ class RuntimeSupervisionLoop:
             event_store=event_store,
             mount_missing_runtime_fn=mount_missing_runtime_fn,
             supervision_suspended_fn=supervision_suspended_fn,
+            webhook=webhook,
         )
 
     def reconcile_once(self) -> dict[str, str]:

@@ -78,10 +78,37 @@ def pane_health(monitor, runtime) -> str | None:
 
 
 def _patch_runtime_state(monitor, runtime, **updates):
+    prior_health = getattr(runtime, 'health', None)
+    prior_state = getattr(runtime, 'state', None)
     if monitor._runtime_service is not None:
-        return monitor._runtime_service.patch_runtime_state(runtime, **updates)
-    updated = replace(runtime, **updates)
-    return monitor._registry.upsert(updated)
+        updated = monitor._runtime_service.patch_runtime_state(runtime, **updates)
+    else:
+        updated = replace(runtime, **updates)
+        updated = monitor._registry.upsert(updated)
+    _maybe_notify_webhook_health_change(monitor, updated, prior_health, prior_state)
+    return updated
+
+
+def _maybe_notify_webhook_health_change(monitor, runtime, prior_health, prior_state):
+    webhook = getattr(monitor, '_webhook', None)
+    if webhook is None:
+        return
+    new_health = getattr(runtime, 'health', None)
+    new_state = getattr(runtime, 'state', None)
+    # Notify when agent recovers from degraded/failed to healthy/idle
+    if prior_health not in {'healthy', 'restored'} and new_health in {'healthy', 'restored'}:
+        webhook.send(
+            'agent.recovered',
+            {
+                'agent_name': runtime.agent_name,
+                'prior_state': str(prior_state) if prior_state is not None else None,
+                'prior_health': str(prior_health) if prior_health is not None else None,
+                'state': str(new_state) if new_state is not None else None,
+                'health': str(new_health) if new_health is not None else None,
+                'pane_id': getattr(runtime, 'pane_id', None),
+                'pane_state': getattr(runtime, 'pane_state', None),
+            },
+        )
 
 
 __all__ = [

@@ -15,6 +15,7 @@ class ParsedAskCommand:
     compact: bool = False
     silence: bool = False
     callback: bool = False
+    notify_sender: bool = False
     kind: str = 'ask'
 
 

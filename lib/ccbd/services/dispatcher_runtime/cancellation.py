@@ -88,6 +88,7 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
     if dispatcher._message_bureau is not None:
         dispatcher._message_bureau.record_terminal(terminal, decision, finished_at=cancelled_at, record_reply=record_reply)
     resolve_reply_delivery_terminal(dispatcher, terminal, finished_at=cancelled_at)
+    _notify_webhook_cancelled(dispatcher, terminal)
     return CancelReceipt(
         job_id=terminal.job_id,
         agent_name=terminal.agent_name,
@@ -96,6 +97,22 @@ def cancel_with_decision(dispatcher, current, cancelled_at: str, reply: str, sna
         provider_instance=terminal.provider_instance,
         status=JobStatus.CANCELLED,
         cancelled_at=cancelled_at,
+    )
+
+
+def _notify_webhook_cancelled(dispatcher, job):
+    webhook = getattr(dispatcher, '_webhook', None)
+    if webhook is None:
+        return
+    webhook.send(
+        'job.cancelled',
+        {
+            'job_id': job.job_id,
+            'agent_name': job.agent_name,
+            'status': 'cancelled',
+            'message': getattr(job, 'message', None),
+            'finished_at': getattr(job, 'finished_at', None),
+        },
     )
 
 

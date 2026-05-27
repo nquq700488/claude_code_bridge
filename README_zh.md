@@ -69,6 +69,8 @@ CCB 也支持复杂工作流，但它不是自动生成 DAG 的 harness；复杂
 
 ## CCB 是什么
 
+> **名称演变**：CCB 最初代表 "Claude Code Bridge"。随着项目扩展到支持多模型（Codex、Claude、Gemini、OpenCode、Kimi、Droid、MMX），这个缩写现在代表 **"Collaborative Code Bridge"** —— 一个让多个 CLI agent 协作的项目级工作台。
+
 CCB 是一个项目级 agent CLI 工作台。它用 tmux 管理多个真实 CLI agent，把启动、恢复、通信、配置、窗口和运行态聚合在一个项目里。
 
 - **真实 CLI，不是模拟面板**：每个 agent pane 都运行对应 provider 的真实 CLI。

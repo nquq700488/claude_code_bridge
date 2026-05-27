@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 from provider_core.runtime_specs import provider_marker_prefix
+from provider_backends.codex.runtime_artifacts import _bridge_socket_path
 from provider_backends.codex.session_runtime.follow_policy import codex_session_root_path, should_follow_workspace_sessions
 
 
@@ -92,7 +93,7 @@ def _assign_runtime_state(
     comm.ccb_session_id = comm.session_info["ccb_session_id"]
     comm.runtime_dir = Path(comm.session_info["runtime_dir"])
     comm.input_fifo = Path(comm.session_info["input_fifo"])
-    comm.bridge_socket = Path(comm.session_info.get("bridge_socket") or comm.runtime_dir / "bridge.sock")
+    comm.bridge_socket = Path(comm.session_info.get("bridge_socket") or _bridge_socket_path(comm.runtime_dir))
     comm.terminal = _terminal_name(comm.session_info)
     comm.pane_id = get_pane_id_from_session_fn(comm.session_info) or ""
     comm.pane_title_marker = comm.session_info.get("pane_title_marker") or ""

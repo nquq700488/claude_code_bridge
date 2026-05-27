@@ -108,9 +108,12 @@ def submit_ask(
 
 
 def _route_options(command) -> dict[str, object]:
-    if not bool(getattr(command, 'callback', False)):
-        return {}
-    return {'mode': 'callback'}
+    options: dict[str, object] = {}
+    if bool(getattr(command, 'callback', False)):
+        options['mode'] = 'callback'
+    if bool(getattr(command, 'notify_sender', False)):
+        options['notify_sender'] = True
+    return options
 
 
 def message_with_reply_guidance(

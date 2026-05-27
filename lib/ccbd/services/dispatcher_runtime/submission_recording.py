@@ -130,6 +130,7 @@ def _submit_plan(dispatcher, plan: _SubmissionPlan, *, accepted_at: str) -> tupl
                 accepted_at=accepted_at,
             )
 
+    _notify_webhook_submitted(dispatcher, jobs)
     return (
         SubmitReceipt(
             accepted_at=accepted_at,
@@ -161,6 +162,22 @@ def _append_submission_job(dispatcher, submission_id: str | None, *, job_id: str
             updated_at=updated_at,
         )
     )
+
+
+def _notify_webhook_submitted(dispatcher, jobs):
+    webhook = getattr(dispatcher, '_webhook', None)
+    if webhook is None:
+        return
+    for job in jobs:
+        webhook.send(
+            'job.submitted',
+            {
+                'job_id': job.job_id,
+                'agent_name': job.agent_name,
+                'message': getattr(job, 'message', None),
+                'status': getattr(job.status, 'value', str(job.status)) if hasattr(job, 'status') else None,
+            },
+        )
 
 
 __all__ = [

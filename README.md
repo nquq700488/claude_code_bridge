@@ -69,6 +69,8 @@ CCB also supports complex workflows, but it is not an automatic DAG generator. Y
 
 ## What Is CCB?
 
+> **Name evolution**: CCB originally stood for "Claude Code Bridge". As the project grew to support multiple AI providers (Codex, Claude, Gemini, OpenCode, Kimi, Droid, MMX), the acronym now represents **"Collaborative Code Bridge"** — a project-level workspace where multiple CLI agents collaborate.
+
 CCB is a project-level agent CLI workspace. It uses tmux to manage multiple real CLI agents and unifies startup, restore, communication, configuration, windows, and runtime state for one project.
 
 - **Real CLI sessions, not fake panels**: every agent pane runs the actual provider CLI.

@@ -20,13 +20,30 @@ class CodexRuntimeArtifacts:
     codex_pid: Path
 
 
+def _bridge_socket_path(runtime_dir: Path) -> Path:
+    """Return a Unix-domain socket path that fits platform limits.
+
+    macOS limits AF_UNIX paths to 104 bytes (including null terminator).
+    When the default path under ``runtime_dir`` would exceed that, fall
+    back to a short path in ``/tmp`` keyed by a hash of ``runtime_dir``.
+    """
+    runtime_dir = Path(runtime_dir)
+    default_path = runtime_dir / 'bridge.sock'
+    # Leave a few bytes of headroom for the null terminator and safety.
+    if len(str(default_path)) <= 100:
+        return default_path
+    import hashlib
+    short_hash = hashlib.sha256(str(runtime_dir).encode()).hexdigest()[:16]
+    return Path(f'/tmp/ccb-codex-{short_hash}.sock')
+
+
 def codex_runtime_artifact_layout(runtime_dir: Path) -> CodexRuntimeArtifacts:
     runtime_dir = Path(runtime_dir)
     return CodexRuntimeArtifacts(
         runtime_dir=runtime_dir,
         input_fifo=runtime_dir / 'input.fifo',
         output_fifo=runtime_dir / 'output.fifo',
-        bridge_socket=runtime_dir / 'bridge.sock',
+        bridge_socket=_bridge_socket_path(runtime_dir),
         completion_dir=runtime_dir / 'completion',
         history_dir=runtime_dir / 'history',
         history_file=runtime_dir / 'history' / 'session.jsonl',

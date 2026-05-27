@@ -57,6 +57,7 @@ def mark_degraded(monitor, runtime, *, health: str, session=None, binding=None):
 
     # Notify the dispatcher to cancel any active job for this agent.
     _notify_degraded(monitor, updated)
+    _notify_webhook_degraded(monitor, updated)
     return updated
 
 
@@ -67,6 +68,22 @@ def _notify_degraded(monitor, runtime):
             on_degraded(runtime.agent_name)
         except Exception:
             pass
+
+
+def _notify_webhook_degraded(monitor, runtime):
+    webhook = getattr(monitor, '_webhook', None)
+    if webhook is None:
+        return
+    webhook.send(
+        'agent.degraded',
+        {
+            'agent_name': runtime.agent_name,
+            'state': getattr(runtime, 'state', None),
+            'health': getattr(runtime, 'health', None),
+            'pane_id': getattr(runtime, 'pane_id', None),
+            'pane_state': getattr(runtime, 'pane_state', None),
+        },
+    )
 
 
 __all__ = ['mark_degraded']

@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v6.2.6 | 最后更新：2026-05-20
+> 版本：适用于 CCB v7.0.9 | 最后更新：2026-05-27
 
 ---
 
@@ -23,10 +23,14 @@
 
 ## CCB 简介
 
-**CCB (Claude Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX），并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
+> **名称演变**：CCB 最初代表 **Claude Code Bridge**。随着项目扩展到支持多模型协作（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX），这个缩写现在代表 **Collaborative Code Bridge** —— 协作代码桥。
+
+**CCB (Collaborative Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX），并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
 
 核心能力：
 - 一键启停多个 AI CLI Agent
+- **原生 Agent Sidebar（v7.0+）**：每个 tmux 窗口左侧实时显示所有 Agent 状态，支持点击切换焦点
+- **多窗口拓扑（v7.0+）**：一个项目可配置多个 tmux 窗口，每个窗口有独立的 Agent 布局和 Sidebar
 - Agent 间异步通信（邮箱系统）
 - 按项目配置 Agent 团队和 tmux 分屏布局
 - 每个 Agent 独立配置 API key、模型、端点
@@ -93,8 +97,8 @@ sudo pacman -S python
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/bfly123/claude_codex_bridge.git
-cd claude_codex_bridge
+git clone https://github.com/bfly123/claude_code_bridge.git
+cd claude_code_bridge
 ```
 
 ### 2. 执行安装
@@ -105,7 +109,7 @@ cd claude_codex_bridge
 
 > **Windows 用户**：`install.ps1` 仅支持基础安装（不含 tmux 主题、`mmx-daemon`、Codex/Droid/Kimi skills），**推荐在 WSL 中使用 `install.sh` 获得完整功能**。
 
-### 安装脚本会做什么（v6.2.x）
+### 安装脚本会做什么（v7.0.x）
 
 安装脚本会按顺序执行以下步骤，每步有中文/英文双语提示：
 
@@ -129,13 +133,16 @@ cd claude_codex_bridge
    - `autonew` → 自动新建会话
    - `ctx-transfer` → 上下文传递
    - `mmx-daemon` → MMX 守护进程
+   - `ccb-agent-sidebar` → Agent Sidebar 原生 TUI（v7.0+）
+   - `build-ccb-agent-sidebar` → Sidebar 构建脚本（v7.0+）
+   - `package-ccb-agent-sidebar-release` → Sidebar 发布打包（v7.0+）
 
 5. **配置 PATH**
    - 自动将 `~/.local/bin` 添加到 shell 配置文件（`.zshrc` / `.bashrc` / `.bash_profile`）
 
-6. **安装 Inherited Skills（v6.2.1+）**
+6. **安装 Inherited Skills（v7.0+）**
    - 技能源文件从 `inherit_skills/` 目录复制到各 Provider 的 skills 目录
-   - Claude skills → `~/.claude/skills/`（ask, ccb_config 等）
+   - Claude skills → `~/.claude/skills/`（ask, ccb-config, ccb-clear 等）
    - Codex skills → `~/.codex/skills/`
    - Droid/Factory skills → `~/.factory/skills/`（若检测到 droid CLI）
    - Kimi skills → `~/.kimi/skills/`（若检测到 kimi CLI）
@@ -149,11 +156,16 @@ cd claude_codex_bridge
 8. **配置权限**
    - 在 `~/.claude/settings.json` 中添加 `Bash(ccb ask/ping/pend *)` 权限
 
-9. **配置 tmux（v6.2.6+ 隔离）**
+9. **配置 tmux（v7.0+ 隔离）**
    - CCB 管理的 tmux 命令默认使用 `tmux -f /dev/null`，**用户的 `~/.tmux.conf` 插件和 hook 不会影响 CCB pane 拓扑**
    - 如需显式指定 tmux 配置文件，可通过环境变量 `CCB_TMUX_CONFIG=/path/to/custom.conf`
    - 安装脚本仍会追加 CCB 专用 tmux 配置到 `~/.tmux.conf`（或 `~/.tmux.conf.local`），供手动 attach 时使用
    - 包括 Tokyo Night 主题、vim 风格按键、鼠标支持、剪贴板集成
+
+10. **构建 Agent Sidebar 二进制（v7.0+）**
+    - 若系统安装了 Rust 工具链（`cargo`），自动编译 `tools/ccb-agent-sidebar/`
+    - Sidebar 作为原生 TUI 嵌入每个 tmux 窗口左侧，实时显示 Agent 状态
+    - 未安装 Rust 时，Sidebar 功能不可用，但 CCB 核心功能不受影响
 
 10. **注册 Droid MCP 委托（可选）**
     - 若检测到 `droid` CLI，自动注册 `ccb-delegation` MCP 工具
@@ -164,26 +176,31 @@ cd claude_codex_bridge
 ```
 ~/.local/
 ├── bin/
-│   ├── ccb                 # 主入口
-│   ├── ask                 # Agent 通信
-│   ├── autonew             # 自动新建会话
-│   ├── ctx-transfer        # 上下文传递
-│   ├── mmx-daemon          # MMX 守护进程
-│   ├── ccb-status.sh       # 状态栏脚本
-│   ├── ccb-border.sh       # 边框颜色脚本
-│   ├── ccb-git.sh          # Git 状态脚本
-│   ├── ccb-tmux-on.sh      # 主题启用
-│   └── ccb-tmux-off.sh     # 主题关闭
+│   ├── ccb                         # 主入口
+│   ├── ask                         # Agent 通信
+│   ├── autonew                     # 自动新建会话
+│   ├── ctx-transfer                # 上下文传递
+│   ├── mmx-daemon                  # MMX 守护进程
+│   ├── ccb-agent-sidebar           # Agent Sidebar 原生 TUI（v7.0+）
+│   ├── build-ccb-agent-sidebar     # Sidebar 构建脚本（v7.0+）
+│   ├── package-ccb-agent-sidebar-release  # Sidebar 发布打包（v7.0+）
+│   ├── ccb-status.sh               # 状态栏脚本
+│   ├── ccb-border.sh               # 边框颜色脚本
+│   ├── ccb-git.sh                  # Git 状态脚本
+│   ├── ccb-tmux-on.sh              # 主题启用
+│   └── ccb-tmux-off.sh             # 主题关闭
 └── share/
     └── ccb/
         ├── ccb             # Python 入口
         ├── lib/            # Python 核心库
         ├── config/         # 配置模板
-        ├── inherit_skills/  # Inherited skills 源文件（v6.2.1+）
+        ├── inherit_skills/  # Inherited skills 源文件（v7.0+）
         │   ├── claude_skills/
         │   ├── codex_skills/
         │   ├── droid_skills/
         │   └── kimi_skills/
+        ├── tools/           # 原生工具（v7.0+）
+        │   └── ccb-agent-sidebar/  # Rust TUI Sidebar
         ├── dev_tools/       # 维护者开发工具（不随 release 安装）
         ├── useful_tools/    # 可选用户工具（随 release 分发，不自动安装）
         ├── mcp/             # MCP 委托服务
@@ -212,6 +229,7 @@ cd claude_codex_bridge
 | `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
 | `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
 | `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒） |
+| `CCB_KEYCHAIN_SERVICE_OVERRIDE` | 空 | macOS Keychain 服务名覆盖（v7.0.4+） |
 | `CODEX_CLAUDE_COMMAND_DIR` | 自动检测 | 自定义 Claude commands 目录 |
 
 ---
@@ -302,7 +320,7 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 - `,` — 上下堆叠（vertical split）
 - `(worktree)` — 该 Agent 使用独立 git worktree 隔离
 
-#### 完整配置示例
+#### 完整配置示例（单窗口 / 经典模式）
 
 ```toml
 cmd; builder:codex, reviewer:claude; research:gemini(worktree)
@@ -321,6 +339,45 @@ model = "opus"
 key = "gemini-key"
 model = "gemini-pro"
 ```
+
+#### 多窗口拓扑（v7.0+）
+
+当 Agent 数量较多时，可将它们拆分到多个 tmux 窗口，每个窗口有独立的 Sidebar：
+
+```toml
+# 定义多个窗口及其布局
+[windows]
+main   = "architect:codex; reviewer:claude"
+code   = "developer:codex"
+test   = "tester:codex"
+
+# 指定启动后默认进入的窗口
+entry_window = "main"
+
+# Sidebar 配置（可选，默认启用）
+[ui.sidebar]
+mode = "every_window"   # "every_window" 每个窗口都显示 / "off" 关闭
+width = "15%"
+bottom_height = 20
+
+[agents.architect]
+description = "架构设计"
+
+[agents.reviewer]
+description = "代码审查"
+
+[agents.developer]
+description = "核心开发"
+
+[agents.tester]
+description = "测试工程师"
+```
+
+多窗口规则：
+- `cmd` 面板**不支持**放在 `windows` 中（多窗口模式下没有全局 cmd）
+- 每个 window 内的 Agent 必须显式声明 provider（如 `architect:codex`）
+- 同一个 Agent **不能**出现在多个 window 中
+- 不声明 `[windows]` 时，回退到经典单窗口一行布局语法
 
 Agent 配置字段：
 
@@ -422,6 +479,31 @@ EOF
 
 CCB 会记录父子任务关系，子任务完成后自动将结果回传给父 Agent 作为新的 continuation 任务。普通 `ask` 仅在**没有活跃 CCB 任务**时使用；在活跃任务内使用普通 `ask` 可能导致任务状态混乱。
 
+#### Notify Sender（v7.0.9+）
+
+当 Skill 或 Agent 向其他 Agent 发送异步任务后，需要**在任务完成时收到通知**（无论成功、失败或取消），使用 `--notify-sender`：
+
+```bash
+# 发任务时附加通知标志
+ccb ask --notify-sender designer <<'EOF'
+请设计登录页面
+EOF
+
+# 后续在 sender 的 inbox 中查看通知
+ccb inbox executor
+```
+
+通知内容示例：
+```
+CCB job job_abc for agent `designer` has finished with status: completed.
+Use `ccb trace job_abc` to view the full result.
+```
+
+与 `--callback` 的区别：
+- `--callback`：创建 callback edge 和 continuation job，**要求 parent Agent 有活跃的 provider session 来接收回传任务**（Claude/Codex 支持，Kimi  pane-log 模式不支持持续 watch）
+- `--notify-sender`：仅在任务完成时向 sender inbox 发送一条系统 notice，**不创建 continuation job，不依赖 provider watch 机制**，适合所有 provider（包括 Kimi）
+- 两者可以独立使用，也可以组合使用
+
 ---
 
 ## 更新与升级
@@ -434,14 +516,14 @@ ccb update 6            # 更新到 v6.x.x 最高版本
 ccb update 6.2.6        # 更新到指定版本
 ```
 
-> **v6.2.6+ 升级注意**：如果当前是 source dev 模式，`ccb update` 会下载最新 release 并切换为 managed release 模式（全局 `ccb` 指向 release 安装目录，不再 symlink 到 git checkout）。如需保持 source dev 模式，请用 `git pull` + `./install.sh install` 更新。
+> **v7.0+ 升级注意**：如果当前是 source dev 模式，`ccb update` 会下载最新 release 并切换为 managed release 模式（全局 `ccb` 指向 release 安装目录，不再 symlink 到 git checkout）。如需保持 source dev 模式，请用 `git pull` + `./install.sh install` 更新。
 
 ### Source Dev 模式更新
 
 如果你是从 Git Clone 安装的（source dev 模式）：
 
 ```bash
-cd /path/to/claude_codex_bridge
+cd /path/to/claude_code_bridge
 git pull                 # 拉取 upstream 最新代码
 ./install.sh install     # 重新安装以更新 links、skills 和 entrypoint smoke check
 ```
@@ -459,7 +541,7 @@ git pull                 # 拉取 upstream 最新代码
 ccb update
 
 # Release -> Source dev（重新指向 git checkout）
-cd /path/to/claude_codex_bridge
+cd /path/to/claude_code_bridge
 ./install.sh install
 ```
 
@@ -478,7 +560,7 @@ ccb reinstall            # 清理后重新安装
 ccb uninstall
 
 # 方式二：安装脚本卸载
-cd /path/to/claude_codex_bridge
+cd /path/to/claude_code_bridge
 ./install.sh uninstall
 ```
 
@@ -647,9 +729,9 @@ find ~/.local/share/ccb -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/nul
 find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
 ```
 
-### Q11: Tmux pane 布局异常 / 插件干扰（v6.2.6+）
+### Q11: Tmux pane 布局异常 / 插件干扰（v7.0+）
 
-CCB v6.2.6 起默认使用 `tmux -f /dev/null` 运行管理的 tmux 命令，用户的 `~/.tmux.conf` 插件不会再干扰 CCB pane 拓扑。如果你之前通过 `~/.tmux.conf` 配置了 CCB 主题或按键，这些配置现在**仅在手动 `tmux attach` 时生效**。
+CCB v7.0+ 默认使用 `tmux -f /dev/null` 运行管理的 tmux 命令，用户的 `~/.tmux.conf` 插件不会再干扰 CCB pane 拓扑。如果你之前通过 `~/.tmux.conf` 配置了 CCB 主题或按键，这些配置现在**仅在手动 `tmux attach` 时生效**。
 
 如需为 CCB 显式指定 tmux 配置文件：
 
@@ -658,9 +740,31 @@ export CCB_TMUX_CONFIG="$HOME/.tmux.conf.ccb"
 ccb
 ```
 
-### Q12: Kimi/MMX Agent 任务卡住无响应
+### Q12: Sidebar 不显示或显示异常（v7.0+）
 
-v6.2.6+ 为 Kimi 和 MMX 配置了 `CompletionReliabilityPolicy`，当 Agent 超过 600 秒没有任何语义进度事件（如 `ANCHOR_SEEN`、`ASSISTANT_CHUNK`、`TURN_BOUNDARY`）时，任务会被自动标记为超时并结束。
+Agent Sidebar 需要 Rust 工具链在**安装时**编译。如果 Sidebar 没有显示：
+
+```bash
+# 检查 sidebar 二进制是否存在
+which ccb-agent-sidebar
+
+# 如果不存在，手动构建（需要 Rust）
+cd /path/to/claude_code_bridge
+cargo build --release --manifest-path tools/ccb-agent-sidebar/Cargo.toml
+
+# 然后重新安装以注册到 PATH
+./install.sh install
+```
+
+### Q13: Codex Agent 任务失败或 bridge 日志报 "AF_UNIX path too long"
+
+macOS 的 Unix Domain Socket 路径长度限制为 104 字节。当项目目录较深时，Codex bridge socket 路径可能超出限制，导致 socket server 启动失败。
+
+**v7.0.9+ 已修复**：bridge socket 会自动降级到 `/tmp/ccb-codex-<hash>.sock` 短路径。如仍遇到问题，请确保 CCB 已更新到 v7.0.9+。
+
+### Q14: Kimi/MMX Agent 任务卡住无响应
+
+v7.0+ 为 Kimi 和 MMX 配置了 `CompletionReliabilityPolicy`，当 Agent 超过 600 秒没有任何语义进度事件（如 `ANCHOR_SEEN`、`ASSISTANT_CHUNK`、`TURN_BOUNDARY`）时，任务会被自动标记为超时并结束。
 
 如需调整超时阈值：
 
@@ -674,9 +778,9 @@ export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300
 ccb
 ```
 
-### Q13: Source dev 安装后 `ccb` 报 Python 版本冲突
+### Q15: Source dev 安装后 `ccb` 报 Python 版本冲突
 
-v6.2.6+ 源码安装使用 Python wrapper，会尝试检测并使用正确的 Python 解释器。如果系统同时存在多个 Python 版本（如 macOS 的 Xcode Python 3.9 和 Homebrew Python 3.12），可通过环境变量强制指定：
+v7.0+ 源码安装使用 Python wrapper，会尝试检测并使用正确的 Python 解释器。如果系统同时存在多个 Python 版本（如 macOS 的 Xcode Python 3.9 和 Homebrew Python 3.12），可通过环境变量强制指定：
 
 ```bash
 export CCB_PYTHON_BIN=/opt/homebrew/bin/python3.12
@@ -707,7 +811,7 @@ export CCB_PYTHON_BIN=/opt/homebrew/bin/python3.12
 ```
 <project>/.ccb/
 ├── ccb.config              # 用户维护的团队配置
-├── ccb_memory.md           # 项目级共享记忆（v6.2.1+）
+├── ccb_memory.md           # 项目级共享记忆（v7.0+）
 ├── ccbd/                   # 控制平面守护进程状态
 │   ├── state.json          # tmux 会话状态
 │   ├── lifecycle.json      # 生命周期管理
@@ -719,8 +823,15 @@ export CCB_PYTHON_BIN=/opt/homebrew/bin/python3.12
 │   └── <agent-name>/
 │       ├── agent.json      # Agent 规格
 │       ├── jobs.jsonl      # 任务队列
-│       ├── memory.md       # Per-Agent 角色记忆（v6.2.1+）
-│       └── provider-state/ # Provider 隔离状态
+│       ├── memory.md       # Per-Agent 角色记忆（v7.0+）
+│       ├── provider-runtime/  # Provider 运行时产物（v7.0+）
+│       │   └── <provider>/
+│       │       ├── bridge.sock      # Codex bridge socket（可能位于 /tmp）
+│       │       ├── input.fifo       # Codex FIFO 输入
+│       │       ├── output.fifo      # Codex FIFO 输出
+│       │       ├── completion/      # Hook 完成事件
+│       │       └── ...
+│       └── provider-state/    # Provider 隔离状态
 └── history/                # 会话历史归档
 ```
 
@@ -819,6 +930,7 @@ ccb reinstall          # 重新安装
 # Agent 间通信（在 Agent 内部使用）
 /ask <agent> <message>            # 向指定 Agent 委派任务（异步）
 ccb ask --callback <agent>        # 带回调的 ask（链式委派，v6.2.x+）
+ccb ask --notify-sender <agent>   # 任务完成后通知 sender（v7.0.9+）
 ccb ask --silence <agent>         # 静默 ask（不等待结果，v6.2.x+）
 /ping <agent|ccbd>                # 检查 Agent 或控制平面健康
 /pend <agent|job_id>              # 查看 Agent 回复

@@ -167,22 +167,33 @@ def execute_project_stop(
     reason: str,
     clear_start_policy: bool,
 ):
-    execution, terminated_jobs = prepare_project_stop(
-        app,
-        force=force,
-        trigger=trigger,
-        reason=reason,
-    )
-    finalize_project_stop(
-        app,
-        execution=execution,
-        terminated_jobs=terminated_jobs,
-        trigger=trigger,
-        forced=force,
-        reason=reason,
-        clear_start_policy=clear_start_policy,
-    )
-    return execution.summary
+    execution = None
+    terminated_jobs = ()
+    try:
+        execution, terminated_jobs = prepare_project_stop(
+            app,
+            force=force,
+            trigger=trigger,
+            reason=reason,
+        )
+        finalize_project_stop(
+            app,
+            execution=execution,
+            terminated_jobs=terminated_jobs,
+            trigger=trigger,
+            forced=force,
+            reason=reason,
+            clear_start_policy=clear_start_policy,
+        )
+    finally:
+        # Best-effort flush webhook queue regardless of prepare/finalize outcome
+        try:
+            webhook = getattr(app, 'webhook', None)
+            if webhook is not None:
+                webhook.close(flush_timeout_s=2.0)
+        except Exception:
+            pass
+    return execution.summary if execution is not None else ()
 
 
 def prepare_project_stop(
