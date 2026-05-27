@@ -153,13 +153,15 @@ require_non_root_execution() {
 SCRIPTS_TO_LINK=(
   bin/ask
   bin/autonew
+  bin/build-ccb-agent-sidebar
+  bin/ccb-agent-sidebar
   bin/ctx-transfer
   bin/mmx-daemon
   ccb
 )
 
 CLAUDE_MARKDOWN=(
-  # Old CCB command markdown removed; ask is the only installed CCB skill.
+  # Old CCB command markdown removed; managed CCB workflows install as skills.
 )
 
 LEGACY_SCRIPTS=(
@@ -888,6 +890,22 @@ resolve_inherit_skills_root() {
   echo "$asset_root/inherit_skills"
 }
 
+looks_like_ccb_codex_home() {
+  local path="$1"
+  [[ "$path" == */.ccb/agents/*/provider-state/codex/home ]]
+}
+
+resolve_codex_source_home() {
+  local raw="${CODEX_HOME:-}"
+  if [[ -n "$raw" ]]; then
+    if ! looks_like_ccb_codex_home "$raw"; then
+      echo "$raw"
+      return
+    fi
+  fi
+  echo "$HOME/.codex"
+}
+
 read_simple_json_string_field() {
   local file="$1"
   local key="$2"
@@ -1213,6 +1231,7 @@ copy_project() {
       --exclude '.pytest_cache/' \
       --exclude '.mypy_cache/' \
       --exclude '.venv/' \
+      --exclude 'target/' \
       --exclude 'lib/web/' \
       --exclude 'bin/ccb-web' \
       "$REPO_ROOT"/ "$staging"/
@@ -1223,6 +1242,7 @@ copy_project() {
       --exclude '.pytest_cache' \
       --exclude '.mypy_cache' \
       --exclude '.venv' \
+      --exclude 'target' \
       --exclude 'lib/web' \
       --exclude 'bin/ccb-web' \
       -cf - . | tar -C "$staging" -xf -
@@ -1454,6 +1474,15 @@ write_managed_venv_python_wrapper() {
   write_python_entrypoint_wrapper "$(managed_venv_python)" "$source_path" "$destination_path"
 }
 
+is_python_entrypoint() {
+  local source_path="$1"
+  local first_line=""
+  if [[ -f "$source_path" ]]; then
+    IFS= read -r first_line < "$source_path" || true
+  fi
+  [[ "$first_line" == '#!'*python* ]]
+}
+
 install_entrypoint_executable() {
   local source_path="$1"
   local destination_path="$2"
@@ -1466,6 +1495,10 @@ install_entrypoint_executable() {
   local absolute_source="$source_path"
   if [[ "$absolute_source" != /* ]]; then
     absolute_source="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
+  fi
+  if ! is_python_entrypoint "$absolute_source"; then
+    install_owned_executable "$source_path" "$destination_path"
+    return 0
   fi
   if use_managed_venv && [[ "$absolute_source" == "$INSTALL_PREFIX/"* ]]; then
     write_managed_venv_python_wrapper "$absolute_source" "$destination_path"
@@ -1484,6 +1517,122 @@ install_entrypoint_executable() {
   install_owned_executable "$source_path" "$destination_path"
 }
 
+is_sidebar_wrapper() {
+  local path="$1"
+  [[ -f "$path" ]] && grep -q 'CCB_AGENT_SIDEBAR_WRAPPER' "$path" 2>/dev/null
+}
+
+sidebar_helper_runs_on_this_host() {
+  local binary="$1"
+  [[ -x "$binary" ]] || return 1
+  "$binary" --help >/dev/null 2>&1
+  case "$?" in
+    0|2) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+require_sidebar_rust_toolchain() {
+  local missing=()
+  if ! command -v cargo >/dev/null 2>&1; then
+    missing+=(cargo)
+  fi
+  if ! command -v rustc >/dev/null 2>&1; then
+    missing+=(rustc)
+  fi
+  if [[ ${#missing[@]} -eq 0 ]]; then
+    return 0
+  fi
+
+  echo "ERROR: Rust toolchain required to build ccb-agent-sidebar"
+  echo "   Missing: ${missing[*]}"
+  echo "   Sidebar panes require bin/ccb-agent-sidebar; install Rust or use a release package with a prebuilt helper."
+  case "$(detect_platform)" in
+    macos)
+      echo "   macOS: brew install rust"
+      ;;
+    linux)
+      echo "   Debian/Ubuntu: sudo apt-get install -y cargo rustc"
+      ;;
+  esac
+  echo "   Rustup: https://rustup.rs/"
+  exit 1
+}
+
+sidebar_helper_unavailable_error() {
+  echo "ERROR: ccb-agent-sidebar binary not available"
+  echo "   Sidebar panes will not work without a runnable helper."
+  echo "   Install Rust and re-run install.sh, or install an official release package with a prebuilt helper."
+  exit 1
+}
+
+install_prebuilt_sidebar_helper() {
+  local binary="$1"
+  local target="$2"
+  if ! sidebar_helper_runs_on_this_host "$binary"; then
+    return 1
+  fi
+  cp -f "$binary" "$target"
+  chmod +x "$target" 2>/dev/null || true
+  if ! sidebar_helper_runs_on_this_host "$target"; then
+    rm -f "$target"
+    return 1
+  fi
+  echo "Installed prebuilt ccb-agent-sidebar"
+  return 0
+}
+
+build_sidebar_helper_if_possible() {
+  local asset_root crate_dir binary target
+  asset_root="$(resolve_install_asset_root)"
+  crate_dir="$asset_root/tools/ccb-agent-sidebar"
+  binary="$crate_dir/target/release/ccb-agent-sidebar"
+  target="$asset_root/bin/ccb-agent-sidebar"
+
+  if [[ ! -f "$crate_dir/Cargo.toml" ]]; then
+    if [[ -x "$target" ]] && ! is_sidebar_wrapper "$target" && sidebar_helper_runs_on_this_host "$target"; then
+      return
+    fi
+    sidebar_helper_unavailable_error
+  fi
+
+  if install_uses_live_source; then
+    if [[ -x "$binary" ]] && sidebar_helper_runs_on_this_host "$binary"; then
+      return
+    fi
+    require_sidebar_rust_toolchain
+    echo "Building ccb-agent-sidebar..."
+    if cargo build --release --manifest-path "$crate_dir/Cargo.toml" >/dev/null 2>&1 && [[ -x "$binary" ]]; then
+      echo "Built ccb-agent-sidebar"
+      return
+    fi
+    sidebar_helper_unavailable_error
+  fi
+
+  mkdir -p "$asset_root/bin"
+  if [[ -x "$target" ]] && ! is_sidebar_wrapper "$target" && sidebar_helper_runs_on_this_host "$target"; then
+    return
+  fi
+
+  if [[ -x "$binary" ]] && install_prebuilt_sidebar_helper "$binary" "$target"; then
+    return
+  fi
+
+  require_sidebar_rust_toolchain
+  echo "Building ccb-agent-sidebar..."
+  if cargo build --release --manifest-path "$crate_dir/Cargo.toml" >/dev/null 2>&1 && [[ -x "$binary" ]]; then
+    cp -f "$binary" "$target"
+    chmod +x "$target" 2>/dev/null || true
+    if sidebar_helper_runs_on_this_host "$target"; then
+      echo "Built ccb-agent-sidebar"
+      return
+    fi
+    rm -f "$target"
+  fi
+
+  sidebar_helper_unavailable_error
+}
+
 install_bin_links() {
   mkdir -p "$BIN_DIR"
   local target_root
@@ -1493,7 +1642,15 @@ install_bin_links() {
     local name
     name="$(basename "$path")"
     local target_path="$target_root/$path"
-    install_entrypoint_executable "$target_path" "$BIN_DIR/$name"
+    if ! install_entrypoint_executable "$target_path" "$BIN_DIR/$name"; then
+      case "$path" in
+        bin/build-ccb-agent-sidebar|bin/ccb-agent-sidebar)
+          ;;
+        *)
+          return 1
+          ;;
+      esac
+    fi
   done
 
   for legacy in "${LEGACY_SCRIPTS[@]}"; do
@@ -1593,7 +1750,8 @@ install_skill_entry() {
 
   clear_installed_path "$destination_dir"
   mkdir -p "$destination_dir"
-  install_owned_file "$src_skill_md" "$destination_dir/SKILL.md" 0644
+  cp -f "$src_skill_md" "$destination_dir/SKILL.md"
+  chmod 0644 "$destination_dir/SKILL.md" 2>/dev/null || true
 
   local child
   for child in "$skill_dir"/*; do
@@ -1604,9 +1762,11 @@ install_skill_entry() {
       continue
     fi
     if [[ -d "$child" ]]; then
-      install_owned_directory "$child" "$destination_dir/$child_name"
+      clear_installed_path "$destination_dir/$child_name"
+      cp -rf "$child" "$destination_dir/$child_name"
     elif [[ -f "$child" ]]; then
-      install_owned_file "$child" "$destination_dir/$child_name" 0644
+      cp -f "$child" "$destination_dir/$child_name"
+      chmod 0644 "$destination_dir/$child_name" 2>/dev/null || true
     fi
   done
 }
@@ -1623,13 +1783,13 @@ install_claude_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete wrapper/provider skills and CCB skills no longer installed by default.
-  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping auto ping pend autonew all-plan docs tp tr file-op review continue"
-  for obs_skill in $obsolete_skills; do
-    if [[ -d "$skills_dst/$obs_skill" ]]; then
-      rm -rf "$skills_dst/$obs_skill"
-      echo "  Removed obsolete skill: $obs_skill"
-    fi
+  rm -rf "$skills_dst/ccb_config"
+
+  # Clean up legacy wrapper/provider skills silently; only current inherited
+  # skills should appear in install output.
+  local legacy_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping auto ping pend autonew all-plan docs tp tr file-op review continue"
+  for legacy_skill in $legacy_skills; do
+    rm -rf "$skills_dst/$legacy_skill"
   done
 
   echo "Installing inherited Claude skills (bash SKILL.md template)..."
@@ -1655,7 +1815,8 @@ install_codex_skills() {
   local skills_root
   skills_root="$(resolve_inherit_skills_root)"
   local skills_src="$skills_root/codex_skills"
-  local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
+  local skills_dst
+  skills_dst="$(resolve_codex_source_home)/skills"
 
   if [[ ! -d "$skills_src" ]]; then
     return
@@ -1663,13 +1824,13 @@ install_codex_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete wrapper/provider skills and CCB skills no longer installed by default.
-  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping ping pend autonew all-plan file-op"
-  for obs_skill in $obsolete_skills; do
-    if [[ -d "$skills_dst/$obs_skill" ]]; then
-      rm -rf "$skills_dst/$obs_skill"
-      echo "  Removed obsolete skill: $obs_skill"
-    fi
+  rm -rf "$skills_dst/ccb_config"
+
+  # Clean up legacy wrapper/provider skills silently; only current inherited
+  # skills should appear in install output.
+  local legacy_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping ping pend autonew all-plan file-op"
+  for legacy_skill in $legacy_skills; do
+    rm -rf "$skills_dst/$legacy_skill"
   done
 
   echo "Installing inherited Codex skills (bash SKILL.md template)..."
@@ -1706,13 +1867,11 @@ install_droid_skills() {
 
   mkdir -p "$skills_dst"
 
-  # Clean up obsolete wrapper/provider skills and CCB skills no longer installed by default.
-  local obsolete_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping ping pend autonew all-plan"
-  for obs_skill in $obsolete_skills; do
-    if [[ -d "$skills_dst/$obs_skill" ]]; then
-      rm -rf "$skills_dst/$obs_skill"
-      echo "  Removed obsolete skill: $obs_skill"
-    fi
+  # Clean up legacy wrapper/provider skills silently; only current inherited
+  # skills should appear in install output.
+  local legacy_skills="bask bpend bping cask cpend cping dask dpend dping gask gpend gping hask hpend hping lask lpend lping mounted oask opend oping qask qpend qping ping pend autonew all-plan"
+  for legacy_skill in $legacy_skills; do
+    rm -rf "$skills_dst/$legacy_skill"
   done
 
   echo "Installing Droid/Factory ask skill..."
@@ -2159,6 +2318,7 @@ install_settings_permissions() {
 
   local perms_to_add=(
     'Bash(ccb ask *)'
+    'Bash(ccb clear *)'
     'Bash(ccb ping *)'
     'Bash(ccb pend *)'
   )
@@ -2169,6 +2329,7 @@ install_settings_permissions() {
 	  "permissions": {
 	    "allow": [
 	      "Bash(ccb ask *)",
+	      "Bash(ccb clear *)",
 	      "Bash(ccb ping *)",
 	      "Bash(ccb pend *)"
 	    ],
@@ -2514,6 +2675,7 @@ install_all() {
   if ! install_uses_live_source; then
     write_install_metadata
   fi
+  build_sidebar_helper_if_possible
   install_bin_links
   verify_installed_entrypoints
   ensure_path_configured
@@ -2614,6 +2776,7 @@ uninstall_settings_permissions() {
 
   local perms_to_remove=(
     'Bash(ccb ask *)'
+    'Bash(ccb clear *)'
     'Bash(ccb ping *)'
     'Bash(ccb pend *)'
     'Bash(ask *)'
@@ -2666,6 +2829,7 @@ import sys
 path = '$settings_file'
 perms_to_remove = [
     'Bash(ccb ask *)',
+    'Bash(ccb clear *)',
     'Bash(ccb ping *)',
     'Bash(ccb pend *)',
     'Bash(ask *)',
@@ -2725,13 +2889,17 @@ except Exception:
 
 uninstall_claude_skills() {
   local skills_dst="$HOME/.claude/skills"
-  local ccb_skills="ask ccb_config ping pend autonew all-plan docs tp tr file-op review continue"
+  local ccb_skills="ask ccb-config ccb-clear"
+  local legacy_skills="ccb_config ping pend autonew all-plan docs tp tr file-op review continue"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
   fi
 
   echo "Removing CCB Claude skills..."
+  for skill in $legacy_skills; do
+    rm -rf "$skills_dst/$skill"
+  done
   for skill in $ccb_skills; do
     if [[ -d "$skills_dst/$skill" ]]; then
       rm -rf "$skills_dst/$skill"
@@ -2741,14 +2909,19 @@ uninstall_claude_skills() {
 }
 
 uninstall_codex_skills() {
-  local skills_dst="${CODEX_HOME:-$HOME/.codex}/skills"
-  local ccb_skills="ask ccb_config ping pend autonew all-plan file-op"
+  local skills_dst
+  skills_dst="$(resolve_codex_source_home)/skills"
+  local ccb_skills="ask ccb-config ccb-clear"
+  local legacy_skills="ccb_config ping pend autonew all-plan file-op"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
   fi
 
   echo "Removing CCB Codex skills..."
+  for skill in $legacy_skills; do
+    rm -rf "$skills_dst/$skill"
+  done
   for skill in $ccb_skills; do
     if [[ -d "$skills_dst/$skill" ]]; then
       rm -rf "$skills_dst/$skill"
@@ -2759,13 +2932,17 @@ uninstall_codex_skills() {
 
 uninstall_droid_skills() {
   local skills_dst="${FACTORY_HOME:-$HOME/.factory}/skills"
-  local ccb_skills="ask ping pend autonew all-plan"
+  local ccb_skills="ask"
+  local legacy_skills="ping pend autonew all-plan"
 
   if [[ ! -d "$skills_dst" ]]; then
     return
   fi
 
   echo "Removing CCB Droid skills..."
+  for skill in $legacy_skills; do
+    rm -rf "$skills_dst/$skill"
+  done
   for skill in $ccb_skills; do
     if [[ -d "$skills_dst/$skill" ]]; then
       rm -rf "$skills_dst/$skill"
@@ -2908,6 +3085,7 @@ main() {
   esac
 }
 
+# Test harness split marker: main "$@"
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
+  main "${@}"
 fi

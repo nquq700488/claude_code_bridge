@@ -977,6 +977,8 @@ def test_ensure_agent_runtime_uses_assigned_tmux_pane(monkeypatch, tmp_path: Pat
     assert ('%43', '@ccb_label_style', visual.label_style) in tmux_state['options']
     assert ('%43', '@ccb_agent', 'agent1') in tmux_state['options']
     assert ('%43', '@ccb_project_id', ctx.project.project_id) in tmux_state['options']
+    session_option = next(value for pane, name, value in tmux_state['options'] if pane == '%43' and name == '@ccb_session_id')
+    assert session_option.startswith('ccb-agent1-')
     assert ('%43', visual.border_style, visual.active_border_style) in tmux_state['styles']
 
 
@@ -1057,7 +1059,7 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
             if args == ['start-server']:
                 calls.append(('start-server', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
-            if args == ['set-option', '-g', 'destroy-unattached', 'off']:
+            if args[:2] == ['set-option', '-g']:
                 calls.append(('set-option', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
             if args[:2] == ['new-session', '-d']:
@@ -1085,6 +1087,8 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
     assert result.binding.runtime_ref == 'tmux:%88'
     assert any(name == 'start-server' for name, _ in calls)
     assert any(name == 'set-option' for name, _ in calls)
+    assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert any(name == 'new-session' for name, _ in calls)
     assert any(name == 'respawn' for name, _ in calls)
 
@@ -1209,7 +1213,7 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
             if args == ['start-server']:
                 calls.append(('start-server', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
-            if args == ['set-option', '-g', 'destroy-unattached', 'off']:
+            if args[:2] == ['set-option', '-g']:
                 calls.append(('set-option', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
             if args[:2] == ['new-session', '-d']:
@@ -1250,6 +1254,8 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
     assert result.binding.runtime_ref == 'tmux:%88'
     assert ('kill', ('sock-dead', '%44')) in calls
     assert any(name == 'start-server' for name, _ in calls)
+    assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert any(name == 'new-session' for name, _ in calls)
     assert any(name == 'respawn' for name, _ in calls)
 
@@ -1427,7 +1433,7 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
             if args == ['start-server']:
                 calls.append(('start-server', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
-            if args == ['set-option', '-g', 'destroy-unattached', 'off']:
+            if args[:2] == ['set-option', '-g']:
                 calls.append(('set-option', tuple(args)))
                 return subprocess.CompletedProcess(args=args, returncode=0, stdout='', stderr='')
             if args[:4] == ['new-session', '-d', '-x', '160']:
@@ -1456,6 +1462,8 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert ('kill', ('%42',)) in calls
     assert any(name == 'start-server' for name, _ in calls)
     assert any(name == 'set-option' for name, _ in calls)
+    assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert any(name == 'new-session' for name, _ in calls)
     assert any(name == 'respawn' for name, _ in calls)
 
@@ -1552,6 +1560,23 @@ def test_codex_launcher_build_start_cmd_includes_agent_model_shortcut(monkeypatc
     cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-model')
 
     assert 'codex -c disable_paste_burst=true -m gpt-5 --search' in cmd
+
+
+def test_codex_launcher_build_start_cmd_uses_native_auto_permission_flags(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime-codex-auto-permission'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.delenv('CODEX_HOME', raising=False)
+
+    spec = _spec('agent1')
+    command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=True)
+
+    cmd = _codex_start_cmd(command, spec, runtime_dir, 'sess-auto-permission')
+
+    assert '--ask-for-approval never' in cmd
+    assert '--sandbox danger-full-access' in cmd
+    assert 'trust_level=' not in cmd
+    assert 'approval_policy=' not in cmd
+    assert 'sandbox_mode=' not in cmd
 
 
 def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeypatch, tmp_path: Path) -> None:

@@ -89,6 +89,8 @@ def test_ccbd_client_dynamic_attach_endpoint_builds_payload(monkeypatch, tmp_pat
                 'pane_title_marker': None,
                 'pane_state': None,
                 'tmux_socket_name': None,
+                'tmux_window_name': None,
+                'tmux_window_id': None,
                 'session_file': None,
                 'session_id': None,
                 'lifecycle_state': None,
@@ -107,6 +109,26 @@ def test_ccbd_client_dynamic_shutdown_endpoint_uses_empty_payload(monkeypatch, t
     client.shutdown()
 
     assert calls == [('shutdown', {})]
+
+
+def test_ccbd_client_project_restart_panes_endpoint_uses_empty_payload(monkeypatch, tmp_path) -> None:
+    client = CcbdClient(tmp_path / "ccbd.sock")
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(client, 'request', lambda op, payload=None: calls.append((op, payload)) or {'ok': True})
+
+    client.project_restart_panes()
+
+    assert calls == [('project_restart_panes', {})]
+
+
+def test_ccbd_client_project_clear_context_endpoint_builds_payload(monkeypatch, tmp_path) -> None:
+    client = CcbdClient(tmp_path / "ccbd.sock")
+    calls: list[tuple[str, dict]] = []
+    monkeypatch.setattr(client, 'request', lambda op, payload=None: calls.append((op, payload)) or {'ok': True})
+
+    client.project_clear_context(('agent1', 'agent2'))
+
+    assert calls == [('project_clear_context', {'agent_names': ['agent1', 'agent2']})]
 
 
 def test_ccbd_client_request_wraps_socket_connect_errors(monkeypatch, tmp_path) -> None:

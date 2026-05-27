@@ -10,12 +10,16 @@ else
   exit 0
 fi
 
-style="$(tmux display-message -p -t "$pane_id" "#{@ccb_active_border_style}" 2>/dev/null | tr -d '\r')"
+style=""
+
+if [[ -z "$style" ]]; then
+  style="$(tmux display-message -p -t "$pane_id" "#{@ccb_active_border_style}" 2>/dev/null | tr -d '\r')"
+fi
 if [[ -z "$style" ]]; then
   style="$(tmux display-message -p -t "$pane_id" "#{@ccb_border_style}" 2>/dev/null | tr -d '\r')"
 fi
 if [[ -z "$style" ]]; then
-  style="fg=#7aa2f7,bold"
+  style="fg=#6c7086"
 fi
 
 set_border() {

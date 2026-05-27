@@ -15,7 +15,7 @@ from terminal_runtime.tmux_readiness import (
     tmux_object_ready_timeout_s,
     tmux_failure_detail,
 )
-from terminal_runtime.placeholders import pane_placeholder_argv
+from terminal_runtime.placeholders import pane_placeholder_argv, pane_placeholder_cmd
 
 
 @dataclass(frozen=True)
@@ -48,6 +48,20 @@ def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
         failure_message='failed to persist tmux destroy-unattached policy',
         timeout_s=timeout_s,
     )
+    _apply_optional_server_policy(backend, option='mouse', value='on', timeout_s=timeout_s)
+    _apply_optional_server_policy(backend, option='set-clipboard', value='on', timeout_s=timeout_s)
+
+
+def _apply_optional_server_policy(backend, *, option: str, value: str, timeout_s: float | None = None) -> None:
+    try:
+        _tmux_run_ready(
+            backend,
+            ['set-option', '-g', option, value],
+            failure_message=f'failed to persist tmux {option} policy',
+            timeout_s=timeout_s,
+        )
+    except Exception:
+        return
 
 
 def create_session(
@@ -249,6 +263,37 @@ def window_root_pane(backend, *, target_window: str, timeout_s: float | None = N
     if not pane_id.startswith('%'):
         raise RuntimeError(f'failed to resolve root pane for tmux target {target_window!r}')
     return pane_id
+
+
+def split_pane(
+    backend,
+    *,
+    target: str,
+    direction: str,
+    percent: int,
+    project_root,
+    timeout_s: float | None = None,
+) -> str:
+    try:
+        pane_id = backend.split_pane(
+            target,
+            direction=direction,
+            percent=max(1, min(99, int(percent))),
+            cmd=pane_placeholder_cmd(),
+            cwd=str(project_root),
+        )
+    except TypeError:
+        pane_id = backend.split_pane(
+            target,
+            direction,
+            max(1, min(99, int(percent))),
+        )
+    if str(pane_id or '').startswith('%'):
+        return str(pane_id)
+    resolved = wait_for_root_pane(backend, target_window=target, timeout_s=timeout_s)
+    if resolved.startswith('%'):
+        return resolved
+    raise RuntimeError(f'failed to split tmux pane from target {target!r}')
 
 
 def kill_server(backend) -> bool:
@@ -460,6 +505,7 @@ __all__ = [
     'session_root_pane',
     'session_window_target',
     'select_window',
+    'split_pane',
     'TmuxCommandError',
     'TmuxTransientServerUnavailable',
     'TmuxWindowRecord',

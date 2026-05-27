@@ -10,15 +10,15 @@ _CONTROL_PLANE_ALLOWLIST = {
     'ANTHROPIC_AUTH_TOKEN',
     'ANTHROPIC_BASE_URL',
     'CCB_BACKEND_ENV',
+    'CCB_CCBD_FAULTHANDLER',
     'CCB_CCBD_MIN_POLL_INTERVAL_S',
     'CCB_DEBUG',
     'CCB_KEEPER_PID',
+    'CCB_KEYCHAIN_SERVICE_OVERRIDE',
     'CCB_LANG',
     'CCB_NO_ATTACH',
     'CCB_REPLY_LANG',
     'CCB_STDIN_ENCODING',
-    'CCB_TMUX_SOCKET',
-    'CCB_TMUX_SOCKET_PATH',
     'CCB_VERSION',
     'DBUS_SESSION_BUS_ADDRESS',
     'DESKTOP_SESSION',
@@ -49,7 +49,6 @@ _CONTROL_PLANE_ALLOWLIST = {
     'OPENAI_ORG_ID',
     'OPENAI_ORGANIZATION',
     'PATH',
-    'PYTHONPATH',
     'PYTHONUNBUFFERED',
     'SHELL',
     'SSH_AUTH_SOCK',
@@ -83,6 +82,11 @@ _CONTROL_PLANE_BLOCKED_PREFIXES = (
 _CONTROL_PLANE_BLOCKED_EXACT = {
     'CCB_SESSION_FILE',
     'CCB_SESSION_ID',
+    'CCB_TMUX_SOCKET',
+    'CCB_TMUX_SOCKET_PATH',
+    'PYTHONPATH',
+    'TMUX',
+    'TMUX_PANE',
 }
 
 
@@ -95,6 +99,8 @@ def control_plane_env(*, extra: dict[str, str] | None = None) -> dict[str, str]:
             env[key] = value
             continue
         if any(key.startswith(prefix) for prefix in _CONTROL_PLANE_BLOCKED_PREFIXES):
+            continue
+        if key == 'PYTHONPATH':
             continue
         if key.startswith(('PYTHON', 'VIRTUAL_ENV', 'CONDA')):
             env[key] = value

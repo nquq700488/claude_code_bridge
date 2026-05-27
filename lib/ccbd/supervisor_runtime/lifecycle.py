@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from agents.models import build_project_layout_plan
 from ccbd.services import CcbdLifecycleStore
+from ccbd.services.project_namespace_runtime import build_namespace_topology_plan
 
 from .namespace import ensure_project_namespace
 from .reporting import record_startup_report
@@ -23,15 +23,25 @@ def start_supervisor(
     run_start_flow_fn,
 ):
     try:
-        namespace_layout_signature = (
-            build_project_layout_plan(supervisor._config, requested_agents=agent_names).signature
-            if supervisor._project_namespace is not None and interactive_tmux_layout
-            else None
-        )
+        topology_plan = None
+        namespace_layout_signature = None
+        if (
+            supervisor._project_namespace is not None
+            and _uses_explicit_windows_topology(supervisor._config, interactive_tmux_layout=interactive_tmux_layout)
+        ):
+            topology_plan = build_namespace_topology_plan(
+                supervisor._config,
+                ccbd_socket_path=str(supervisor._paths.ccbd_socket_path),
+                project_root=str(supervisor._project_root),
+            )
+            namespace_layout_signature = topology_plan.signature
+        elif supervisor._project_namespace is not None and interactive_tmux_layout:
+            namespace_layout_signature = str(getattr(supervisor._config, 'topology_signature', '') or '') or None
         namespace = (
             ensure_project_namespace(
                 supervisor._project_namespace,
                 layout_signature=namespace_layout_signature,
+                topology_plan=topology_plan,
                 recreate_namespace=recreate_namespace,
                 reflow_workspace=reflow_workspace,
                 recreate_reason=recreate_reason,
@@ -58,6 +68,8 @@ def start_supervisor(
             namespace_epoch=namespace.namespace_epoch if namespace is not None else None,
             workspace_window_id=getattr(namespace, 'workspace_window_id', None) if namespace is not None else None,
             workspace_epoch=getattr(namespace, 'workspace_epoch', None) if namespace is not None else None,
+            namespace_agent_panes=getattr(supervisor._project_namespace, '_last_materialized_agent_panes', None),
+            namespace_active_panes=getattr(supervisor._project_namespace, '_last_topology_active_panes', None),
             fresh_namespace=bool(getattr(namespace, 'created_this_call', False)),
             fresh_workspace=bool(getattr(namespace, 'workspace_recreated_this_call', False)),
             clock=supervisor._clock,
@@ -114,6 +126,10 @@ def _sync_lifecycle_namespace_epoch(supervisor, *, namespace) -> None:
     lifecycle_store.save(
         lifecycle.with_updates(namespace_epoch=int(epoch))
     )
+
+
+def _uses_explicit_windows_topology(config, *, interactive_tmux_layout: bool) -> bool:
+    return bool(interactive_tmux_layout and getattr(config, 'windows_explicit', False))
 
 
 def stop_all_supervisor(

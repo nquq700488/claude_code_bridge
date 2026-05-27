@@ -32,6 +32,106 @@
 
 ## Unreleased
 
+## v7.0.9 (2026-05-26)
+
+### README v7 Redesign Release
+
+- **Public README Rebuilt**: redesigns `README.md` and `README_zh.md` around the v7 visible multi-agent workspace, with task-first positioning, multi-agent approach comparison, v7 UI tour, Quick Start, tmux basics, config examples, and install/update guidance.
+- **README Visual Assets Added**: adds real v7 terminal screenshots under `assets/readme_v7/` for the English and Chinese README walkthroughs.
+- **Planning Docs Preserved**: adds `docs/plantree/` planning notes covering the README v7 redesign decisions, roadmap, baseline docs, media plan, and publication choices.
+- **Runtime Surface Preserved**: keeps the v7.0.8 runtime behavior and release fixes intact while refreshing the GitHub-facing documentation package.
+
+## v7.0.8 (2026-05-25)
+
+### Clear Context And Config Overlay Release
+
+- **Agent Context Clear Command Added**: `ccb clear [agent...]` sends provider-native `/clear` to all or selected mounted agent panes without deleting project state or restarting runtimes, with `all` and unknown-agent validation handled through `ccbd`.
+- **Pane Click Focus Fixed**: project tmux pane mouse clicks now use the correct `select-pane` action, restoring normal focus switching instead of emitting `command select-pane`.
+- **Windows Overlay Config Parsing Corrected**: explicit `version = 2` `[windows]` topology is now the authoritative mounted-agent set, same-name `[agents.<name>]` tables act as overlays, stale unreferenced agent tables are ignored, and overlay providers must still match the window leaf provider.
+- **CCB Clear Skill Added**: Claude and Codex inherited skills now include `ccb-clear`, installers project the skill, and Claude managed settings allow `Bash(ccb clear *)`.
+
+## v7.0.7 (2026-05-25)
+
+### Sidebar Controls And Width Sync Release
+
+- **Sidebar Top Controls Expanded**: the native sidebar now exposes full refresh, in-place project pane restart, and exit actions directly from the title bar, with matching keyboard and tmux mouse bindings.
+- **Pane Restart And Click Routing Added**: `project_restart_panes` and hidden `ccb __sidebar-click` paths now let sidebar actions refresh project panes and restore focus through `ccbd`.
+- **Sidebar Width Sync Hardened**: sidebar widths now accept integer column sizes, drag-resize uses `resize-pane -M`, `after-resize-pane` syncs widths across windows, and the global `window-resized` hook reapplies the stored width for the active CCB session instead of learning tmux's temporary compression.
+
+## v7.0.6 (2026-05-24)
+
+### macOS Release Test Smoke Hotfix
+
+- **macOS Release Install Smoke Fixed**: GitHub Tests now prebuild a host-runnable `bin/ccb-agent-sidebar` before simulating a release install from a source checkout, matching the packaged release shape.
+- **v7.0.5 Hotfixes Preserved**: this release includes the Claude keychain service override, macOS `ccb update` sidebar helper preservation, and explicit sidebar rebuild failure handling from v7.0.5.
+
+## v7.0.5 (2026-05-24)
+
+### Claude Keychain And macOS Update Hotfix
+
+- **Claude Keychain Override Added**: `CCB_KEYCHAIN_SERVICE_OVERRIDE` can bind managed Claude materialization to a specific macOS Keychain service, and control-plane environment handling preserves the override.
+- **macOS Update Preserves Sidebar Helper**: `ccb update` staging now skips line-ending normalization for binary files, so `bin/ccb-agent-sidebar` is not corrupted during macOS updates.
+- **Sidebar Rebuild Failure Made Explicit**: installers now require a Rust toolchain when the sidebar helper must be rebuilt locally, instead of silently continuing with a missing rebuild path.
+
+## v7.0.4 (2026-05-23)
+
+### Project View Refresh And Runtime Hardening Release
+
+- **Project View Refresh Optimized**: sidebar/project view responses now reuse short-lived cached responses, use bounded tail reads for recent jobs, and avoid repeated tmux pane captures during a single view build.
+- **Runtime State Reads Hardened**: job, message-bureau, and JSONL stores gained targeted latest/tail lookup helpers so comms and sidebar state do not need broad scans of growing runtime files.
+- **Keeper And Startup Robustness Improved**: keeper lifecycle checks now verify process command lines against the project root, and daemon/socket lifecycle paths include additional ownership and stopping-state safeguards.
+- **Inherited Skill Install Cleanup Improved**: `ccb-config` is now the canonical inherited skill name, legacy `ccb_config` and obsolete helper skills are removed silently during install, and useful tool packages were refreshed.
+
+## v7.0.3 (2026-05-23)
+
+### macOS Sidebar Universal Binary Hotfix
+
+- **macOS Sidebar Runs Natively**: the macOS release artifact now builds `ccb-agent-sidebar` for both `x86_64-apple-darwin` and `aarch64-apple-darwin`, then combines them with `lipo` into the shipped `bin/ccb-agent-sidebar` universal binary.
+- **macOS Release Gate Added**: release artifact CI now inspects the macOS helper with `file`, requires `universal binary`, and runs the helper `--help` smoke before uploading assets.
+- **macOS Test Smoke Extended**: GitHub Tests now build the macOS release preview with both Apple targets and verify the packaged helper instead of only checking that the tarball exists.
+
+## v7.0.2 (2026-05-23)
+
+### Codex Trust And Sidebar Compatibility Hotfix
+
+- **Codex Managed Trust Fixed**: managed Codex homes now trust both the project root and active workspace path through `[projects."..."] trust_level = "trusted"`, and auto-permission startup uses native `--ask-for-approval never --sandbox danger-full-access` flags instead of an invalid top-level trust override.
+- **Linux Sidebar Assets Made More Compatible**: release artifact and standalone sidebar helper workflows now build Linux binaries on Ubuntu 22.04 so published helpers do not require newer `GLIBC_2.39` hosts.
+- **Sidebar Install Recovery Hardened**: installers smoke-test existing and prebuilt `ccb-agent-sidebar` binaries before trusting them, rebuild locally with cargo when needed, and source wrappers now resolve symlinks before locating the repo target binary.
+- **Sidebar Activity And Layout Follow-Up**: project sidebar status now reflects active, queued, stale, callback-waiting, and provider-background activity more accurately, while sidebar width handling preserves the agent grid area.
+
+## v7.0.1 (2026-05-23)
+
+### Sidebar Release Packaging Hotfix
+
+- **macOS Checksum Portability Fixed**: `bin/package-ccb-agent-sidebar-release` now writes sidebar artifact SHA256 files with `sha256sum`, macOS `shasum -a 256`, or a `python3` fallback, restoring macOS GitHub Tests for the v7 release line.
+
+## v7.0.0 (2026-05-23)
+
+### Native Sidebar Control Release
+
+- **Native CCB Sidebar Added**: adds the Rust `ccb-agent-sidebar` helper with per-window project view, fixed gray sidebar identity, colored provider/runtime activity status, mouse/keyboard focus switching, and release packaging hooks.
+- **Comms Tracking Split From Agent Activity**: top agent rows now reflect real provider pane/runtime activity, while the bottom Comms section remains the CCB ask/job tracking and recovery surface.
+- **Window Topology Config Added**: `ccb_config` docs and skills now cover `version = 2` `[windows]` syntax; explicit windows mount multiple named tmux windows with sidebar panes.
+- **Legacy Config Compatibility Preserved**: compact and hybrid configs without `[windows]` remain single business-window layouts and keep existing `cmd` semantics.
+- **Terminal And Install Compatibility Hardened**: includes Ghostty/tmux `TERM` normalization, tmux environment/mouse fixes, source wrapper handling, release sidebar binary packaging, and Codex legacy root-only session migration into private home sessions.
+
+## v6.2.9 (2026-05-22)
+
+### Callback Visibility And Diagnostics Release
+
+- **Callback Root Replies Are Visible**: delegated callback root jobs now show `callback_pending` while the child chain is still running, then `ask get` and `watch` surface the final message-bureau reply after the continuation completes.
+- **Ask Observer Commands Marked Diagnostics-Only**: inherited ask skills, CLI help, project/runtime memory surfaces, and tests now describe `ask get`, `pend`, `watch`, and `ping` as explicit debugging tools, not normal ask workflow steps.
+- **Long CCB Text Artifacts Added**: oversized ask bodies, terminal replies, notices, and callback continuation text spill to bounded UTF-8 artifacts under `.ccb/ccbd/artifacts/text/`, with previews and diagnostics bundle coverage.
+- **Shutdown Cleanup Hardened**: remote kill now tracks both prepared and current control-plane pids, and foreground tmux exit can best-effort request project stop-all so an exited namespace does not leave the backend looking active.
+
+## v6.2.8 (2026-05-21)
+
+### Config Source, Stop Cleanup, And Tmux Policy Release
+
+- **Config Source Fixes Included**: the current release package includes explicit config source kinds for built-in defaults, user `~/.ccb/ccb.config`, and project `.ccb/ccb.config`, with project config taking highest priority.
+- **Kill Cleanup Ordering Included**: `stop_all` defers project tmux namespace destruction until after the socket response finalizer so `ccb kill` and `ccb kill -f` can complete cleanup from inside a CCB pane.
+- **Managed Tmux Policy Follow-Up Added**: isolated managed tmux sessions now explicitly enable CCB-owned `mouse on` and `set-clipboard on` policy in project namespaces and detached tmux paths.
+
 ## v6.2.7 (2026-05-21)
 
 ### Config Source And Stop Cleanup Release

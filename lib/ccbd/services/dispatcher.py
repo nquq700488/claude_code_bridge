@@ -6,6 +6,7 @@ from .dispatcher_runtime import (
     cancel_job,
     cancel_with_decision,
     cleanup_stale_execution_states,
+    comms_recover,
     complete_job,
     get_job,
     latest_for_agent,
@@ -35,6 +36,7 @@ from message_bureau import MessageBureauControlService, MessageBureauFacade
 from provider_core.catalog import ProviderCatalog, build_default_provider_catalog
 from storage.paths import PathLayout
 
+from .dispatcher_runtime.artifact_maintenance import sweep_text_artifacts_if_due
 from .registry import AgentRegistry
 from .snapshot_writer import SnapshotWriter
 
@@ -111,6 +113,7 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
         return submit_jobs(self, request)
 
     def tick(self) -> tuple[JobRecord, ...]:
+        sweep_text_artifacts_if_due(self)
         repair_callback_edges(self)
         prepare_reply_deliveries(self)
         return tick_jobs(self)
@@ -121,11 +124,22 @@ class JobDispatcher(DispatcherRuntimeStateMixin, DispatcherFacadeMixin):
     def complete(self, job_id: str, decision: CompletionDecision) -> JobRecord:
         return complete_job(self, job_id, decision)
 
-    def cancel(self, job_id: str) -> CancelReceipt:
-        return cancel_job(self, job_id)
+    def cancel(self, job_id: str, *, record_reply: bool = True) -> CancelReceipt:
+        return cancel_job(self, job_id, record_reply=record_reply)
 
-    def _cancel_with_decision(self, current: JobRecord, cancelled_at: str, reply: str, snapshot) -> CancelReceipt:
-        return cancel_with_decision(self, current, cancelled_at, reply, snapshot)
+    def _cancel_with_decision(
+        self,
+        current: JobRecord,
+        cancelled_at: str,
+        reply: str,
+        snapshot,
+        *,
+        record_reply: bool = True,
+    ) -> CancelReceipt:
+        return cancel_with_decision(self, current, cancelled_at, reply, snapshot, record_reply=record_reply)
+
+    def comms_recover(self, payload: dict | str) -> dict[str, object]:
+        return comms_recover(self, payload)
 
     def get(self, job_id: str) -> JobRecord | None:
         return get_job(self, job_id)

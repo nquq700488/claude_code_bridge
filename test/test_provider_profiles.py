@@ -127,7 +127,7 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     assert (runtime_home / 'config.toml').is_file()
     assert (runtime_home / 'auth.json').is_file()
     assert (runtime_home / 'skills' / 'demo.md').is_file()
-    assert (runtime_home / 'skills').is_symlink()
+    assert not (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
     assert (runtime_home / 'commands').is_symlink()
     assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
@@ -171,6 +171,26 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
     assert 'memories = true' in config_text
     assert 'external_migration = false' in config_text
     assert 'external_migration = true' not in config_text
+
+
+def test_materialize_codex_profile_marks_project_and_workspace_trusted(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo'
+    workspace_path = tmp_path / 'repo-worktree'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    workspace_path.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text('model = "gpt-5.5"\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1', provider_profile=ProviderProfileSpec(mode='isolated')),
+        workspace_path=workspace_path,
+    )
+
+    config = tomllib.loads((Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8'))
+    assert config['projects'][str(project_root.resolve())]['trust_level'] == 'trusted'
+    assert config['projects'][str(workspace_path.resolve())]['trust_level'] == 'trusted'
 
 
 def test_materialize_codex_profile_preserves_inline_table_arrays(
@@ -279,6 +299,7 @@ def test_materialize_codex_profile_disables_external_migration_without_toml_read
     assert 'external_migration = true' not in config_text
     assert '[projects."/tmp/demo"]' in config_text
     assert 'trust_level = "trusted"' in config_text
+    assert f'[projects."{project_root.resolve()}"]' in config_text
 
 
 def test_materialize_codex_profile_merges_final_features_without_toml_reader(
@@ -399,6 +420,39 @@ def test_materialize_codex_home_config_does_not_replace_user_asset_dir(tmp_path:
     assert not (target_home / 'skills.ccb-projection.json').exists()
 
 
+def test_materialize_codex_home_config_repairs_owned_skills_in_user_asset_dir(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-codex-home'
+    target_home = tmp_path / 'managed-codex-home'
+    (source_home / 'skills' / 'ask').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'ask' / 'SKILL.md').write_text('name: ask\n', encoding='utf-8')
+    (source_home / 'skills' / 'ccb-config').mkdir(parents=True, exist_ok=True)
+    (source_home / 'skills' / 'ccb-config' / 'SKILL.md').write_text('name: ccb-config\n', encoding='utf-8')
+    (target_home / 'skills').mkdir(parents=True, exist_ok=True)
+    (target_home / 'skills' / 'custom.md').write_text('user skill\n', encoding='utf-8')
+    (target_home / 'skills' / 'ccb_config').mkdir(parents=True, exist_ok=True)
+    (target_home / 'skills' / 'ccb_config' / 'SKILL.md').write_text('name: ccb_config\n', encoding='utf-8')
+    stale_target = target_home / 'skills' / 'ccb-config'
+    stale_target.mkdir(parents=True, exist_ok=True)
+    stale_source = tmp_path / 'stale-skill.md'
+    stale_source.write_text('name: ccb-config-stale\n', encoding='utf-8')
+    try:
+        (stale_target / 'SKILL.md').symlink_to(stale_source)
+    except OSError:
+        pytest.skip('symlink creation is not available in this test environment')
+
+    codex_home_config.materialize_codex_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_commands=False, inherit_memory=False),
+        source_home=source_home,
+    )
+
+    assert (target_home / 'skills' / 'custom.md').read_text(encoding='utf-8') == 'user skill\n'
+    assert not (target_home / 'skills' / 'ccb_config').exists()
+    assert not (target_home / 'skills' / 'ccb-config' / 'SKILL.md').is_symlink()
+    assert (target_home / 'skills' / 'ccb-config' / 'SKILL.md').read_text(encoding='utf-8') == 'name: ccb-config\n'
+    assert not (target_home / 'skills.ccb-projection.json').exists()
+
+
 def test_materialize_codex_home_config_does_not_replace_user_asset_symlink(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-codex-home'
     target_home = tmp_path / 'managed-codex-home'
@@ -439,8 +493,8 @@ def test_materialize_codex_home_config_migrates_matching_legacy_asset_copy(tmp_p
         source_home=source_home,
     )
 
-    assert (target_home / 'skills').is_symlink()
-    assert (target_home / 'skills').resolve() == (source_home / 'skills').resolve()
+    assert not (target_home / 'skills').is_symlink()
+    assert (target_home / 'skills' / 'demo.md').read_text(encoding='utf-8') == 'source skill\n'
     assert (target_home / 'skills.ccb-projection.json').is_file()
 
 
@@ -1655,6 +1709,53 @@ def test_macos_keychain_services_keep_current_credentials_first_when_custom_oaut
         'Claude Code-custom-oauth',
         'Claude Code',
     )
+
+
+def test_macos_keychain_services_prioritize_explicit_override(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_KEYCHAIN_SERVICE_OVERRIDE', 'Claude Code-credentials-account-a')
+    monkeypatch.setenv('CLAUDE_CODE_CUSTOM_OAUTH_URL', 'https://oauth.example.test')
+
+    assert claude_home_runtime._macos_keychain_services() == (
+        'Claude Code-credentials-account-a',
+        'Claude Code-credentials',
+        'Claude Code-custom-oauth',
+        'Claude Code',
+    )
+
+
+def test_materialize_claude_home_config_reads_explicit_macos_keychain_override(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def fake_run(argv, **_kwargs):
+        calls.append([str(part) for part in argv])
+        service = calls[-1][calls[-1].index('-s') + 1]
+        if service == 'Claude Code-credentials-account-a':
+            return Result(0, json.dumps({'claudeAiOauth': {'refreshToken': 'override-refresh-token'}}))
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+    monkeypatch.setenv('CCB_KEYCHAIN_SERVICE_OVERRIDE', 'Claude Code-credentials-account-a')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
+    assert payload['claudeAiOauth']['refreshToken'] == 'override-refresh-token'
+    assert calls[0][calls[0].index('-s') + 1] == 'Claude Code-credentials-account-a'
 
 
 def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(tmp_path: Path) -> None:

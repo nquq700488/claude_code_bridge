@@ -101,6 +101,9 @@ Out of scope:
 - Startup, supervision, and shutdown must be reasoned per project anchor, never globally.
 - CCB-managed tmux servers must be started with an isolated tmux config so user-level
   tmux plugins, hooks, and global options cannot alter project pane topology.
+- Any tmux behavior CCB depends on after config isolation, including mouse and
+  clipboard support, must be applied as CCB-owned server policy rather than
+  inherited from user `.tmux.conf`.
 
 ### 5.2 One Authoritative Backend
 
@@ -384,6 +387,10 @@ Foreground command split:
     - the foreground attach RPC budget is allowed to match the stable operational client budget, while daemon config/probe checks must remain fast-fail
     - the foreground attach target-ready budget must remain bounded by the startup transaction budget so namespace/UI lag does not redefine backend startup authority
   - once the tmux client is observed attached, `ccb` should issue a best-effort tmux client refresh so the first attached frame does not depend on a manual user redraw
+  - if the foreground tmux client later exits and the authoritative project
+    session no longer exists on the project-owned socket, `ccb` must best-effort
+    request project stop-all before returning so `[server exited]` cannot leave
+    an apparently active backend behind
   - in a non-interactive terminal, reports the start transaction without attaching to tmux
   - startup success and foreground attach success are distinct outcomes; foreground attach failure must not rewrite a successful startup report as failed
   - foreground attach errors must state whether `ccbd` failed to answer the attach ping or whether `ccbd` was responsive but the project namespace was not attachable
@@ -397,11 +404,22 @@ Foreground command split:
 - `ccb -n`
   - is an explicit destructive project reset before start
   - must require interactive confirmation
-  - must clear and rebuild all project-owned `.ccb` runtime state, logs, sessions, workspaces, and mail/message residue
+  - must clear and rebuild project-owned runtime state, logs, workspaces, and mail/message residue
   - must preserve `.ccb/ccb.config` exactly when it exists
+  - must preserve user-owned `.ccb/ccb_memory.md`, `.ccb/history/`, and
+    `.ccb/agents/<agent>/memory.md` files
+  - must preserve managed provider conversation history for the same normalized
+    agent name and provider present in the effective config, including
+    `.ccb/agents/<agent>/provider-state/<provider>/` under the effective
+    `PathLayout` runtime root and the matching project session file such as
+    `.codex-<agent>-session`
+  - must not preserve provider-runtime, mailbox, jobs, pane, helper, or
+    non-configured/wrong-provider agent residue
   - if `.ccb/ccb.config` does not exist, startup may bootstrap the default config after reset
   - the same invocation must then continue through the normal `ccb` start transaction rather than using a separate startup implementation
-  - that first post-reset startup must force `restore=false` so provider-global history cannot silently reattach old conversations
+  - that first post-reset startup must force `restore=false` so provider-global
+    history cannot silently reattach old conversations outside the preserved
+    managed provider-state boundary
   - after the fresh post-reset startup completes, later ordinary `ccb` runs return to the default `-a -r` semantics
 - removed attach-only commands
   - the foreground attach stage belongs to `ccb`
@@ -419,7 +437,7 @@ Project namespace compatibility:
 - for a fresh namespace, the `cmd` pane bootstrap happens only after layout finalization and must replace that silent placeholder in place
 - project-namespace bootstrap must treat tmux server warmup and tmux server-policy persistence as separate steps:
   - `prepare_server` warms the server boundary only
-  - server-global options that require a live session, such as `destroy-unattached off`, must be applied only after the authoritative project session exists
+  - server-global options that require a live session, such as `destroy-unattached off`, CCB-managed `mouse on`, and CCB-managed `set-clipboard on`, must be applied only after the authoritative project session exists
 - project-owned pane mutation commands, including `respawn-pane` used by `cmd` bootstrap and pane-backed runtime launch/relaunch, must use the same shared tmux ready-retry budget as namespace create/reflow rather than a separate shorter timeout
 - namespace session liveness on the project-owned tmux socket must treat both `can't find session` and `no server running on <project socket>` as "namespace absent" for create/recreate decisions; startup must not fail that path as a generic tmux inspect error
 - startup must not rely on "real shell first, respawn later" behavior for the `cmd` pane, because that leaves stale prompt residue and can surface zsh no-newline `%` markers
@@ -520,6 +538,14 @@ Project-namespace reflow safety rules:
 - only reflow when no other configured agent is currently `BUSY`
 - if reflow is not safe, fall back to local provider recovery rather than disrupting unrelated work
 
+Manual pane restart:
+
+- an explicit user-triggered project pane restart is not ordinary pane-death recovery; while the project namespace is healthy, it must respawn configured agent panes in place and preserve the attached tmux session
+- namespace recreation is an escalation fallback only when the current project namespace is no longer a trustworthy repair boundary
+- the restart target set is all configured agents from `.ccb/ccb.config`, not only the currently focused or default subset
+- the restart must inherit restore and auto-permission choices from the persisted project start policy
+- when requested from a sidebar pane, the sidebar must remain attached while the daemon restarts agent panes
+
 Project-socket cleanup rules:
 
 - startup must compute the authoritative active pane set for the current project-owned tmux socket
@@ -587,8 +613,8 @@ That means:
 - once shutdown intent is acquired, new mutating RPC requests such as `submit`, `start`, `restore`, `retry`, or `attach` must be rejected with a stable lifecycle-level stopping error; clients must not surface raw socket reset errors as the user-visible contract
 - shutdown-style RPC handlers that return an after-response finalizer must enqueue that finalizer even when writing the response fails; `stop_all` may destroy the tmux pane that issued `ccb kill`, and a disconnected client must not prevent backend unmount/finalization
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown
-- CLI remote-stop shutdown helpers must snapshot structured control-plane pids and record shutdown intent before sending `stop_all`; post-stop inspections may observe a newer generation and must not become the authority for which pids to terminate
-- CLI remote-stop shutdown helpers must not treat lifecycle `phase=unmounted` alone as terminal; after a successful `stop_all` response they must also wait for the recorded `ccbd` and project `keeper` pids to exit, terminate lingering control-plane pids with the same bounded pid-tree cleanup used by the local shutdown path, and persist lifecycle `phase=unmounted` / `desired_state=stopped`
+- CLI remote-stop shutdown helpers must snapshot structured control-plane pids and record shutdown intent before sending `stop_all`; they must also keep tracking any current `ccbd` and project `keeper` pids still published by the project lease during the bounded shutdown wait so a missed pre-stop snapshot cannot leave a live backend behind
+- CLI remote-stop shutdown helpers must not treat lifecycle `phase=unmounted` alone as terminal; after a successful `stop_all` response they must also wait for the recorded and currently published `ccbd` / project `keeper` pids to exit, terminate lingering control-plane pids with the same bounded pid-tree cleanup used by the local shutdown path, and persist lifecycle `phase=unmounted` / `desired_state=stopped`
 - orphan process collection must include structured control-plane pid authority from `.ccb/ccbd/lease.json`, `.ccb/ccbd/keeper.json`, and `.ccb/ccbd/lifecycle.json`; `/proc` command-line matching is only a fallback evidence source and must not be the only way to find ccbd/keeper residue
 - control-plane `/proc` fallback matching must be scoped to CCB control-plane commands for the same `--project <project_root>`; it must not broadly kill every process whose command line mentions the project root
 - tmux shutdown cleanup must preserve full project socket paths from `TMUX`, `CCB_TMUX_SOCKET_PATH`, and runtime authority records; collapsing `/path/to/tmux.sock` to `tmux.sock` targets a different tmux server and violates project-scoped kill semantics

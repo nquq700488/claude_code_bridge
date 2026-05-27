@@ -254,6 +254,93 @@ def test_ccbd_socket_roundtrip_and_shutdown(tmp_path: Path) -> None:
     assert app.mount_manager.load_state().mount_state.value == 'unmounted'
 
 
+def test_ccbd_socket_get_and_watch_resolve_callback_root_final_reply(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-get-watch'
+    ctx = _prepare_project(project_root, _agent_config_text(('main', 'codex'), ('worker', 'codex')))
+    app = CcbdApp(project_root)
+    app.registry.upsert(
+        _runtime(
+            'main',
+            project_id=ctx.project_id,
+            workspace_path=str(app.paths.workspace_path('main')),
+            pid=777,
+        )
+    )
+    app.registry.upsert(
+        _runtime(
+            'worker',
+            project_id=ctx.project_id,
+            workspace_path=str(app.paths.workspace_path('worker')),
+            pid=778,
+        )
+    )
+
+    thread = threading.Thread(target=app.serve_forever, kwargs={'poll_interval': 0.05}, daemon=True)
+    thread.start()
+    _wait_for(app.paths.ccbd_socket_path)
+    client = CcbdClient(app.paths.ccbd_socket_path)
+
+    parent_job_id = client.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='main',
+            from_actor='user',
+            body='delegate and return final',
+            task_id='task-callback',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )['job_id']
+    app.dispatcher.tick()
+    _wait_for_job_status(client, parent_job_id, 'running')
+
+    child_job_id = client.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='worker',
+            from_actor='main',
+            body='collect evidence',
+            task_id='task-callback',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'callback'},
+        )
+    )['job_id']
+    app.dispatcher.complete(parent_job_id, _decision(reply='delegated to worker'))
+
+    delegated = client.get(parent_job_id)
+    assert delegated['status'] == 'completed'
+    assert delegated['reply'] == ''
+    assert delegated['completion_reason'] == 'callback_pending'
+    assert delegated['visible_reply_source'] == 'callback_delegated_pending'
+
+    app.dispatcher.tick()
+    app.dispatcher.complete(child_job_id, _decision(reply='worker result'))
+    app.dispatcher.tick()
+    edge = app.dispatcher._message_bureau.callback_edge_for_child_job(child_job_id)
+    assert edge is not None
+    assert edge.continuation_job_id
+    app.dispatcher.complete(edge.continuation_job_id, _decision(reply='FINAL CALLBACK RESULT'))
+
+    completed = client.get(parent_job_id)
+    assert completed['reply'] == 'FINAL CALLBACK RESULT'
+    assert completed['completion_reason'] == 'task_complete'
+    assert completed['visible_reply_source'] == 'message_bureau_reply'
+    assert completed['visible_reply_id']
+
+    watched = client.watch(parent_job_id)
+    assert watched['terminal'] is True
+    assert watched['reply'] == 'FINAL CALLBACK RESULT'
+    assert watched['visible_reply_source'] == 'message_bureau_reply'
+
+    shutdown = client.shutdown()
+    assert shutdown['state'] == 'unmounted'
+    thread.join(timeout=2)
+    assert not thread.is_alive()
+
+
 def test_ccbd_control_plane_metrics_record_queue_wait_and_handler_durations(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-metrics'
     ctx = _prepare_project(project_root, _single_agent_config_text('codex', 'codex'))
@@ -378,6 +465,50 @@ def test_socket_server_uses_larger_listen_backlog(tmp_path: Path, monkeypatch) -
     server.shutdown()
 
     assert listen_backlogs == [128]
+
+
+def test_socket_server_bounds_accepted_connection_queue(tmp_path: Path) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    server = CcbdSocketServer(socket_path)
+    closed: list[int] = []
+
+    class _Conn:
+        def __init__(self, index: int) -> None:
+            self.index = index
+
+        def close(self) -> None:
+            closed.append(self.index)
+
+    import ccbd.socket_server_runtime.loop as socket_loop
+
+    for index in range(140):
+        socket_loop.enqueue_connection(server, _Conn(index))
+
+    assert server._connection_queue.qsize() == 128
+    assert closed == list(range(12))
+
+
+def test_socket_worker_drops_stale_queued_connection(tmp_path: Path, monkeypatch) -> None:
+    socket_path = tmp_path / 'ccbd.sock'
+    server = CcbdSocketServer(socket_path)
+    closed: list[str] = []
+    handled: list[str] = []
+
+    class _Conn:
+        def close(self) -> None:
+            closed.append('closed')
+
+    import ccbd.socket_server_runtime.loop as socket_loop
+
+    monkeypatch.setattr(socket_loop.time, 'monotonic', lambda: 10.5)
+    server._connection_queue.put_nowait((_Conn(), 8.0))
+    server._connection_queue.put_nowait(server._worker_sentinel)
+    server._handle_connection = lambda conn: handled.append('handled') or 'ping'  # type: ignore[method-assign]
+
+    socket_loop.worker_loop(server, interval=0.05, on_tick=None)
+
+    assert closed == ['closed']
+    assert handled == []
 
 
 def test_socket_server_timeout_after_shutdown_does_not_run_tick(tmp_path: Path) -> None:

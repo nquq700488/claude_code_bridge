@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import subprocess
 
 import pytest
@@ -66,11 +67,68 @@ def test_inherited_skills_live_under_inherit_skills_only() -> None:
     assert (inherited / "claude_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "codex_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "droid_skills" / "ask" / "SKILL.md").is_file()
-    assert (inherited / "claude_skills" / "ccb_config" / "SKILL.md").is_file()
-    assert (inherited / "codex_skills" / "ccb_config" / "SKILL.md").is_file()
+    assert (inherited / "claude_skills" / "ccb-config" / "SKILL.md").is_file()
+    assert (inherited / "codex_skills" / "ccb-config" / "SKILL.md").is_file()
+    assert (inherited / "claude_skills" / "ccb-clear" / "SKILL.md").is_file()
+    assert (inherited / "codex_skills" / "ccb-clear" / "SKILL.md").is_file()
 
-    assert not (repo_root / "useful_tools" / "claude_skills" / "ccb_config").exists()
-    assert not (repo_root / "useful_tools" / "codex_skills" / "ccb_config").exists()
+    assert not (repo_root / "useful_tools" / "claude_skills" / "ccb-config").exists()
+    assert not (repo_root / "useful_tools" / "codex_skills" / "ccb-config").exists()
+    assert not (repo_root / "useful_tools" / "claude_skills" / "ccb-clear").exists()
+    assert not (repo_root / "useful_tools" / "codex_skills" / "ccb-clear").exists()
+
+
+def test_inherited_skill_set_is_minimal() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+
+    expected = {
+        "claude_skills": {"ask", "ccb-config", "ccb-clear"},
+        "codex_skills": {"ask", "ccb-config", "ccb-clear"},
+        "droid_skills": {"ask"},
+    }
+    for provider_root, expected_names in expected.items():
+        skill_root = repo_root / "inherit_skills" / provider_root
+        actual = {
+            path.name
+            for path in skill_root.iterdir()
+            if path.is_dir() and (path / "SKILL.md").is_file()
+        }
+
+        assert actual == expected_names
+
+
+def test_install_scripts_current_skill_lists_are_minimal() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    install_sh = (repo_root / "install.sh").read_text(encoding="utf-8")
+    install_ps1 = (repo_root / "install.ps1").read_text(encoding="utf-8")
+
+    assert 'local ccb_skills="ask ccb-config ccb-clear"' in install_sh
+    assert 'local ccb_skills="ask ping' not in install_sh
+    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear")' in install_ps1
+    assert '$ccbSkills = @("ask", "ccb-config", "ping"' not in install_ps1
+    assert '$droidSkills = @("ask")' in install_ps1
+
+
+def test_inherited_codex_skill_names_are_valid_and_match_directories() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    skill_root = repo_root / "inherit_skills" / "codex_skills"
+    name_re = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+
+    for skill_dir in skill_root.iterdir():
+        if not skill_dir.is_dir():
+            continue
+        skill_md = skill_dir / "SKILL.md"
+        if not skill_md.is_file():
+            continue
+        text = skill_md.read_text(encoding="utf-8")
+        first_name = next(
+            line.split(":", 1)[1].strip()
+            for line in text.splitlines()
+            if line.startswith("name:")
+        )
+
+        assert first_name == skill_dir.name
+        assert name_re.fullmatch(first_name)
 
 
 def test_ccb_config_skill_uses_current_config_authority() -> None:
@@ -80,14 +138,14 @@ def test_ccb_config_skill_uses_current_config_authority() -> None:
             repo_root
             / "inherit_skills"
             / provider_root
-            / "ccb_config"
+            / "ccb-config"
             / "SKILL.md"
         ).read_text(encoding="utf-8")
         reference_text = (
             repo_root
             / "inherit_skills"
             / provider_root
-            / "ccb_config"
+            / "ccb-config"
             / "references"
             / "ccb-config.md"
         ).read_text(encoding="utf-8")
@@ -97,7 +155,14 @@ def test_ccb_config_skill_uses_current_config_authority() -> None:
         assert "Never write `.ccb_config/ccb.config`" in skill_text
         assert "Never run `ccb`, `ccb -s`, `ccb kill`" in skill_text
         assert "result.source_kind" in skill_text
+        assert "Explicit windows topology uses `version = 2`, `[windows]`" in skill_text
+        assert "treat it as a migration task" in skill_text
+        assert "Migration to `[windows]` is opt-in" in skill_text
         assert "Do not write `.ccb_config/ccb.config`" in reference_text
+        assert "## Explicit Windows Topology" in reference_text
+        assert "## Migrating Old Configs To Windows" in reference_text
+        assert "Old compact and hybrid configs are still valid single-window configs" in reference_text
+        assert "cmd` is not supported inside `[windows]` topology" in reference_text
 
 
 def test_ccb_config_memory_patterns_describe_callback_routing() -> None:
@@ -107,14 +172,14 @@ def test_ccb_config_memory_patterns_describe_callback_routing() -> None:
             repo_root
             / "inherit_skills"
             / provider_root
-            / "ccb_config"
+            / "ccb-config"
             / "SKILL.md"
         ).read_text(encoding="utf-8")
         memory_text = (
             repo_root
             / "inherit_skills"
             / provider_root
-            / "ccb_config"
+            / "ccb-config"
             / "references"
             / "memory-patterns.md"
         ).read_text(encoding="utf-8")

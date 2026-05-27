@@ -107,6 +107,7 @@ def test_attempt_and_reply_stores_support_message_and_agent_queries(tmp_path: Pa
             agent_name='Agent1',
             terminal_status=ReplyTerminalStatus.COMPLETED,
             reply='done',
+            reply_artifact={'path': '/tmp/reply.txt', 'bytes': 5000, 'sha256': 'abc'},
             diagnostics={'tokens': 12},
             finished_at='2026-03-30T11:03:00Z',
         )
@@ -115,10 +116,14 @@ def test_attempt_and_reply_stores_support_message_and_agent_queries(tmp_path: Pa
     latest_attempt = attempt_store.get_latest('att-2')
     assert latest_attempt is not None
     assert latest_attempt.attempt_state is AttemptState.COMPLETED
+    assert attempt_store.get_latest_by_message_id('msg-1').attempt_id == 'att-2'
+    assert attempt_store.get_latest_by_message_id('msg-1', exclude_job_id='job-2').attempt_id == 'att-1'
+    assert attempt_store.get_latest_by_message_agent('msg-1', 'Agent1').attempt_id == 'att-2'
     assert [attempt.attempt_id for attempt in attempt_store.list_message('msg-1')] == ['att-1', 'att-2']
     assert [attempt.attempt_id for attempt in attempt_store.list_agent('Agent1')] == ['att-1', 'att-2']
 
     latest_reply = reply_store.get_latest('rep-1')
     assert latest_reply is not None
     assert latest_reply.agent_name == 'agent1'
+    assert latest_reply.reply_artifact == {'path': '/tmp/reply.txt', 'bytes': 5000, 'sha256': 'abc'}
     assert [reply.reply_id for reply in reply_store.list_message('msg-1')] == ['rep-1']

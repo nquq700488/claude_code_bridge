@@ -61,7 +61,8 @@ def print_start_help(*, file=None) -> None:
             Primary workflow:
               ccb                  Start project agents from `.ccb/ccb.config`.
               ccb -s               Safe start. Disable CLI auto-permission override.
-              ccb -n               Rebuild .ccb except ccb.config, then start fresh.
+              ccb -n               Rebuild runtime state while preserving config and managed agent history.
+              ccb clear [agent...]  Send provider-native /clear to managed agent panes.
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
@@ -70,10 +71,10 @@ def print_start_help(*, file=None) -> None:
               ccb ask <agent> [from <sender>] <message>
               ccb doctor
 
-            Secondary control-plane status:
+            Diagnostics-only control-plane status:
               ccb ping <agent|ccbd>
 
-            Supplementary observer:
+            Diagnostics-only observer:
               ccb pend <agent|job_id> [N]
               ccb pend --watch <agent|job_id>
               ccb pend --inbox [--detail] <agent>
@@ -107,7 +108,7 @@ def print_kill_help(*, file=None) -> None:
             Notes:
               - `kill` is project-scoped. It does not bootstrap a missing `.ccb`.
               - `kill` still works when `.ccb` exists but `ccb.config` is missing or stale.
-              - Use `ccb -n` after `ccb kill` when you want to rebuild `.ccb` but keep `ccb.config`.
+              - Use `ccb -n` after `ccb kill` when you want to rebuild runtime state but keep config and managed agent history.
             """
         ).strip(),
         file=file,
@@ -126,7 +127,7 @@ _COMMAND_HELP = {
     "ping": """
         usage: ccb ping <agent|all|ccbd>
 
-        Light control-plane status:
+        Diagnostics-only control-plane status:
           ccb ping <agent>   Show cached runtime status for one named agent.
           ccb ping all       Show cached mounted-agent status across the project.
           ccb ping ccbd      Show cached project daemon status.
@@ -134,7 +135,8 @@ _COMMAND_HELP = {
     "pend": """
         usage: ccb pend [--watch|--inbox|--queue] [--detail] [--timeout S] <agent|job_id|all> [N]
 
-        Weak observer surface:
+        Diagnostics-only weak observer surface:
+          These commands are not part of normal ask workflows.
           Primary weak observer entrypoint:
             ccb pend <agent>                    Show a non-authoritative observer snapshot for one agent.
             ccb pend <job_id>                   Show a non-authoritative observer snapshot for one submitted job.
@@ -151,9 +153,10 @@ _COMMAND_HELP = {
     "watch": """
         usage: ccb watch <agent|job_id>
 
-        Weak observer compatibility entrypoint:
+        Diagnostics-only weak observer compatibility entrypoint:
           ccb watch <agent>   Stream non-authoritative observer events for one agent.
           ccb watch <job_id>  Stream non-authoritative observer events for one job until terminal completion or timeout.
+          This is not part of normal ask workflows.
           Prefer `ccb pend --watch <agent|job_id>` as the converged observer entrypoint.
           Do not treat non-terminal watch output as authoritative completion.
           Use `ccb trace <id>` for lineage when needed.
@@ -229,6 +232,20 @@ _COMMAND_HELP = {
           - Keeps Claude versions currently referenced by managed homes.
           - Does not remove provider sessions, auth, plugin bundles, mailbox data, or runtime authority.
           - Use `ccb doctor storage` before cleanup to inspect storage classes.
+    """,
+    "clear": """
+        usage: ccb clear [agent_name|all]...
+
+        Agent context reset:
+          ccb clear             Send /clear to every configured mounted agent pane.
+          ccb clear agent1      Send /clear to one agent pane.
+          ccb clear agent1 agent2
+                                Send /clear to multiple agent panes.
+
+        Notes:
+          - This sends the provider-native /clear command into each pane.
+          - It does not delete .ccb state, workspaces, auth, sessions, or logs.
+          - Use `ccb kill` or the sidebar restart control when you need process restart.
     """,
     "doctor": """
         usage: ccb doctor [ps|logs <agent>|storage] [--output [PATH]]

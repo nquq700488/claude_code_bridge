@@ -21,6 +21,14 @@ def test_control_plane_env_keeps_provider_api_env(monkeypatch) -> None:
     assert env['GOOGLE_GEMINI_BASE_URL'] == 'https://chatapi.onechats.ai'
 
 
+def test_control_plane_env_keeps_claude_keychain_override(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_KEYCHAIN_SERVICE_OVERRIDE', 'Claude Code-credentials-account-a')
+
+    env = control_plane_env()
+
+    assert env['CCB_KEYCHAIN_SERVICE_OVERRIDE'] == 'Claude Code-credentials-account-a'
+
+
 def test_control_plane_env_keeps_user_session_transport_for_cmd_shell(monkeypatch) -> None:
     monkeypatch.setenv('DISPLAY', ':0')
     monkeypatch.setenv('WAYLAND_DISPLAY', 'wayland-0')
@@ -65,3 +73,27 @@ def test_control_plane_env_keeps_network_transport_without_provider_authority(mo
     assert 'CLAUDE_PROJECTS_ROOT' not in env
     assert 'CCB_SESSION_ID' not in env
     assert 'CCB_CALLER_ACTOR' not in env
+
+
+def test_control_plane_env_drops_outer_tmux_authority(monkeypatch) -> None:
+    monkeypatch.setenv('TMUX', '/tmp/tmux-1000/default,123,0')
+    monkeypatch.setenv('TMUX_PANE', '%77')
+    monkeypatch.setenv('CCB_TMUX_SOCKET', 'outer')
+    monkeypatch.setenv('CCB_TMUX_SOCKET_PATH', '/tmp/outer.sock')
+
+    env = control_plane_env()
+
+    assert 'TMUX' not in env
+    assert 'TMUX_PANE' not in env
+    assert 'CCB_TMUX_SOCKET' not in env
+    assert 'CCB_TMUX_SOCKET_PATH' not in env
+
+
+def test_control_plane_env_drops_outer_pythonpath(monkeypatch) -> None:
+    monkeypatch.setenv('PYTHONPATH', '/stable/ccb/lib:/other')
+    monkeypatch.setenv('PYTHONUNBUFFERED', '1')
+
+    env = control_plane_env()
+
+    assert 'PYTHONPATH' not in env
+    assert env['PYTHONUNBUFFERED'] == '1'

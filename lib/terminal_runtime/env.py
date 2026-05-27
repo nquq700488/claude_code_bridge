@@ -47,6 +47,26 @@ def subprocess_kwargs() -> dict:
     return {}
 
 
+def isolated_tmux_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    isolated = tmux_compatible_env(env)
+    for key in (
+        "TMUX",
+        "TMUX_PANE",
+        "CCB_TMUX_SOCKET",
+        "CCB_TMUX_SOCKET_PATH",
+    ):
+        isolated.pop(key, None)
+    return isolated
+
+
+def tmux_compatible_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    compatible = dict(os.environ if env is None else env)
+    term = str(compatible.get("TERM") or "").strip().lower()
+    if term == "xterm-ghostty":
+        compatible["TERM"] = "xterm-256color"
+    return compatible
+
+
 def is_wsl() -> bool:
     try:
         return "microsoft" in Path("/proc/version").read_text().lower()
