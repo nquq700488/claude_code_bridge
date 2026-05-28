@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.0.9 | 最后更新：2026-05-27
+> 版本：适用于 CCB v7.0.11 | 最后更新：2026-05-28
 
 ---
 
@@ -30,6 +30,7 @@
 核心能力：
 - 一键启停多个 AI CLI Agent
 - **原生 Agent Sidebar（v7.0+）**：每个 tmux 窗口左侧实时显示所有 Agent 状态，支持点击切换焦点
+- **Provider Activity 追踪（v7.0.11+）**：通过 provider-native hook 产物精确识别 Agent 的 active / pending / idle / failed 状态，Sidebar 状态显示更准确
 - **多窗口拓扑（v7.0+）**：一个项目可配置多个 tmux 窗口，每个窗口有独立的 Agent 布局和 Sidebar
 - Agent 间异步通信（邮箱系统）
 - 按项目配置 Agent 团队和 tmux 分屏布局
@@ -134,6 +135,7 @@ cd claude_code_bridge
    - `ctx-transfer` → 上下文传递
    - `mmx-daemon` → MMX 守护进程
    - `ccb-agent-sidebar` → Agent Sidebar 原生 TUI（v7.0+）
+   - `ccb-provider-activity-hook` → Provider Activity Hook（v7.0.11+）
    - `build-ccb-agent-sidebar` → Sidebar 构建脚本（v7.0+）
    - `package-ccb-agent-sidebar-release` → Sidebar 发布打包（v7.0+）
 
@@ -181,6 +183,7 @@ cd claude_code_bridge
 │   ├── autonew                     # 自动新建会话
 │   ├── ctx-transfer                # 上下文传递
 │   ├── mmx-daemon                  # MMX 守护进程
+│   ├── ccb-provider-activity-hook  # Provider Activity Hook（v7.0.11+）
 │   ├── ccb-agent-sidebar           # Agent Sidebar 原生 TUI（v7.0+）
 │   ├── build-ccb-agent-sidebar     # Sidebar 构建脚本（v7.0+）
 │   ├── package-ccb-agent-sidebar-release  # Sidebar 发布打包（v7.0+）
@@ -566,7 +569,7 @@ cd /path/to/claude_code_bridge
 
 卸载会移除：
 - `~/.local/share/ccb` — 安装目录（含 `inherit_skills/`、`dev_tools/`、`useful_tools/`）
-- `~/.local/bin/ccb`, `ask`, `autonew`, `ctx-transfer`, `mmx-daemon` — 主可执行文件
+- `~/.local/bin/ccb`, `ask`, `autonew`, `ctx-transfer`, `mmx-daemon`, `ccb-provider-activity-hook` — 主可执行文件
 - `~/.local/bin/ccb-status.sh`, `ccb-border.sh`, `ccb-git.sh`, `ccb-tmux-on.sh`, `ccb-tmux-off.sh` — tmux 辅助脚本
 - `~/.claude/CLAUDE.md` 中的 CCB 配置块
 - `~/.claude/settings.json` 中的 CCB 权限
@@ -908,6 +911,22 @@ cp -r useful_tools/claude_skills/plan-tree ~/.claude/skills/
 - Kimi agent 使用 VS Code 扩展原生配置，session 文件存储在 `.ccb/agents/<name>/kimi-session/`
 - MMX agent 使用 pane log 协议，无 managed home，session 状态存储在 pane log 中
 - 互不污染，全局 Provider 配置不会被修改
+
+### Provider Activity 追踪（v7.0.11+）
+
+v7.0.11 引入 Provider Activity Hook 机制，Sidebar 不再仅依赖 pane 文本推断 Agent 状态，而是通过 provider-native 的 hook 产物直接获取活动证据：
+
+```
+Provider CLI → hook artifact (.ccb/agents/<name>/provider-runtime/<provider>/completion/)
+  → ccb-provider-activity-hook 写入结构化状态文件
+  → ccbd 读取并聚合为 provider_activity 视图
+  → Sidebar 实时展示 active / pending / idle / failed 状态
+```
+
+优势：
+- **更准确**：区分 Agent 真正在处理任务 vs 仅 pane 有输出
+- **更实时**：focus 切换后立即刷新缓存视图，减少 stale 状态
+- **更轻量**：tmux pane 点击直接使用原生 `select-pane` binding，降低延迟
 
 ---
 
