@@ -15,12 +15,13 @@ def write_ask_usage(
         print("", file=out)
     print("Usage:", file=out)
     print(
-        f"  {command_name} [--compact] [--silence] [--callback] <target> [--] <message...>",
+        f"  {command_name} [--compact] [--silence] [--callback] [--notify-sender] <target> [--] <message...>",
         file=out,
     )
     print("      --compact request a distilled reply that preserves key information", file=out)
     print("      --silence request silent-on-success delivery; failures/blockers still surface", file=out)
     print("      --callback route the result back as a new task to the current agent", file=out)
+    print("      --notify-sender request a completion notice to the sender agent inbox when the target agent finishes", file=out)
     print("      nested asks from active tasks must use --callback or --silence", file=out)
     print("      sender is inferred from the current workspace agent and falls back to user", file=out)
     print("      message text may be supplied on stdin", file=out)

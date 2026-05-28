@@ -1250,6 +1250,37 @@ def test_phase2_pend_watch_uses_converged_observer_entrypoint(monkeypatch, tmp_p
     assert 'reply: done' in stdout
 
 
+def test_phase2_pend_watch_passes_timeout_s_to_watch_target(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-pend-watch-timeout'
+    project_root.mkdir()
+    seen: dict[str, object] = {}
+
+    def _fake_watch(context, command):
+        seen['project_root'] = context.project.project_root
+        seen['target'] = command.target
+        seen['timeout_s'] = getattr(command, 'timeout_s', None)
+        yield SimpleNamespace(
+            events=(),
+            terminal=True,
+            job_id='job_123',
+            agent_name='claude',
+            target_name='claude',
+            status='completed',
+            reply='done',
+        )
+
+    monkeypatch.setattr(phase2_module, 'watch_target', _fake_watch)
+
+    code, stdout, stderr = _run_phase2_local(['pend', '--watch', '--timeout', '300', 'claude'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen['project_root'] == project_root.resolve()
+    assert seen['target'] == 'claude'
+    assert seen['timeout_s'] == 300.0
+    assert 'observer_view: watch' in stdout
+    assert 'watch_status: terminal' in stdout
+
+
 def test_phase2_pend_inbox_uses_converged_observer_entrypoint(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-pend-inbox'
     project_root.mkdir()

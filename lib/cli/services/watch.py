@@ -24,7 +24,7 @@ def _watch_poll_interval_seconds() -> float:
 
 def watch_target(context, command):
     def _resolve_timeout_seconds() -> float:
-        explicit = getattr(command, 'timeout', None)
+        explicit = getattr(command, 'timeout_s', None)
         if explicit is not None:
             return float(explicit)
         return _watch_timeout_seconds()

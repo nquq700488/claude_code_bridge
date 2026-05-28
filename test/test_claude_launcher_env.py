@@ -36,6 +36,40 @@ def test_build_claude_env_prefix_prefers_settings_base_url_over_ambient_env() ->
     assert result == "export ANTHROPIC_BASE_URL=https://ccswitch.example.test"
 
 
+def test_build_claude_env_prefix_allows_thinking_workaround_env() -> None:
+    result = build_claude_env_prefix(
+        extra_env={
+            "MAX_THINKING_TOKENS": "0",
+            "CLAUDE_CODE_EFFORT_LEVEL": "low",
+            "UNRELATED": "ignored",
+        },
+        env={},
+        should_drop_base_url_fn=lambda value: False,
+        claude_user_base_url_fn=lambda: "",
+    )
+
+    assert result == "export CLAUDE_CODE_EFFORT_LEVEL=low MAX_THINKING_TOKENS=0"
+
+
+def test_build_claude_env_prefix_allows_profile_thinking_workaround_env() -> None:
+    result = build_claude_env_prefix(
+        profile=ResolvedProviderProfile(
+            provider='claude',
+            agent_name='agent1',
+            mode='inherit',
+            env={
+                "MAX_THINKING_TOKENS": "0",
+                "UNRELATED": "ignored",
+            },
+        ),
+        env={},
+        should_drop_base_url_fn=lambda value: False,
+        claude_user_base_url_fn=lambda: "",
+    )
+
+    assert result == "export MAX_THINKING_TOKENS=0"
+
+
 def test_write_claude_settings_overlay_returns_none_without_agent_settings(tmp_path) -> None:
     assert write_claude_settings_overlay(tmp_path, profile=None) is None
 

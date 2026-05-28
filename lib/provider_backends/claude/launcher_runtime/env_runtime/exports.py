@@ -5,6 +5,14 @@ from pathlib import Path
 
 from provider_profiles import provider_api_env_keys
 
+_CLAUDE_RUNTIME_ENV_KEYS = frozenset(
+    {
+        "ANTHROPIC_MODEL",
+        "CLAUDE_CODE_EFFORT_LEVEL",
+        "MAX_THINKING_TOKENS",
+    }
+)
+
 
 def build_claude_env_prefix(
     *,
@@ -14,8 +22,9 @@ def build_claude_env_prefix(
     should_drop_base_url_fn,
     claude_user_base_url_fn,
 ) -> str:
+    allowed_env_keys = provider_api_env_keys("claude") | _CLAUDE_RUNTIME_ENV_KEYS
     api_keys = provider_api_env_keys("claude")
-    explicit_env = collect_explicit_api_env(profile=profile, extra_env=extra_env, api_keys=api_keys)
+    explicit_env = collect_explicit_allowed_env(profile=profile, extra_env=extra_env, allowed_env_keys=allowed_env_keys)
     parts = unset_api_env_parts(profile=profile, api_keys=api_keys)
 
     explicit_env = reconcile_base_url(
@@ -49,17 +58,22 @@ def runtime_home_env_parts(*, profile=None) -> list[str]:
     ]
 
 
-def collect_explicit_api_env(*, profile=None, extra_env: dict[str, str] | None, api_keys: set[str]) -> dict[str, str]:
+def collect_explicit_allowed_env(
+    *,
+    profile=None,
+    extra_env: dict[str, str] | None,
+    allowed_env_keys: set[str],
+) -> dict[str, str]:
     explicit_env: dict[str, str] = {}
     if profile is not None:
-        explicit_env.update(filtered_api_env(profile.env, api_keys=api_keys))
+        explicit_env.update(filtered_api_env(profile.env, allowed_env_keys=allowed_env_keys))
     if extra_env:
-        explicit_env.update(filtered_api_env(extra_env, api_keys=api_keys))
+        explicit_env.update(filtered_api_env(extra_env, allowed_env_keys=allowed_env_keys))
     return explicit_env
 
 
-def filtered_api_env(env_map: dict[str, str], *, api_keys: set[str]) -> dict[str, str]:
-    return {key: value for key, value in env_map.items() if key in api_keys}
+def filtered_api_env(env_map: dict[str, str], *, allowed_env_keys: set[str]) -> dict[str, str]:
+    return {key: value for key, value in env_map.items() if key in allowed_env_keys}
 
 
 def unset_api_env_parts(*, profile=None, api_keys: set[str]) -> list[str]:
