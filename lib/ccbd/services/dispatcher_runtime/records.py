@@ -19,7 +19,10 @@ def latest_for_agent(dispatcher, agent_name: str) -> JobRecord | None:
     records = dispatcher._job_store.list_agent(agent_name)
     if not records:
         return None
-    return records[-1]
+    latest_by_job: dict[str, JobRecord] = {}
+    for r in records:
+        latest_by_job[r.job_id] = r
+    return max(latest_by_job.values(), key=lambda r: r.created_at)
 
 
 def append_job(dispatcher, record: JobRecord) -> None:

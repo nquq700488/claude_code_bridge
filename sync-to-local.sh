@@ -3,7 +3,6 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TARGET_DIR="${HOME}/.local/share/ccb"
-BACKUP_DIR="${TARGET_DIR}.backup.$(date +%Y%m%d_%H%M%S)"
 
 echo "=== CCB Sync to Local Install ==="
 echo "Source: ${SCRIPT_DIR}"
@@ -15,12 +14,9 @@ if [[ ! -d "${TARGET_DIR}" ]]; then
     exit 1
 fi
 
-# Backup existing target
-echo "Creating backup: ${BACKUP_DIR}"
-cp -a "${TARGET_DIR}" "${BACKUP_DIR}"
-
 # Remove old Python cache to avoid stale .pyc issues
-echo "Cleaning Python cache in target..."ind "${TARGET_DIR}" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+echo "Cleaning Python cache in target..."
+find "${TARGET_DIR}" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
 find "${TARGET_DIR}" -name '*.pyc' -delete 2>/dev/null || true
 
 # Sync core code directories and files
@@ -47,8 +43,6 @@ rsync -a --delete \
 
 echo ""
 echo "=== Sync complete ==="
-echo "Backup saved to: ${BACKUP_DIR}"
-echo ""
 echo "Verifying CcbdLifecycleStore..."
 if grep -q "class CcbdLifecycleStore" "${TARGET_DIR}/lib/ccbd/services/lifecycle.py"; then
     echo "OK: CcbdLifecycleStore found in synced code."

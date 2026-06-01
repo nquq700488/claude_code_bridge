@@ -1,5 +1,15 @@
 ## Unreleased
 
+### Kimi Wire Protocol Support (New CLI Format)
+
+- **Session Storage Migration**: Kimi CLI v2.x moved sessions from `~/.kimi/sessions/<MD5>/<uuid>/context.jsonl` to `~/.kimi-code/sessions/wd_<name>_<hash>/session_<uuid>/agents/main/wire.jsonl`. `KimiLogReader` now discovers sessions via `session_index.jsonl` and parses the new event-based wire protocol (`content.part` events with `part.type: text/think`). Falls back to legacy `context.jsonl` format when no wire session is found.
+- **Think Fallback for Legacy Format**: `_extract_assistant_text()` now falls back to `think` content blocks when no `text` block is present in legacy assistant messages, matching Kimi CLI v2.x behavior where reply text is emitted as think content.
+
+### Kimi Launcher Hardening
+
+- **`--continue` Guarded**: Kimi launcher no longer unconditionally passes `--continue`. It is only appended when the agent spec explicitly sets `restore = "provider"`. This eliminates the infinite crash loop after `.ccb/clean.sh` or on first launch when no local Kimi session exists.
+- **PTY Compatibility Mitigation**: Kimi launcher now injects `PROMPT_TOOLKIT_NO_CPR=1` and `TERM=xterm-256color` into the pane environment to work around macOS kqueue + tmux PTY issues that caused `OSError: [Errno 22] Invalid argument` from prompt_toolkit.
+
 ### Kimi Session Auto-Rotation
 
 - **Session Discovery Fixed**: `_find_latest_session_uuid` now sorts sessions by `context.jsonl` mtime instead of directory mtime, ensuring the active session is always selected

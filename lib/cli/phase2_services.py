@@ -24,6 +24,7 @@ from cli.render import (
     render_ps,
     render_queue,
     render_resubmit,
+    render_restart,
     render_retry,
     render_start,
     render_trace,
@@ -49,6 +50,7 @@ from cli.services.ping import ping_target
 from cli.services.ps import ps_summary
 from cli.services.queue import queue_target
 from cli.services.resubmit import resubmit_message
+from cli.services.restart import restart_agent
 from cli.services.retry import retry_attempt
 from cli.services.start import start_agents
 from cli.services.trace import trace_target
@@ -97,12 +99,14 @@ def build_phase2_dispatch_services(**overrides):
         render_ps=render_ps,
         render_queue=render_queue,
         render_resubmit=render_resubmit,
+        render_restart=render_restart,
         render_retry=render_retry,
         render_start=render_start,
         render_trace=render_trace,
         render_wait=render_wait,
         render_watch_batch=render_watch_batch,
         resubmit_message=resubmit_message,
+        restart_agent=restart_agent,
         retry_attempt=retry_attempt,
         start_agents=start_agents,
         submit_ask=submit_ask,

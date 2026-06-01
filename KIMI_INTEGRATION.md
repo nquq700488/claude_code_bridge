@@ -2,7 +2,7 @@
 
 ## 背景
 
-CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot）"。但 Kimi CLI（v1.37.0）实际上具备完整的非交互模式（`--print`）、session 管理（`--session`/`--continue`）和结构化日志（`context.jsonl`），具备接入 CCB 的条件。
+CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot）"。但 Kimi CLI（v1.43.0+）实际上具备 session 管理（`--session`/`--continue`）和结构化日志（`context.jsonl`），具备接入 CCB 的条件。
 
 ## 核心设计思路
 
@@ -49,6 +49,14 @@ CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot
 - `TROUBLESHOOTING.md` — 把 kimi 从"不支持"改为"支持"
 
 ## 部署踩坑记录
+
+### 坑 0：`clean.sh` 后 Kimi 陷入崩溃循环
+
+**现象**：运行 `.ccb/clean.sh` 清除运行时文件后，Kimi pane 反复崩溃重启。
+
+**根因**：旧版 launcher 无条件传递 `--continue`，但 `clean.sh` 清除了 Kimi 本地会话状态，Kimi CLI 找不到可恢复会话即崩溃，CCB  supervision 重启后再次传入 `--continue`，形成死循环。
+
+**解决**：确保使用 v7.0.12+ 的 `lib/provider_backends/kimi/launcher.py`。该版本仅在 `restore = "provider"` 时才传递 `--continue`，并自动注入 `PROMPT_TOOLKIT_NO_CPR=1` 和 `TERM=xterm-256color` 缓解 PTY 兼容问题。
 
 ### 坑 1：修改的是源码，但 ccb 跑的是已安装版本
 
@@ -118,16 +126,40 @@ cmd, claude:claude, codex:codex, kimi:kimi, creative:mmx
 
 ### kimi 启动命令
 
-launcher 生成的实际命令示例：
+launcher 生成的实际命令示例（v7.0.12+）：
 ```bash
-export KIMI_RUNTIME_DIR=/.../agents/kimi/provider-runtime/kimi; /Users/zhangtao/.local/bin/kimi
+export KIMI_RUNTIME_DIR=/.../agents/kimi/provider-runtime/kimi; export PROMPT_TOOLKIT_NO_CPR=1; export TERM=xterm-256color; /Users/zhangtao/.local/bin/kimi
 ```
+
+**启动行为说明**：
+- **默认（`restore = "auto"` 或未配置）**：不传递 `--continue`，以全新会话启动。这避免了 `clean.sh` 后或无本地历史会话时因 `--continue` 找不到恢复目标而崩溃。
+- **`restore = "provider"`**：仅在显式配置时传递 `--continue`，让 Kimi CLI 尝试恢复本地历史会话。
+- **`restore = "fresh"`**：不传递 `--continue`，强制全新会话。
+
+**环境变量**：
+- `KIMI_RUNTIME_DIR` — CCB 运行时目录，供 Kimi CLI 定位 CCB 上下文
+- `PROMPT_TOOLKIT_NO_CPR=1` — 缓解 prompt_toolkit 在 tmux PTY 下的 macOS kqueue 兼容问题
+- `TERM=xterm-256color` — 覆盖 tmux 默认 `tmux-256color`，减少 terminfo 差异导致的终端初始化失败
 
 ### Session 文件位置
 
+Kimi CLI 有两个版本的 session 存储格式，CCB 同时支持：
+
+**Legacy 格式（Kimi CLI v1.x）**：
 - CCB 创建的 session 文件：`.ccb/.kimi-<agent_name>-session`
 - Kimi CLI 自身的 session 日志：`~/.kimi/sessions/<work_dir_md5>/<uuid>/context.jsonl`
 - work_dir hash 算法：`md5(绝对路径)`，小写 hex
+- 消息格式：role-based JSON（`role: assistant` + `content: [{type: text/think}]`）
+
+**Current 格式（Kimi CLI v2.x）**：
+
+- Session 索引：`~/.kimi-code/session_index.jsonl`（`workDir` → `sessionDir` 映射）
+- Session 目录：`~/.kimi-code/sessions/wd_<name>_<hash>/session_<uuid>/`
+- 会话文件：`agents/main/wire.jsonl`
+- 消息格式：event-based wire protocol（`context.append_loop_event` → `content.part` → `part.type: text/think`）
+- `state.json`：包含 `title`、`lastPrompt`、`createdAt` 等元数据
+
+CCB 的 `KimiLogReader` 优先通过 `session_index.jsonl` 查找 wire 格式 session，找不到则回退到 legacy 格式。
 
 ## 验证方式
 
@@ -160,9 +192,10 @@ tmux -S .ccb/ccbd/tmux.sock send-keys -t %3 \
 
 ## 已知限制
 
-1. **不支持 resume**：Kimi 的 session 恢复机制与 CCB 的持久化模型不匹配，manifest 中声明 `supports_resume=False`
-2. **Approval 模式**：Kimi CLI 默认需要手动批准 Shell 命令（非 yolo 模式），执行 `ccb ask` 等命令时会弹出 approval 提示，需要发送 `y` 批准
-3. **工具调用可见性**：Kimi 在交互模式下会自动执行工具，CCB 只能通过 context.jsonl 观测结果，无法干预每一步
+1. **CCB 层面不支持 resume**：Kimi 的 session 恢复机制与 CCB 的持久化模型不匹配，manifest 中声明 `supports_resume=False`。launcher 默认不再传递 `--continue`，仅在用户显式配置 `restore = "provider"` 时才会尝试恢复 Kimi 本地会话。
+2. **tmux PTY 兼容性**：Kimi CLI 使用的 prompt_toolkit 在 tmux PTY（特别是 macOS）下存在底层兼容性问题，可能导致 `OSError: [Errno 22] Invalid argument`。已通过 `PROMPT_TOOLKIT_NO_CPR=1` 和 `TERM=xterm-256color` 环境变量缓解。
+3. **Approval 模式**：Kimi CLI 默认需要手动批准 Shell 命令（非 yolo 模式），执行 `ccb ask` 等命令时会弹出 approval 提示，需要发送 `y` 批准
+4. **工具调用可见性**：Kimi 在交互模式下会自动执行工具，CCB 只能通过 context.jsonl 观测结果，无法干预每一步
 
 ## 后续优化
 

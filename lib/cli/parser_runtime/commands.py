@@ -17,6 +17,7 @@ from cli.models import (
     ParsedPsCommand,
     ParsedQueueCommand,
     ParsedResubmitCommand,
+    ParsedRestartCommand,
     ParsedRetryCommand,
     ParsedTraceCommand,
     ParsedWaitCommand,
@@ -43,6 +44,18 @@ def parse_clear(tokens: list[str], *, project: str | None, error_type) -> Parsed
     if tuple(item.lower() for item in agent_names) == ('all',):
         agent_names = ()
     return ParsedClearCommand(project=project, agent_names=agent_names)
+
+
+def parse_restart(tokens: list[str], *, project: str | None, error_type) -> ParsedRestartCommand:
+    parser = argparse.ArgumentParser(prog='ccb restart', add_help=False)
+    parser.add_argument('agent_names', nargs='*')
+    namespace = parse_args(parser, tokens, error_message='invalid restart command', error_type=error_type)
+    agent_names = tuple(str(item).strip() for item in namespace.agent_names if str(item).strip())
+    if 'all' in {item.lower() for item in agent_names} and len(agent_names) > 1:
+        raise error_type('restart target "all" cannot be combined with agent names')
+    if tuple(item.lower() for item in agent_names) == ('all',):
+        agent_names = ()
+    return ParsedRestartCommand(project=project, agent_names=agent_names)
 
 
 def parse_kill(tokens: list[str], *, project: str | None, error_type) -> ParsedKillCommand:
@@ -251,6 +264,7 @@ __all__ = [
     'parse_queue',
     'parse_repair',
     'parse_resubmit',
+    'parse_restart',
     'parse_retry',
     'parse_trace',
     'parse_wait',

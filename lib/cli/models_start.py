@@ -70,6 +70,13 @@ class ParsedPingCommand:
     kind: str = 'ping'
 
 
+@dataclass(frozen=True)
+class ParsedRestartCommand:
+    project: str | None
+    agent_names: tuple[str, ...] = ()
+    kind: str = 'restart'
+
+
 __all__ = [
     'ParsedClearCommand',
     'ParsedCleanupCommand',
@@ -79,5 +86,6 @@ __all__ = [
     'ParsedLogsCommand',
     'ParsedPingCommand',
     'ParsedPsCommand',
+    'ParsedRestartCommand',
     'ParsedStartCommand',
 ]

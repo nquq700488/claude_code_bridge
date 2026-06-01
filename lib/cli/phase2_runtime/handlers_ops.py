@@ -27,6 +27,12 @@ def handle_logs(context, command, out, services) -> int:
     return 0
 
 
+def handle_restart(context, command, out, services) -> int:
+    summary = services.restart_agent(context, command)
+    services.write_lines(out, services.render_restart(summary))
+    return 0
+
+
 def handle_ps(context, command, out, services) -> int:
     payload = services.ps_summary(context, command)
     services.write_lines(out, services.render_ps(payload))
@@ -73,6 +79,7 @@ __all__ = [
     'handle_cleanup',
     'handle_clear',
     'handle_doctor',
+    'handle_restart',
     'handle_fault_arm',
     'handle_fault_clear',
     'handle_fault_list',

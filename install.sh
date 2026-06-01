@@ -1895,7 +1895,9 @@ install_droid_skills() {
 }
 
 install_kimi_skills() {
-  local skills_src="$REPO_ROOT/kimi_skills"
+  local skills_root
+  skills_root="$(resolve_inherit_skills_root)"
+  local skills_src="$skills_root/kimi_skills"
   local skills_dst="$HOME/.kimi/skills"
 
   if [[ ! -d "$skills_src" ]]; then
@@ -1938,6 +1940,67 @@ install_kimi_skills() {
     echo "  Updated Kimi skill: $skill_name"
   done
   echo "Updated Kimi skills directory: $skills_dst"
+}
+
+install_generic_skills() {
+  local skills_root
+  skills_root="$(resolve_inherit_skills_root)"
+  local skills_src="$skills_root/generic_skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  for provider_dir in "$HOME/.claude" "$HOME/.codex" "$HOME/.kimi" "$HOME/.factory"; do
+    [[ -d "$provider_dir" ]] || continue
+    local provider_name
+    provider_name=$(basename "$provider_dir")
+    local skills_dst="$provider_dir/skills"
+
+    mkdir -p "$skills_dst"
+
+    echo "Installing generic CCB skills for $provider_name..."
+    for skill_dir in "$skills_src"/*/; do
+      [[ -d "$skill_dir" ]] || continue
+      local skill_name
+      skill_name=$(basename "$skill_dir")
+
+      if [[ ! -f "$skill_dir/SKILL.md" ]]; then
+        continue
+      fi
+
+      local dst_dir="$skills_dst/$skill_name"
+      install_skill_entry "${skill_dir%/}" "$dst_dir"
+
+      echo "  Updated generic skill: $skill_name"
+    done
+
+    echo "Updated generic skills for $provider_name: $skills_dst"
+  done
+}
+
+uninstall_generic_skills() {
+  local skills_root
+  skills_root="$(resolve_inherit_skills_root)"
+  local skills_src="$skills_root/generic_skills"
+
+  if [[ ! -d "$skills_src" ]]; then
+    return
+  fi
+
+  local generic_skills="sync-local"
+
+  for provider_dir in "$HOME/.claude" "$HOME/.codex" "$HOME/.kimi" "$HOME/.factory"; do
+    [[ -d "$provider_dir" ]] || continue
+    local skills_dst="$provider_dir/skills"
+
+    for skill in $generic_skills; do
+      if [[ -d "$skills_dst/$skill" ]]; then
+        rm -rf "$skills_dst/$skill"
+        echo "  Removed generic skill: $skill from $provider_dir"
+      fi
+    done
+  done
 }
 
 droid_command_with_timeout() {
@@ -2685,6 +2748,7 @@ install_all() {
   install_codex_skills
   install_droid_skills
   install_kimi_skills
+  install_generic_skills
   install_droid_delegation
   cleanup_memory_injections
   install_settings_permissions
@@ -3053,6 +3117,9 @@ uninstall_all() {
 
   # 9.5 Remove Kimi skills
   uninstall_kimi_skills
+
+  # 9.6 Remove generic skills
+  uninstall_generic_skills
 
   # 10. Remove Droid MCP delegation
   uninstall_droid_delegation

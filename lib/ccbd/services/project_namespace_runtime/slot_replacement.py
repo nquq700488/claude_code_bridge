@@ -21,6 +21,7 @@ class ProjectSlotRecoveryContext:
     workspace_epoch: int
     workspace_root_pane_id: str
     style_index: int
+    provider: str = ""
 
 
 def resolve_project_slot_recovery_context(
@@ -29,6 +30,7 @@ def resolve_project_slot_recovery_context(
     config,
     runtime,
     agent_name: str,
+    provider: str = "",
 ) -> ProjectSlotRecoveryContext | None:
     project_id = str(getattr(runtime, 'project_id', '') or '').strip()
     if not project_id:
@@ -49,6 +51,8 @@ def resolve_project_slot_recovery_context(
     if not str(root_pane_id or '').strip().startswith('%'):
         return None
     slot_key = str(getattr(runtime, 'slot_key', None) or agent_name).strip() or str(agent_name).strip()
+    if not provider:
+        provider = str(getattr(runtime, 'provider', '') or '').strip()
     return ProjectSlotRecoveryContext(
         project_id=project_id,
         slot_key=slot_key,
@@ -60,6 +64,7 @@ def resolve_project_slot_recovery_context(
         workspace_epoch=namespace.workspace_epoch,
         workspace_root_pane_id=root_pane_id,
         style_index=style_index_for_agent(config, slot_key),
+        provider=provider,
     )
 
 
@@ -91,11 +96,12 @@ def relabel_project_slot_pane(
         backend = TmuxBackend(socket_path=context.tmux_socket_path)
     except TypeError:
         backend = TmuxBackend()
+    label = f"{context.provider}:{context.slot_key}" if context.provider else context.slot_key
     apply_ccb_pane_identity(
         backend,
         pane_text,
-        title=context.slot_key,
-        agent_label=context.slot_key,
+        title=label,
+        agent_label=label,
         project_id=context.project_id,
         order_index=context.style_index,
         slot_key=context.slot_key,

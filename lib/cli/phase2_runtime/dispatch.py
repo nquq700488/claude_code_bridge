@@ -24,6 +24,7 @@ from .handlers_ops import (
     handle_kill,
     handle_logs,
     handle_ps,
+    handle_restart,
 )
 from .handlers_start import handle_config_validate, handle_start
 
@@ -46,6 +47,7 @@ _HANDLERS = {
     'ping': handle_ping,
     'ps': handle_ps,
     'queue': handle_queue,
+    'restart': handle_restart,
     'resubmit': handle_resubmit,
     'retry': handle_retry,
     'start': handle_start,

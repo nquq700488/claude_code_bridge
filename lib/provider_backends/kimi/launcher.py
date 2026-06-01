@@ -5,7 +5,7 @@ import platform
 import shlex
 from pathlib import Path
 
-from agents.models import AgentSpec
+from agents.models import AgentSpec, RestoreMode
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from provider_core.contracts import ProviderRuntimeLauncher
@@ -76,16 +76,26 @@ def build_start_cmd(command: ParsedStartCommand, spec: AgentSpec, runtime_dir: P
         resolved = _resolve_kimi_executable()
         cmd_parts = [resolved] + cmd_parts[1:]
 
-    if command.restore:
+    if command.restore and spec.restore_default is RestoreMode.PROVIDER:
         cmd_parts.append('--continue')
 
     cmd_parts.extend(spec.startup_args)
     cmd = ' '.join(shlex.quote(str(part)) for part in cmd_parts)
 
     # Export runtime env so Kimi can locate CCB context if needed
-    env_prefix = ''
+    env_vars: dict[str, str] = {}
     if runtime_dir:
-        env_prefix = f'export KIMI_RUNTIME_DIR={shlex.quote(str(runtime_dir))}'
+        env_vars['KIMI_RUNTIME_DIR'] = str(runtime_dir)
+    # Mitigate prompt_toolkit + tmux PTY compatibility issues on macOS
+    # (OSError: [Errno 22] Invalid argument from kqueue selector).
+    env_vars.setdefault('PROMPT_TOOLKIT_NO_CPR', '1')
+    env_vars.setdefault('TERM', 'xterm-256color')
+    env_prefix = ''
+    if env_vars:
+        env_prefix = '; '.join(
+            f'export {shlex.quote(k)}={shlex.quote(v)}'
+            for k, v in env_vars.items()
+        )
 
     if env_prefix:
         return f'{env_prefix}; {cmd}'

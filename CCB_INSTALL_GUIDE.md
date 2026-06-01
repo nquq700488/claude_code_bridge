@@ -169,7 +169,7 @@ cd claude_code_bridge
     - Sidebar 作为原生 TUI 嵌入每个 tmux 窗口左侧，实时显示 Agent 状态
     - 未安装 Rust 时，Sidebar 功能不可用，但 CCB 核心功能不受影响
 
-10. **注册 Droid MCP 委托（可选）**
+11. **注册 Droid MCP 委托（可选）**
     - 若检测到 `droid` CLI，自动注册 `ccb-delegation` MCP 工具
     - 使 Droid 能通过 CCB 向其他 Agent 发送 `/ask` 任务
 
@@ -206,7 +206,7 @@ cd claude_code_bridge
         │   └── ccb-agent-sidebar/  # Rust TUI Sidebar
         ├── dev_tools/       # 维护者开发工具（不随 release 安装）
         ├── useful_tools/    # 可选用户工具（随 release 分发，不自动安装）
-        ├── mcp/             # MCP 委托服务
+        ├── mcp/             # MCP 委托服务（含 ccb-delegation）
         ├── docs/            # 架构文档
         ├── plans/           # 架构设计与路线图
         └── VERSION          # 版本号
@@ -781,7 +781,35 @@ export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300
 ccb
 ```
 
-### Q15: Source dev 安装后 `ccb` 报 Python 版本冲突
+### Q15: Kimi Agent 启动后立即崩溃或陷入无限重启
+
+**现象**：运行 `.ccb/clean.sh` 后启动项目，或首次启动 Kimi Agent 时，Kimi pane 反复崩溃重启，日志中出现 `OSError: [Errno 22] Invalid argument`。
+
+**根因**：
+1. **会话恢复冲突**：CCB 默认启动时会尝试恢复 provider 历史会话，但 Kimi 的 launcher 以前无条件传递 `--continue` 给 Kimi CLI。当本地无历史会话（如 `clean.sh` 清除后），Kimi CLI 会因找不到可恢复会话而崩溃，CCB  supervision 检测到崩溃后重启 pane，再次传入 `--continue`，形成无限崩溃循环。
+2. **PTY 兼容性**：Kimi CLI 使用的 prompt_toolkit 在 tmux PTY（特别是 macOS kqueue Selector）环境下存在底层兼容性问题，可能触发 `OSError: [Errno 22]`。
+
+**修复状态**：v7.0.12+ 已修复。
+
+**修复内容**：
+- Kimi launcher 仅在 agent 配置中显式设置 `restore = "provider"` 时才传递 `--continue`；默认 `AUTO` / `FRESH` 模式下不再传递，避免无历史会话时崩溃。
+- Kimi launcher 启动前自动注入两个环境变量缓解 PTY 兼容问题：
+  - `PROMPT_TOOLKIT_NO_CPR=1` — 禁用 prompt_toolkit 的 Cursor Position Request
+  - `TERM=xterm-256color` — 覆盖 tmux 默认的 `tmux-256color`，减少 terminfo 差异
+
+**如需显式启用 Kimi 本地会话恢复**：
+
+在 `.ccb/ccb.config` 中对应 agent 配置：
+
+```toml
+[agents.reviewer]
+provider = "kimi"
+restore = "provider"   # 仅在需要恢复 Kimi 本地历史会话时启用
+```
+
+> **注意**：Kimi 的 CCB manifest 声明 `supports_resume=False`，CCB 层面不支持跨重启的 submission 恢复。`restore = "provider"` 仅控制是否让 Kimi CLI 自身尝试 `--continue` 恢复本地会话。
+
+### Q16: Source dev 安装后 `ccb` 报 Python 版本冲突
 
 v7.0+ 源码安装使用 Python wrapper，会尝试检测并使用正确的 Python 解释器。如果系统同时存在多个 Python 版本（如 macOS 的 Xcode Python 3.9 和 Homebrew Python 3.12），可通过环境变量强制指定：
 

@@ -54,6 +54,7 @@ def relabel_project_namespace_pane(
     *,
     binding,
     agent_name: str,
+    provider: str = "",
     project_id: str,
     style_index: int,
     tmux_socket_path: str | None,
@@ -63,6 +64,7 @@ def relabel_project_namespace_pane(
     return deps.relabel_project_namespace_pane_impl(
         binding=binding,
         agent_name=agent_name,
+        provider=provider,
         project_id=project_id,
         style_index=style_index,
         tmux_socket_path=tmux_socket_path,

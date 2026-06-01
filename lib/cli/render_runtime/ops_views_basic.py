@@ -122,6 +122,45 @@ def render_clear(summary) -> tuple[str, ...]:
     return tuple(lines)
 
 
+def render_restart(summary) -> tuple[str, ...]:
+    status = str(summary.get('status', 'unknown')) if isinstance(summary, Mapping) else 'unknown'
+    agent_names = tuple(summary.get('agent_names', ()) or ()) if isinstance(summary, Mapping) else ()
+    results = tuple(summary.get('results', ()) or ()) if isinstance(summary, Mapping) else ()
+    mode = str(summary.get('restart_mode', '')) if isinstance(summary, Mapping) else ''
+    reason = str(summary.get('recreate_reason', '')) if isinstance(summary, Mapping) else ''
+
+    if status == 'scheduled':
+        lines = [
+            f'restart_status: scheduled',
+            f'restart_mode: {mode}' if mode else '',
+            f'recreate_reason: {reason}' if reason else '',
+            f'agent_names: {", ".join(agent_names) if agent_names else "all"}',
+        ]
+        return tuple(line for line in lines if line)
+
+    restarted_count = sum(1 for item in results if item.get('status') == 'restarted')
+    skipped_count = sum(1 for item in results if item.get('status') == 'skipped')
+    failed_count = sum(1 for item in results if item.get('status') == 'failed')
+    lines = [
+        f'restart_status: {status}',
+        f'restarted_count: {restarted_count}',
+        f'skipped_count: {skipped_count}',
+        f'failed_count: {failed_count}',
+    ]
+    for item in results:
+        agent = str(item.get('agent') or '')
+        item_status = str(item.get('status') or '')
+        pane_id = str(item.get('pane_id') or '')
+        item_reason = str(item.get('reason') or '')
+        detail = f'agent={agent} status={item_status}'
+        if pane_id:
+            detail += f' pane_id={pane_id}'
+        if item_reason:
+            detail += f' reason={item_reason}'
+        lines.append(f'restart_agent: {detail}')
+    return tuple(lines)
+
+
 def render_kill(summary) -> tuple[str, ...]:
     lines = [
         'kill_status: ok',
@@ -155,5 +194,6 @@ __all__ = [
     'render_kill',
     'render_logs',
     'render_ps',
+    'render_restart',
     'render_start',
 ]

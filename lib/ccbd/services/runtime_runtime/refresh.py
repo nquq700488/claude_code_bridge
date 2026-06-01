@@ -110,6 +110,7 @@ def refresh_provider_binding(
             config=getattr(registry, '_config', None),
             runtime=runtime,
             agent_name=agent_name,
+            provider=spec.provider,
         )
         if recover
         else None

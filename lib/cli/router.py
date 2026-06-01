@@ -63,6 +63,7 @@ def print_start_help(*, file=None) -> None:
               ccb -s               Safe start. Disable CLI auto-permission override.
               ccb -n               Rebuild runtime state while preserving config and managed agent history.
               ccb clear [agent...]  Send provider-native /clear to managed agent panes.
+              ccb restart [agent...]  Restart managed agent panes. Default: all agents.
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
@@ -232,6 +233,22 @@ _COMMAND_HELP = {
           - Keeps Claude versions currently referenced by managed homes.
           - Does not remove provider sessions, auth, plugin bundles, mailbox data, or runtime authority.
           - Use `ccb doctor storage` before cleanup to inspect storage classes.
+    """,
+    "restart": """
+        usage: ccb restart [agent_name|all]...
+
+        Agent pane restart:
+          ccb restart           Restart ALL configured agent panes in place.
+          ccb restart agent1    Restart one agent pane.
+          ccb restart agent1 agent2
+                                Restart multiple agent panes.
+          ccb restart all       Restart all agents (same as no args).
+
+        Notes:
+          - This kills and respawns the agent's tmux pane in place.
+          - The agent process is restarted with the same launch command.
+          - Does not delete .ccb state, sessions, or logs.
+          - The ccbd must be running.
     """,
     "clear": """
         usage: ccb clear [agent_name|all]...

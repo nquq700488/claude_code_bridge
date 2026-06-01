@@ -26,6 +26,7 @@ def relabel_project_namespace_pane(
     *,
     binding,
     agent_name: str,
+    provider: str = "",
     project_id: str,
     style_index: int,
     tmux_socket_path: str | None,
@@ -48,9 +49,10 @@ def relabel_project_namespace_pane(
         return None
     if not callable(getattr(backend, 'set_pane_user_option', None)):
         return None
+    label = f"{provider}:{agent_name}" if provider else agent_name
     identity_kwargs = {
-        'title': agent_name,
-        'agent_label': agent_name,
+        'title': label,
+        'agent_label': label,
         'project_id': project_id,
         'order_index': style_index,
         'slot_key': agent_name,

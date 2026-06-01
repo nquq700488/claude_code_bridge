@@ -13,10 +13,31 @@ from terminal_runtime import TmuxBackend
 RESTART_PANES_REASON = 'manual_restart_panes'
 
 
+def _requested_agent_names(app, payload: dict) -> tuple[str, ...]:
+    from agents.models import normalize_agent_name
+
+    raw_names = tuple(str(item).strip() for item in (payload.get('agent_names') or ()) if str(item).strip())
+    if not raw_names:
+        return tuple(app.config.agents)
+    lowered = {item.lower() for item in raw_names}
+    if 'all' in lowered:
+        if len(raw_names) > 1:
+            raise ValueError('restart target "all" cannot be combined with agent names')
+        return tuple(app.config.agents)
+    names: list[str] = []
+    known = set(app.config.agents)
+    for raw in raw_names:
+        name = normalize_agent_name(raw)
+        if name not in known:
+            raise ValueError(f'unknown agent: {name}')
+        if name not in names:
+            names.append(name)
+    return tuple(names)
+
+
 def build_project_restart_panes_handler(app):
     def handle(payload: dict) -> tuple[dict, object]:
-        del payload
-        agent_names = tuple(app.config.agents)
+        agent_names = _requested_agent_names(app, payload)
 
         def _after_response() -> None:
             try:

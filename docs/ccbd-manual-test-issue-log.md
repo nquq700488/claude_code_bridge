@@ -919,6 +919,46 @@
   - 5 分钟 Linux soak：23 轮、7 次 kill/restart，全部通过
   - fastpath stress：60 ask，submit p95 `227ms`，首/中/尾 terminal convergence、doctor、kill、unmounted 全部通过
 
+### ISSUE-019
+
+- 状态：`fixed`
+- 标题：`Kimi Agent 启动崩溃循环 + prompt_toolkit tmux PTY 兼容性问题`
+- 根因分类：`terminal-runtime` / `provider-facts`
+- 测试场景：`.ccb/clean.sh` 后启动项目，或全新项目首次启动 Kimi Agent
+- 最小复现：
+  - 执行 `.ccb/clean.sh` 清除运行时文件
+  - 执行 `ccb` 启动项目
+  - Kimi pane 立即崩溃，CCB supervision 检测到 pane dead 后重启
+  - 重启后 launcher 再次传入 `kimi --continue`，Kimi CLI 因无本地会话可恢复而再次崩溃
+  - 形成无限崩溃循环，同时可能伴随 `OSError: [Errno 22] Invalid argument`
+- 预期结果：
+  - `clean.sh` 后 Kimi 应能正常以全新会话启动
+  - 首次启动无历史会话时不应尝试恢复
+  - prompt_toolkit 在 tmux PTY 下不应因 kqueue 兼容性问题崩溃
+- 实际结果：
+  - launcher 无条件在 `command.restore=True` 时追加 `--continue`
+  - Kimi CLI `--continue` 在无历史会话时退出码非零，pane 死亡
+  - prompt_toolkit 的 `Vt100Input._attached_input` 在 macOS kqueue + tmux PTY 下注册 fd 失败，抛出 `OSError: [Errno 22]`
+- 影响范围：
+  - 所有使用 Kimi provider 的 CCB 项目
+  - macOS 上 tmux 环境下尤为严重
+  - `.ccb/clean.sh` 后必现
+- 根因：
+  - Kimi launcher 未检查 `supports_resume=False` 的 manifest 声明，也未判断本地会话是否存在，直接映射 CCB 的 `restore=True` 为 Kimi CLI 的 `--continue`
+  - prompt_toolkit 默认使用 asyncio selector 监控 stdin fd，macOS kqueue 对某些 tmux PTY fd 的 `EV_ADD` 返回 `EINVAL`
+- 系统性修复方案：
+  - launcher 改用 `command.restore and spec.restore_default is RestoreMode.PROVIDER` 判断，默认 `AUTO` / `FRESH` 不再传 `--continue`
+  - launcher 启动前注入 `PROMPT_TOOLKIT_NO_CPR=1` 和 `TERM=xterm-256color`，缓解 prompt_toolkit 的 PTY 兼容路径
+- 回归测试：
+  - Python 单元测试验证4种 restore 组合下的命令生成结果
+  - `bash -n` 验证无语法错误
+- 复测结论：
+  - 2026-05-29 修复后验证通过
+  - `AUTO` + `restore=True`：命令不含 `--continue`
+  - `PROVIDER` + `restore=True`：命令含 `--continue`
+  - `FRESH` + `restore=True`：命令不含 `--continue`
+  - 环境变量 `PROMPT_TOOLKIT_NO_CPR=1` 和 `TERM=xterm-256color` 正确注入
+
 ## 6. 关闭标准
 
 问题只有同时满足以下条件才关闭：

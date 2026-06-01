@@ -24,6 +24,7 @@ SUBCOMMANDS = {
     'repair',
     'config',
     'fault',
+    'restart',
 }
 
 ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode'}

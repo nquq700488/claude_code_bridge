@@ -37,6 +37,7 @@ from cli.services.ps import ps_summary
 from cli.services.queue import queue_target
 from cli.services.reset_project import reset_project_state
 from cli.services.resubmit import resubmit_message
+from cli.services.restart import restart_agent
 from cli.services.retry import retry_attempt
 from cli.services.start import start_agents
 from cli.services.trace import trace_target
@@ -147,6 +148,7 @@ def _dispatch_services():
         ps_summary=ps_summary,
         queue_target=queue_target,
         resubmit_message=resubmit_message,
+        restart_agent=restart_agent,
         retry_attempt=retry_attempt,
         start_agents=start_agents,
         submit_ask=submit_ask,

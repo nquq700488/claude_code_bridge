@@ -178,8 +178,8 @@ def _payload_project_view_dismiss_comms(comms_id: str) -> dict:
     return {'id': comms_id}
 
 
-def _payload_project_restart_panes() -> dict:
-    return {}
+def _payload_project_restart_panes(agent_names: tuple[str, ...] = ()) -> dict:
+    return {'agent_names': [str(item) for item in tuple(agent_names or ()) if str(item).strip()]}
 
 
 def _payload_project_clear_context(agent_names: tuple[str, ...] = ()) -> dict:
