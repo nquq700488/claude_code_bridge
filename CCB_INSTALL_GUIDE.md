@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.0.11 | 最后更新：2026-05-28
+> 版本：适用于 CCB v7.1.1 | 最后更新：2026-06-01
 
 ---
 
@@ -31,6 +31,8 @@
 - 一键启停多个 AI CLI Agent
 - **原生 Agent Sidebar（v7.0+）**：每个 tmux 窗口左侧实时显示所有 Agent 状态，支持点击切换焦点
 - **Provider Activity 追踪（v7.0.11+）**：通过 provider-native hook 产物精确识别 Agent 的 active / pending / idle / failed 状态，Sidebar 状态显示更准确
+- **Sidebar 面板高度可配置（v7.1.1+）**：Tree/Agent、Comms、Tips 三个面板的高度支持自定义（百分比或行数）
+- **Dynamic Reload（v7.1.0+）**：编辑 `ccb.config` 后无需重启整个项目，通过 `ccb reload` 动态应用支持的配置变更
 - **多窗口拓扑（v7.0+）**：一个项目可配置多个 tmux 窗口，每个窗口有独立的 Agent 布局和 Sidebar
 - Agent 间异步通信（邮箱系统）
 - 按项目配置 Agent 团队和 tmux 分屏布局
@@ -362,6 +364,14 @@ entry_window = "main"
 mode = "every_window"   # "every_window" 每个窗口都显示 / "off" 关闭
 width = "15%"
 bottom_height = 20
+
+[ui.sidebar.view]
+agents_height = "50%"   # Tree/Agent 面板高度（v7.1.1+）
+comms_height = "15%"    # Comms 面板高度（v7.1.1+）
+tips_height = "35%"     # Tips 面板高度（v7.1.1+）
+comms_limit = 5
+comms_compact = true
+tips_enabled = true
 
 [agents.architect]
 description = "架构设计"
@@ -967,6 +977,10 @@ ccb -s                 # 安全启动（保留权限策略）
 ccb -n                 # 重建运行时（保留 ccb.config）
 ccb kill               # 停止项目运行时
 ccb kill -f            # 强制清理
+ccb restart            # 重启所有 Agent pane
+ccb restart <agent>    # 重启指定 Agent pane
+ccb reload             # 动态应用支持的配置变更（v7.1.0+）
+ccb reload --dry-run   # 预览 reload 计划而不执行（v7.1.0+）
 
 # 安装/更新
 ./install.sh install   # 安装或更新
