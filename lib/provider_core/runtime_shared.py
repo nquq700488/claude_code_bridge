@@ -12,6 +12,7 @@ _PROVIDER_START_ENV_VARS = {
     'droid': 'DROID_START_CMD',
     'kimi': 'KIMI_START_CMD',
     'mmx': 'MMX_START_CMD',
+    'agy': 'AGY_START_CMD',
 }
 
 _PROVIDER_DEFAULT_EXECUTABLES = {
@@ -22,6 +23,7 @@ _PROVIDER_DEFAULT_EXECUTABLES = {
     'droid': 'droid',
     'kimi': 'kimi',
     'mmx': 'mmx-daemon',
+    'agy': 'agy',
 }
 
 

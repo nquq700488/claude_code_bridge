@@ -3,10 +3,11 @@ from __future__ import annotations
 from provider_core.contracts import ProviderBackend
 
 CORE_PROVIDER_NAMES = ("codex", "claude", "gemini")
-OPTIONAL_PROVIDER_NAMES = ("opencode", "droid", "mmx", "kimi")
+OPTIONAL_PROVIDER_NAMES = ("opencode", "droid", "mmx", "kimi", "agy")
 
 
 def build_builtin_backends(*, include_optional: bool = True) -> list[ProviderBackend]:
+    from provider_backends.agy import build_backend as build_agy_backend
     from provider_backends.claude import build_backend as build_claude_backend
     from provider_backends.codex import build_backend as build_codex_backend
     from provider_backends.droid import build_backend as build_droid_backend
@@ -26,6 +27,7 @@ def build_builtin_backends(*, include_optional: bool = True) -> list[ProviderBac
             build_droid_backend(),
             build_mmx_backend(),
             build_kimi_backend(),
+            build_agy_backend(),
         ])
     return backends
 
