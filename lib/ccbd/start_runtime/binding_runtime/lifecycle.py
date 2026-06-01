@@ -49,7 +49,7 @@ def relabel_project_namespace_pane(
         return None
     if not callable(getattr(backend, 'set_pane_user_option', None)):
         return None
-    label = f"{provider}:{agent_name}" if provider else agent_name
+    label = f"{agent_name}:{provider}" if provider else agent_name
     identity_kwargs = {
         'title': label,
         'agent_label': label,

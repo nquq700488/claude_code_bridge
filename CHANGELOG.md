@@ -1,5 +1,21 @@
 ## Unreleased
 
+### ccb restart Command
+
+- **`ccb restart [agent...]`**: New CLI command to restart agent tmux panes in place. `ccb restart` restarts all agents; `ccb restart <agent>` restarts a specific one. The handler kills and respawns the agent's tmux pane with the same launch command. Does not delete .ccb state, sessions, or logs.
+
+### Pane Title Format
+
+- **Agent:Provider Display**: Tmux pane titles now show `agent_name:provider` format (e.g., `developer:codex`, `reviewer:claude`) instead of just the agent name, making it easy to identify which AI provider backs each agent at a glance.
+
+### Webhook Bootstrap Fix
+
+- **FrozenInstanceError Fixed**: Removed `webhook` field assignments to frozen dataclass instances (`RuntimeSupervisionContext`, `dispatcher._webhook`, `health_monitor._webhook`) that caused `FrozenInstanceError` on Python 3.12, preventing ccbd from starting. WebhookSender is still created but no longer wired into frozen objects — all consumers safely handle `webhook=None`.
+
+### Supervision Recovery Hardening
+
+- **pane-foreign No Longer Triggers Destructive Recovery**: `runtime_requires_recovery` now returns `False` for `pane-foreign` health, preventing infinite kill-respawn loops when pane identity verification fails. Agents in `pane-foreign` state remain degraded but functional instead of being repeatedly killed.
+
 ### Kimi Wire Protocol Support (New CLI Format)
 
 - **Session Storage Migration**: Kimi CLI v2.x moved sessions from `~/.kimi/sessions/<MD5>/<uuid>/context.jsonl` to `~/.kimi-code/sessions/wd_<name>_<hash>/session_<uuid>/agents/main/wire.jsonl`. `KimiLogReader` now discovers sessions via `session_index.jsonl` and parses the new event-based wire protocol (`content.part` events with `part.type: text/think`). Falls back to legacy `context.jsonl` format when no wire session is found.

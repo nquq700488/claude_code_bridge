@@ -734,12 +734,17 @@ rm -rf .ccb        # 删除运行时状态（保留 ccb.config 请先备份）
 ccb -n             # 重建 .ccb，重新启动
 ```
 
-### Q10: PCI 校验失败
+### Q10: PCI 校验失败 / 修改代码后行为不变
+
+通常是因为 Python `.pyc` 字节码缓存未更新。`sync-to-local.sh` 同步脚本会在 rsync 前自动清除缓存，但手动修改安装目录代码时需要：
 
 ```bash
 # 清除 Python 编译缓存
 find ~/.local/share/ccb -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null
 find ~/.local/share/ccb -name "*.pyc" -delete 2>/dev/null
+
+# 然后重启 CCB
+ccb kill && ccb
 ```
 
 ### Q11: Tmux pane 布局异常 / 插件干扰（v7.0+）
@@ -791,21 +796,25 @@ export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300
 ccb
 ```
 
-### Q15: Kimi Agent 启动后立即崩溃或陷入无限重启
+### Q15: Kimi Agent 启动后立即崩溃、陷入无限重启、或回复后任务不完成
 
-**现象**：运行 `.ccb/clean.sh` 后启动项目，或首次启动 Kimi Agent 时，Kimi pane 反复崩溃重启，日志中出现 `OSError: [Errno 22] Invalid argument`。
+**现象 A（启动崩溃）**：运行 `.ccb/clean.sh` 后启动项目，或首次启动 Kimi Agent 时，Kimi pane 反复崩溃重启，日志中出现 `OSError: [Errno 22] Invalid argument`。
+
+**现象 B（任务卡住不完成）**：Kimi 在 pane 中生成了回复，但 CCB 未检测到任务完成，job 一直处于 running 状态直到超时。
 
 **根因**：
 1. **会话恢复冲突**：CCB 默认启动时会尝试恢复 provider 历史会话，但 Kimi 的 launcher 以前无条件传递 `--continue` 给 Kimi CLI。当本地无历史会话（如 `clean.sh` 清除后），Kimi CLI 会因找不到可恢复会话而崩溃，CCB  supervision 检测到崩溃后重启 pane，再次传入 `--continue`，形成无限崩溃循环。
 2. **PTY 兼容性**：Kimi CLI 使用的 prompt_toolkit 在 tmux PTY（特别是 macOS kqueue Selector）环境下存在底层兼容性问题，可能触发 `OSError: [Errno 22]`。
+3. **Kimi CLI v2.x 会话存储格式变更**：Kimi CLI v2.x 将回复从 `context.jsonl` 改为 `wire.jsonl` 事件协议，存储路径从 `~/.kimi/sessions/` 迁移到 `~/.kimi-code/sessions/`。CCB 已同时支持两种格式，通过 `session_index.jsonl` 自动发现新格式会话。
 
-**修复状态**：v7.0.12+ 已修复。
+**修复状态**：v7.0.12+ 已修复启动崩溃问题；Kimi CLI v2.x wire 协议支持已合入。
 
 **修复内容**：
 - Kimi launcher 仅在 agent 配置中显式设置 `restore = "provider"` 时才传递 `--continue`；默认 `AUTO` / `FRESH` 模式下不再传递，避免无历史会话时崩溃。
 - Kimi launcher 启动前自动注入两个环境变量缓解 PTY 兼容问题：
   - `PROMPT_TOOLKIT_NO_CPR=1` — 禁用 prompt_toolkit 的 Cursor Position Request
   - `TERM=xterm-256color` — 覆盖 tmux 默认的 `tmux-256color`，减少 terminfo 差异
+- `KimiLogReader` 同时支持旧格式（`context.jsonl`）和新格式（`wire.jsonl`），优先通过 `session_index.jsonl` 发现新格式会话
 
 **如需显式启用 Kimi 本地会话恢复**：
 
@@ -946,7 +955,7 @@ cp -r useful_tools/claude_skills/plan-tree ~/.claude/skills/
 - Codex agent 的 `~/.codex/` 等价状态存储在 `.ccb/agents/<name>/provider-state/codex/home/`
 - Gemini agent 的 `~/.gemini/` 等价状态存储在 `.ccb/agents/<name>/provider-state/gemini/home/`
 - Droid agent 的状态存储在 `.ccb/agents/<name>/provider-state/droid/home/`
-- Kimi agent 使用 VS Code 扩展原生配置，session 文件存储在 `.ccb/agents/<name>/kimi-session/`
+- Kimi agent 使用 VS Code 扩展原生配置，CCB session 文件为 `.ccb/.kimi-<agent>-session`，Kimi CLI 自身的会话日志存储在 `~/.kimi/sessions/`（v1.x）或 `~/.kimi-code/sessions/`（v2.x，wire.jsonl 格式）
 - MMX agent 使用 pane log 协议，无 managed home，session 状态存储在 pane log 中
 - 互不污染，全局 Provider 配置不会被修改
 
@@ -1012,5 +1021,8 @@ ccb config validate    # 验证 ccb.config
 ccb queue              # 查看 Agent 队列状态
 ccb queue --detail     # 查看详细队列状态（v6.2.x+）
 ccb inbox <agent>      # 查看 Agent 收件箱
-ccb mailbox_head <agent> # 查看 Agent 邮箱头部（v6.2.x+）
+ccb trace <id>          # 查看任务/消息/回复的完整 lineage
+ccb repair ack <agent>  # 确认 Agent 的回复/收件箱进度
+ccb repair retry <id>   # 重试失败的任务
+ccb clear [agent...]    # 发送 /clear 到 Agent pane
 ```

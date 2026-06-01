@@ -124,8 +124,6 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
         clock=app.clock,
     )
     app.webhook = WebhookSender(load_webhook_config_from_env())
-    app.runtime_supervision._ctx.webhook = app.webhook
-    app.dispatcher._webhook = app.webhook
 
     def _cancel_active_job_for_agent(agent_name: str) -> None:
         job_id = app.dispatcher._state.active_job_for('agent', agent_name)
@@ -136,7 +134,6 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
                 pass
 
     app.health_monitor._on_degraded_fn = _cancel_active_job_for_agent
-    app.health_monitor._webhook = app.webhook
     app.socket_server = CcbdSocketServer(app.paths.ccbd_socket_path)
     app.socket_server._record_request_queue_wait = lambda value: setattr(
         app.control_plane_metrics,

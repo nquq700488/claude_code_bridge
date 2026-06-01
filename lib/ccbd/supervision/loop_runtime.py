@@ -118,6 +118,8 @@ def runtime_requires_mount_from_foreign_pane(ctx: RuntimeSupervisionContext, run
 
 
 def runtime_requires_recovery(ctx: RuntimeSupervisionContext, runtime) -> bool:
+    if runtime_health(runtime) == 'pane-foreign':
+        return False
     return (
         should_reflow_project_namespace(ctx, runtime)
         or explicit_topology_project_socket_foreign_pane(ctx, runtime)

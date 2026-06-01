@@ -17,12 +17,14 @@ if ! command -v ccb &> /dev/null; then
     exit 1
 fi
 
-# 检查 ccb 是否已在运行（需确认进程实际存活，而非仅项目已注册）
-if ccb --project "$PROJECT_ROOT" ping ccbd 2>/dev/null | grep -q "pid_alive: True"; then
+# 切换到项目目录（后续命令依赖项目上下文）
+cd "$PROJECT_ROOT"
+
+# 检查 ccb 是否已在运行
+if ccb ping ccbd 2>/dev/null | grep -q "pid_alive: True"; then
     echo -e "${GREEN}✓ ccb 已运行${NC}"
     echo "  项目: $PROJECT_ROOT"
-    # 可选：显示当前状态
-    ccb --project "$PROJECT_ROOT" ps 2>/dev/null || true
+    ccb ps 2>/dev/null || true
     exit 0
 fi
 
@@ -30,6 +32,5 @@ fi
 echo -e "${YELLOW}▶ ccb 未运行，正在启动...${NC}"
 echo "  项目: $PROJECT_ROOT"
 
-# 切换到项目目录启动，确保 ccb 正确识别项目上下文
-cd "$PROJECT_ROOT"
+# exec 接管当前终端显示 tmux 界面
 exec ccb "$@"
