@@ -64,6 +64,8 @@ def print_start_help(*, file=None) -> None:
               ccb -n               Rebuild runtime state while preserving config and managed agent history.
               ccb clear [agent...]  Send provider-native /clear to managed agent panes.
               ccb restart [agent...]  Restart managed agent panes. Default: all agents.
+              ccb reload            Apply a safe additive config reload, or reject with diagnostics.
+              ccb reload --dry-run  Validate and plan config reload without mutation.
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
@@ -82,7 +84,7 @@ def print_start_help(*, file=None) -> None:
               ccb pend --queue [--detail] <agent|all>
 
             Advanced views:
-              ccb queue [--detail] <agent|all>
+              ccb queue [--detail] <agent_name|all>
               ccb trace <id>
 
             Advanced recovery:
@@ -338,6 +340,18 @@ _COMMAND_HELP = {
 
         Config validation:
           ccb config validate   Validate `.ccb/ccb.config` for the current project.
+    """,
+    "reload": """
+        usage: ccb reload [--dry-run]
+
+        Reload:
+          ccb reload             Apply safe explicit changes: view-only, append-only add_agent/add_window, or idle remove_agent.
+          ccb reload --dry-run   Ask the mounted daemon to validate `.ccb/ccb.config` and return a no-mutation reload plan.
+
+        Explicit reload boundary:
+          - Busy remove_agent, replace_agent, move_agent, and arbitrary layout changes are rejected.
+          - No config watch is started; replace and full kill/reflow of existing panes are not implemented.
+          - Non-dry-run output includes stage, plan_class, graph version, diagnostics, and any residue.
     """,
 }
 

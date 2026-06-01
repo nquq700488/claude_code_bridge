@@ -89,6 +89,38 @@ def connect_mounted_daemon(context: CliContext, *, allow_restart_stale: bool) ->
     )
 
 
+def connect_current_mounted_daemon(context: CliContext) -> DaemonHandle:
+    _manager, _guard, inspection = inspect_daemon(context)
+    phase = _current_daemon_phase(inspection)
+    if phase != 'mounted':
+        if phase == 'unmounted':
+            raise CcbdServiceError('project ccbd is unmounted; run `ccb` first')
+        if phase == 'starting':
+            raise CcbdServiceError('project ccbd is starting; wait for keeper to finish startup')
+        if phase == 'stopping':
+            raise CcbdServiceError('project ccbd is stopping; wait for shutdown to finish')
+        raise CcbdServiceError(f'ccbd is unavailable: {getattr(inspection, "reason", "unknown")}')
+    if not getattr(inspection, 'socket_connectable', False):
+        raise CcbdServiceError(f'ccbd is unavailable: {getattr(inspection, "reason", "socket_unreachable")}')
+    return DaemonHandle(
+        client=_build_control_plane_client(context.paths.ccbd_socket_path),
+        inspection=inspection,
+        started=False,
+    )
+
+
+def _current_daemon_phase(inspection) -> str:
+    phase = str(getattr(inspection, 'phase', '') or '').strip()
+    if phase:
+        return phase
+    health = getattr(inspection, 'health', None)
+    if health is LeaseHealth.HEALTHY:
+        return 'mounted'
+    if health in {LeaseHealth.MISSING, LeaseHealth.UNMOUNTED}:
+        return 'unmounted'
+    return 'failed'
+
+
 def invoke_mounted_daemon(
     context: CliContext,
     *,

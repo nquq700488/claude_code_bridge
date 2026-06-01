@@ -5,6 +5,7 @@ from pathlib import Path
 from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.models import LeaseHealth
+from ccbd.reload_handoff import reload_handoff_allows_signature_mismatch
 from ccbd.services.project_namespace_state import ProjectNamespaceStateStore
 from ccbd.services.lifecycle import current_socket_inode, lifecycle_from_inspection
 from ccbd.socket_client import CcbdClient, CcbdClientError
@@ -182,7 +183,18 @@ def daemon_matches_project_config(app) -> bool:
     payload = CcbdClient(app.paths.ccbd_socket_path, timeout_s=CONTROL_PLANE_RPC_TIMEOUT_S).ping('ccbd')
     actual_signature = str(payload.get('config_signature') or '').strip()
     if actual_signature:
-        return actual_signature == expected['config_signature']
+        expected_signature = str(expected['config_signature'])
+        if actual_signature == expected_signature:
+            return True
+        if reload_handoff_allows_signature_mismatch(
+            app,
+            expected_config_signature=expected_signature,
+            actual_config_signature=actual_signature,
+        ):
+            return True
+        # A mounted daemon with an older service graph is still the active
+        # project daemon. Explicit `ccb reload` owns applying disk config drift.
+        return True
     known_agents = payload.get('known_agents')
     if not isinstance(known_agents, list):
         return False
@@ -283,6 +295,7 @@ def _record_connectable_observation_failure(
 def cleanup_transient_keeper_files(app, *, lock_path: Path) -> None:
     for path in (
         app.paths.ccbd_keeper_path,
+        app.paths.ccbd_reload_handoff_path,
         app.paths.ccbd_dir / 'keeper.stdout.log',
         app.paths.ccbd_dir / 'keeper.stderr.log',
         Path(lock_path),

@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.0.11-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.1.1-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)
@@ -147,6 +147,12 @@ review = "reviewer:claude, qa:gemini"
 mode = "every_window"
 width = "15%"
 bottom_height = 20
+
+[ui.sidebar.view]
+agents_height = "50%"
+comms_height = "15%"
+tips_height = "35%"
+comms_limit = 3
 ```
 
 如果你不确定应该如何分组、要几个 worker、哪些 agent 用 worktree、哪些 agent 需要独立模型或 API，可以先让支持 skill 的 agent 使用 `ccb-config` 和你讨论并生成配置方案。
@@ -182,6 +188,8 @@ ccb
 | 强制清理当前项目残留后再重建 | `ccb kill -f` 后接 `ccb -n` |
 | 更新到最新稳定 release | `ccb update` |
 | 查看当前使用的配置层 | `ccb config validate` |
+| 预览配置热加载计划，不修改 tmux | `ccb reload --dry-run` |
+| 应用支持的配置变更，不重启其他 agent | `ccb reload` |
 
 ## tmux 常规操作
 
@@ -246,6 +254,8 @@ CCB 配置有三层，优先级从低到高：
 | 单 agent 模型/API | `[agents.<name>]` | 可为不同 agent 配 `model`、`key`、`url` 等。 |
 | 角色说明 | `[agents.<name>] description = "..."` | 给 agent 一个简短职责说明；更长的工作流规则建议写到 memory。 |
 
+在已启动的项目里修改 `.ccb/ccb.config` 后，先运行 `ccb reload --dry-run` 预览计划，再运行 `ccb reload` 应用。显式 reload 可以动态新增 agent、新增 window、卸载 idle agent、删除 idle window，同时保持无关 agent 和 pane 继续运行。它不是后台文件监听；busy agent 卸载、provider 替换、agent 移动和任意布局重排会被拒绝，不会 kill 现有 pane。
+
 如果你想先讨论配置而不是手写，可以直接用 `ccb-config` skill 描述目标团队。它会先提出完整方案，确认后再修改 `.ccb/ccb.config`。
 
 <details>
@@ -282,6 +292,12 @@ review = "reviewer:claude, qa:gemini"
 mode = "every_window"
 width = "15%"
 bottom_height = 20
+
+[ui.sidebar.view]
+agents_height = "50%"
+comms_height = "15%"
+tips_height = "35%"
+comms_limit = 3
 ```
 
 注意：`cmd` 只属于紧凑/混合单窗口布局；`[windows]` 拓扑里不要写 `cmd`。
@@ -326,7 +342,7 @@ $ccb-config 为一个 Python library 设计团队：main 负责任务拆分，�
 2. `ccb-config` 读取当前配置权威层，判断是新建、修改还是迁移。
 3. 它先提出完整配置方案，不应直接改文件。
 4. 你确认后，它只修改 `.ccb/ccb.config`。
-5. 它运行配置校验，并提醒你重启 CCB 让配置生效。
+5. 它运行配置校验，并在可动态应用时提醒你使用 `ccb reload --dry-run` / `ccb reload` 生效。
 
 默认情况下，`ccb-config` 不会修改 `.ccb/ccb_memory.md` 或 `.ccb/agents/<agent>/memory.md`。只有当你明确要求“设计工作流记忆”或“写入角色记忆”时，才应该修改这些 memory 文件。
 
@@ -440,10 +456,32 @@ v7 线重点：
 - 原生 CCB sidebar，支持 per-window 项目视图、agent 状态和鼠标切换。
 - Comms 从 agent 活动中拆分，通信状态和 provider pane 活动更清晰。
 - 新增 `version = 2` `[windows]` 拓扑，可按工作流分组多个 tmux window。
+- 显式 `ccb reload` 支持动态加载 agent/window 和 idle 卸载，不重启无关 agent。
 - 保留 compact / hybrid 旧配置兼容，单窗口团队不需要强制迁移。
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
+<summary><b>v7.1.1</b> - Sidebar View Height Release</summary>
+
+- 在 `[ui.sidebar.view]` 下新增三段 sidebar 高度配置：`agents_height`、`comms_height`、`tips_height`。
+- 原生 sidebar 默认内部分区调整为 Agents `50%`、Comms `15%`、Tips `35%`。
+- config 解析、project_view payload、reload 计划和 Rust sidebar TUI 都会传递并使用这些高度设置。
+- 修复同名 agent reload/remount 可靠性：动态卸载后的 retired agent 可以用同名重新创建，不再被旧 runtime authority residue 阻塞；已停止的旧 session 记录仍可保留并供重建继承。
+- 同步更新 Codex/Claude 继承的 `ccb-config` skill 文档和 reference，生成或迁移 windows topology 时会暴露这三个参数。
+
+</details>
+
+<details>
+<summary><b>v7.1.0</b> - Dynamic Reload Release</summary>
+
+- 新增 `.ccb/ccb.config` 显式热加载：`ccb reload --dry-run` 预览计划，`ccb reload` 应用支持的变更。
+- 可以在当前 ccbd daemon 下动态挂载追加的 agent 和新增 window，不打断无关 pane。
+- 可以动态卸载 idle 状态下被移除的 agent 和被移除的 idle window，并保留其他 agent pane。
+- config signature drift 会被视为 reload-pending，而不是 daemon 重启触发器；busy 卸载和不安全替换仍会 fail closed。
+
+</details>
+
+<details>
 <summary><b>v7.0.11</b> - Provider Activity And Sidebar Focus Release</summary>
 
 - 通过 provider-native hook artifact 记录活动证据，让 sidebar 更准确地区分 active、pending、idle 和 failed provider 工作状态。

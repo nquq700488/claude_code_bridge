@@ -281,6 +281,67 @@ def test_mount_manager_refresh_heartbeat_rejects_replaced_lease_holder(tmp_path:
     assert lease.daemon_instance_id == 'daemon-b'
 
 
+def test_mount_manager_update_config_signature_requires_current_holder_and_generation(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-signature-holder'
+    project_root.mkdir()
+    ctx = bootstrap_project(project_root)
+    layout = PathLayout(project_root)
+    clock = Clock(
+        [
+            '2026-03-18T00:00:00Z',
+            '2026-03-18T00:00:05Z',
+            '2026-03-18T00:00:10Z',
+        ]
+    )
+    manager = MountManager(layout, clock=clock, uid_getter=lambda: 1000, boot_id_getter=lambda: 'boot-1')
+
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=321,
+        socket_path=layout.ccbd_socket_path,
+        generation=2,
+        config_signature='old',
+        daemon_instance_id='daemon-a',
+    )
+    updated = manager.update_config_signature(
+        config_signature='new',
+        expected_pid=321,
+        expected_daemon_instance_id='daemon-a',
+        expected_generation=2,
+    )
+
+    assert updated.config_signature == 'new'
+    assert updated.ccbd_pid == 321
+    assert updated.generation == 2
+    assert updated.last_heartbeat_at == '2026-03-18T00:00:05Z'
+
+    manager.mark_mounted(
+        project_id=ctx.project_id,
+        pid=654,
+        socket_path=layout.ccbd_socket_path,
+        generation=3,
+        config_signature='foreign',
+        daemon_instance_id='daemon-b',
+    )
+    with pytest.raises(RuntimeError, match='lease holder changed'):
+        manager.update_config_signature(
+            config_signature='should-not-apply',
+            expected_pid=321,
+            expected_daemon_instance_id='daemon-a',
+            expected_generation=2,
+        )
+    with pytest.raises(RuntimeError, match='generation changed'):
+        manager.update_config_signature(
+            config_signature='should-not-apply',
+            expected_pid=654,
+            expected_daemon_instance_id='daemon-b',
+            expected_generation=2,
+        )
+    lease = manager.load_state()
+    assert lease is not None
+    assert lease.config_signature == 'foreign'
+
+
 def test_mount_manager_mark_unmounted_rejects_replaced_lease_holder(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-replaced-unmount'
     project_root.mkdir()

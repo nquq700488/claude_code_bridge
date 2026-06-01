@@ -51,7 +51,12 @@ def ping_target(context: CliContext, command: ParsedPingCommand) -> dict:
                 'last_submit_duration_s': None,
                 'last_ping_duration_s': None,
                 'last_maintenance_duration_s': None,
+                'last_heartbeat_duration_s': None,
                 'pending_maintenance_ticks': None,
+                'service_graph_version': None,
+                'service_graph_created_at': None,
+                'service_graph_retained_count': None,
+                'service_graph_retained_count_scope': None,
             }
         return {
             'project_id': local.project_id,

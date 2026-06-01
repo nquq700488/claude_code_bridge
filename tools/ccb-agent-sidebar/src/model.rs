@@ -62,6 +62,10 @@ pub struct SidebarInfo {
 pub struct SidebarViewInfo {
     #[serde(default = "default_agents_height")]
     pub agents_height: serde_json::Value,
+    #[serde(default = "default_comms_height")]
+    pub comms_height: serde_json::Value,
+    #[serde(default = "default_tips_height")]
+    pub tips_height: serde_json::Value,
     #[serde(default = "default_comms_limit")]
     pub comms_limit: usize,
     #[serde(default = "default_comms_compact")]
@@ -76,6 +80,8 @@ impl Default for SidebarViewInfo {
     fn default() -> Self {
         Self {
             agents_height: default_agents_height(),
+            comms_height: default_comms_height(),
+            tips_height: default_tips_height(),
             comms_limit: default_comms_limit(),
             comms_compact: default_comms_compact(),
             tips_enabled: default_tips_enabled(),
@@ -183,7 +189,15 @@ pub fn row_targets(view: &ProjectView) -> Vec<RowTarget> {
 }
 
 fn default_agents_height() -> serde_json::Value {
-    serde_json::Value::String("33%".into())
+    serde_json::Value::String("50%".into())
+}
+
+fn default_comms_height() -> serde_json::Value {
+    serde_json::Value::String("15%".into())
+}
+
+fn default_tips_height() -> serde_json::Value {
+    serde_json::Value::String("35%".into())
 }
 
 fn default_comms_limit() -> usize {
@@ -251,6 +265,8 @@ mod tests {
                 "view_error": "invalid TOML config",
                 "view": {
                   "agents_height": "40%",
+                  "comms_height": "15%",
+                  "tips_height": "45%",
                   "comms_limit": 4,
                   "comms_compact": true,
                   "tips_enabled": true,
@@ -285,6 +301,14 @@ mod tests {
             Some("invalid TOML config")
         );
         assert_eq!(response.view.namespace.sidebar.view.comms_limit, 4);
+        assert_eq!(
+            response.view.namespace.sidebar.view.comms_height,
+            serde_json::Value::String("15%".into())
+        );
+        assert_eq!(
+            response.view.namespace.sidebar.view.tips_height,
+            serde_json::Value::String("45%".into())
+        );
         assert_eq!(
             response.view.namespace.sidebar.view.tips,
             vec!["C-b d detach"]

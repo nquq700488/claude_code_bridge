@@ -147,7 +147,9 @@ width = "15%"
 bottom_height = 20
 
 [ui.sidebar.view]
-agents_height = "33%"
+agents_height = "50%"
+comms_height = "15%"
+tips_height = "35%"
 comms_limit = 5
 comms_compact = true
 tips_enabled = true
@@ -186,7 +188,7 @@ Contract:
 - `[ui.sidebar]` is valid only with windows topology. Defaults are `mode = "every_window"`, `width = "15%"`, and `bottom_height = 20`; `width` accepts either a positive integer column count or a percentage string.
 - In `mode = "every_window"`, CCB treats `width` as a project-wide sidebar width. Topology refreshes must resize every managed sidebar pane to the same configured share of its tmux window so page/window switches do not leave sidebars at different widths. If the user drags a sidebar border, CCB stores that runtime column width in the project tmux session and applies it to every managed sidebar window until the session is recreated. If tmux later resizes a window because a terminal client attaches or changes size, CCB reapplies the stored runtime width instead of treating the auto-resized pane width as a new user preference.
 - `[ui.sidebar.view]` is optional and controls only the sidebar pane's internal presentation. It must not redefine managed windows, agents, pane ownership, provider runtime, or message/job authority.
-- `[ui.sidebar.view]` changes are UI-only: `agents_height`, `comms_limit`, `comms_compact`, `tips_enabled`, and `tips` are delivered through `project_view` and must not force namespace topology recreation.
+- `[ui.sidebar.view]` changes are UI-only: `agents_height`, `comms_height`, `tips_height`, `comms_limit`, `comms_compact`, `tips_enabled`, and `tips` are delivered through `project_view` and must not force namespace topology recreation. `agents_height` controls the top Tree/Agent panel, `comms_height` controls the Comms panel, and `tips_height` controls the Tips panel; all three accept a positive integer row count or a percentage string. The default split is `50%`, `15%`, and `35%`.
 - If a hot-loaded `[ui.sidebar.view]` parse fails, `project_view.namespace.sidebar.view_error` reports the config error and the sidebar displays a `config ✕` warning while retaining the daemon's last valid view config.
 - Agent leaves in `[windows]` provide default `provider` and default `workspace_mode` (`agent:provider` means `inplace`; `agent:provider(worktree)` means `git-worktree`).
 - `[agents.<name>]` tables are overlays for names referenced by `[windows]`. They may provide any agent-local override, including `workspace_mode`; if they repeat `provider`, it must match the provider declared in `[windows]`.

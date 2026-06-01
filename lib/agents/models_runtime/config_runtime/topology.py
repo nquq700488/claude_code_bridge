@@ -65,14 +65,39 @@ class SidebarSpec:
 
 @dataclass(frozen=True)
 class SidebarViewSpec:
-    agents_height: str | int = '33%'
+    agents_height: str | int = '50%'
+    comms_height: str | int = '15%'
+    tips_height: str | int = '35%'
     comms_limit: int = 5
     comms_compact: bool = True
     tips_enabled: bool = True
     tips: tuple[str, ...] = DEFAULT_SIDEBAR_VIEW_TIPS
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, 'agents_height', normalize_sidebar_view_height(self.agents_height))
+        object.__setattr__(
+            self,
+            'agents_height',
+            normalize_sidebar_view_height(
+                self.agents_height,
+                field_name='ui.sidebar.view.agents_height',
+            ),
+        )
+        object.__setattr__(
+            self,
+            'comms_height',
+            normalize_sidebar_view_height(
+                self.comms_height,
+                field_name='ui.sidebar.view.comms_height',
+            ),
+        )
+        object.__setattr__(
+            self,
+            'tips_height',
+            normalize_sidebar_view_height(
+                self.tips_height,
+                field_name='ui.sidebar.view.tips_height',
+            ),
+        )
         try:
             comms_limit = int(self.comms_limit)
         except Exception as exc:
@@ -92,6 +117,8 @@ class SidebarViewSpec:
     def to_record(self) -> dict[str, object]:
         return {
             'agents_height': self.agents_height,
+            'comms_height': self.comms_height,
+            'tips_height': self.tips_height,
             'comms_limit': self.comms_limit,
             'comms_compact': self.comms_compact,
             'tips_enabled': self.tips_enabled,
@@ -169,22 +196,26 @@ def normalize_sidebar_width(value: str | int) -> str | int:
     raise AgentValidationError('ui.sidebar.width must be a positive integer or percentage string')
 
 
-def normalize_sidebar_view_height(value: str | int) -> str | int:
+def normalize_sidebar_view_height(
+    value: str | int,
+    *,
+    field_name: str = 'ui.sidebar.view.agents_height',
+) -> str | int:
     if isinstance(value, bool):
-        raise AgentValidationError('ui.sidebar.view.agents_height must be a positive integer or percentage string')
+        raise AgentValidationError(f'{field_name} must be a positive integer or percentage string')
     if isinstance(value, int):
         if value <= 0:
-            raise AgentValidationError('ui.sidebar.view.agents_height must be positive')
+            raise AgentValidationError(f'{field_name} must be positive')
         return value
     text = str(value or '').strip()
     if text.endswith('%'):
         number = text[:-1].strip()
         if not number.isdigit() or int(number) <= 0 or int(number) >= 100:
-            raise AgentValidationError('ui.sidebar.view.agents_height percentage must be between 1% and 99%')
+            raise AgentValidationError(f'{field_name} percentage must be between 1% and 99%')
         return f'{int(number)}%'
     if text.isdigit() and int(text) > 0:
         return int(text)
-    raise AgentValidationError('ui.sidebar.view.agents_height must be a positive integer or percentage string')
+    raise AgentValidationError(f'{field_name} must be a positive integer or percentage string')
 
 
 def _normalize_tip(value: object) -> str:

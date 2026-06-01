@@ -70,6 +70,18 @@ impl CcbdClient {
             .map(|_| ())
     }
 
+    pub fn reload_config(&self) -> Result<(), String> {
+        let payload = self.request("project_reload_config", json!({"dry_run": false}))?;
+        let status = payload
+            .get("status")
+            .and_then(|value| value.as_str())
+            .unwrap_or("unknown");
+        if matches!(status, "published" | "ok") || reload_is_no_change(&payload) {
+            return Ok(());
+        }
+        Err(reload_error_message(&payload, status))
+    }
+
     pub fn restart_panes(&self) -> Result<(), String> {
         self.request("project_restart_panes", json!({})).map(|_| ())
     }
@@ -77,6 +89,25 @@ impl CcbdClient {
     fn request(&self, op: &str, request: serde_json::Value) -> Result<serde_json::Value, String> {
         request_unix_socket(&self.socket_path, self.timeout, op, request)
     }
+}
+
+fn reload_error_message(payload: &serde_json::Value, status: &str) -> String {
+    let reason = payload
+        .get("diagnostics")
+        .and_then(|value| value.get("reason"))
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            payload
+                .get("errors")
+                .and_then(|value| value.as_array())
+                .and_then(|values| values.iter().find_map(|value| value.as_str()))
+        })
+        .unwrap_or("reload rejected");
+    format!("reload {status}: {reason}")
+}
+
+fn reload_is_no_change(payload: &serde_json::Value) -> bool {
+    payload.get("plan_class").and_then(|value| value.as_str()) == Some("no_change")
 }
 
 #[cfg(unix)]
@@ -266,6 +297,56 @@ mod tests {
         let client = CcbdClient::new(socket_path);
 
         client.restart_panes().unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn reload_config_sends_non_dry_run_project_reload_request() {
+        let (socket_path, handle) = spawn_one_response_server(|request| {
+            assert_eq!(request["op"], "project_reload_config");
+            assert_eq!(request["request"], json!({"dry_run": false}));
+            json!({"api_version": 2, "ok": true, "status": "published"})
+        });
+        let client = CcbdClient::new(socket_path);
+
+        client.reload_config().unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn reload_config_reports_structured_rejection() {
+        let (socket_path, handle) = spawn_one_response_server(|request| {
+            assert_eq!(request["op"], "project_reload_config");
+            json!({
+                "api_version": 2,
+                "ok": true,
+                "status": "blocked",
+                "diagnostics": {"reason": "unsupported_plan_class"}
+            })
+        });
+        let client = CcbdClient::new(socket_path);
+
+        let error = client.reload_config().unwrap_err();
+        handle.join().unwrap();
+
+        assert_eq!(error, "reload blocked: unsupported_plan_class");
+    }
+
+    #[test]
+    fn reload_config_treats_no_change_as_refresh_success() {
+        let (socket_path, handle) = spawn_one_response_server(|request| {
+            assert_eq!(request["op"], "project_reload_config");
+            json!({
+                "api_version": 2,
+                "ok": true,
+                "status": "blocked",
+                "plan_class": "no_change",
+                "diagnostics": {"reason": "unsupported_plan_class"}
+            })
+        });
+        let client = CcbdClient::new(socket_path);
+
+        client.reload_config().unwrap();
         handle.join().unwrap();
     }
 

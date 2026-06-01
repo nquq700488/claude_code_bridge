@@ -75,6 +75,12 @@ def handle_fault_clear(context, command, out, services) -> int:
     return 0
 
 
+def handle_reload(context, command, out, services) -> int:
+    payload = services.reload_config(context, command)
+    services.write_lines(out, services.render_reload(payload))
+    return 0 if str(payload.get('status') or '') in {'ok', 'published'} else 1
+
+
 __all__ = [
     'handle_cleanup',
     'handle_clear',
@@ -86,4 +92,5 @@ __all__ = [
     'handle_kill',
     'handle_logs',
     'handle_ps',
+    'handle_reload',
 ]

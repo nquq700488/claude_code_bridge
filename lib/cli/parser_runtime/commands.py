@@ -16,6 +16,7 @@ from cli.models import (
     ParsedPingCommand,
     ParsedPsCommand,
     ParsedQueueCommand,
+    ParsedReloadCommand,
     ParsedResubmitCommand,
     ParsedRestartCommand,
     ParsedRetryCommand,
@@ -248,6 +249,13 @@ def parse_config(tokens: list[str], *, project: str | None, error_type) -> Parse
     return ParsedConfigValidateCommand(project=project)
 
 
+def parse_reload(tokens: list[str], *, project: str | None, error_type) -> ParsedReloadCommand:
+    parser = argparse.ArgumentParser(prog='ccb reload', add_help=False)
+    parser.add_argument('--dry-run', dest='dry_run', action='store_true')
+    namespace = parse_args(parser, tokens, error_message='invalid reload command', error_type=error_type)
+    return ParsedReloadCommand(project=project, dry_run=bool(namespace.dry_run))
+
+
 __all__ = [
     'parse_ack',
     'parse_cancel',
@@ -263,6 +271,7 @@ __all__ = [
     'parse_ps',
     'parse_queue',
     'parse_repair',
+    'parse_reload',
     'parse_resubmit',
     'parse_restart',
     'parse_retry',

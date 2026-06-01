@@ -7,6 +7,7 @@ from agents.config_identity import project_config_identity_payload
 from agents.config_loader import load_project_config
 from ccbd.keeper import KeeperState, KeeperStateStore, ProjectKeeper, ShutdownIntent, ShutdownIntentStore
 from ccbd.models import CcbdLease, LeaseHealth, LeaseInspection, MountState
+from ccbd.reload_handoff import ReloadHandoff, ReloadHandoffStore, reload_handoff_allows_signature_mismatch
 from ccbd.services.lifecycle import CcbdLifecycleStore, build_lifecycle
 from ccbd.services.project_namespace_state import ProjectNamespaceState, ProjectNamespaceStateStore
 from cli.context import CliContext
@@ -40,6 +41,9 @@ def _inspection(
     heartbeat_fresh: bool,
     mount_state: MountState = MountState.MOUNTED,
     reason: str,
+    config_signature: str | None = None,
+    daemon_instance_id: str | None = None,
+    generation: int = 1,
 ) -> LeaseInspection:
     lease = None
     if health is not LeaseHealth.MISSING:
@@ -52,7 +56,9 @@ def _inspection(
             started_at='2026-04-02T00:00:00Z',
             last_heartbeat_at='2026-04-02T00:00:00Z',
             mount_state=mount_state,
-            generation=1,
+            generation=generation,
+            config_signature=config_signature,
+            daemon_instance_id=daemon_instance_id,
         )
     return LeaseInspection(
         lease=lease,
@@ -375,6 +381,151 @@ def test_project_keeper_config_probe_uses_shared_control_plane_timeout(tmp_path:
         keeper_loop.CONTROL_PLANE_RPC_TIMEOUT_S,
         keeper_loop.CONTROL_PLANE_RPC_TIMEOUT_S,
     ]
+
+
+def test_project_keeper_accepts_bounded_reload_handoff_signature_window(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-keeper-reload-handoff'
+    ctx = _context(project_root, 'agent1:codex\n')
+    old_signature = project_config_identity_payload(load_project_config(project_root).config)['config_signature']
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex, agent2:claude\n')
+    new_signature = project_config_identity_payload(load_project_config(project_root).config)['config_signature']
+    keeper = ProjectKeeper(project_root, pid=893, clock=lambda: '2026-05-29T00:00:20Z')
+    inspection = _inspection(
+        ctx,
+        health=LeaseHealth.HEALTHY,
+        socket_connectable=True,
+        pid_alive=True,
+        heartbeat_fresh=True,
+        reason='healthy',
+        config_signature=old_signature,
+        daemon_instance_id='daemon-1',
+        generation=1,
+    )
+    keeper._ownership_guard = SimpleNamespace(inspect=lambda: inspection)
+    ReloadHandoffStore(keeper.paths).save(
+        ReloadHandoff(
+            project_id=ctx.project.project_id,
+            started_at='2026-05-29T00:00:00Z',
+            old_config_signature=old_signature,
+            target_config_signature=new_signature,
+            daemon_pid=321,
+            daemon_instance_id='daemon-1',
+            generation=1,
+        )
+    )
+
+    class _FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None) -> None:
+            assert socket_path == ctx.paths.ccbd_socket_path
+            assert timeout_s == keeper_loop.CONTROL_PLANE_RPC_TIMEOUT_S
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            return {'config_signature': old_signature}
+
+    monkeypatch.setattr(keeper_loop, 'CcbdClient', _FakeClient)
+
+    assert keeper_loop.daemon_matches_project_config(keeper) is True
+
+
+def test_project_keeper_tolerates_config_drift_after_expired_reload_handoff(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-keeper-reload-handoff-expired'
+    ctx = _context(project_root, 'agent1:codex\n')
+    old_signature = project_config_identity_payload(load_project_config(project_root).config)['config_signature']
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex, agent2:claude\n')
+    new_signature = project_config_identity_payload(load_project_config(project_root).config)['config_signature']
+    keeper = ProjectKeeper(project_root, pid=894, clock=lambda: '2026-05-29T00:02:00Z')
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.HEALTHY,
+            socket_connectable=True,
+            pid_alive=True,
+            heartbeat_fresh=True,
+            reason='healthy',
+            config_signature=old_signature,
+            daemon_instance_id='daemon-1',
+            generation=1,
+        )
+    )
+    ReloadHandoffStore(keeper.paths).save(
+        ReloadHandoff(
+            project_id=ctx.project.project_id,
+            started_at='2026-05-29T00:00:00Z',
+            old_config_signature=old_signature,
+            target_config_signature=new_signature,
+            daemon_pid=321,
+            daemon_instance_id='daemon-1',
+            generation=1,
+        )
+    )
+
+    class _FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None) -> None:
+            del socket_path, timeout_s
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            return {'config_signature': old_signature}
+
+    monkeypatch.setattr(keeper_loop, 'CcbdClient', _FakeClient)
+
+    assert reload_handoff_allows_signature_mismatch(
+        keeper,
+        expected_config_signature=new_signature,
+        actual_config_signature=old_signature,
+    ) is False
+    assert keeper_loop.daemon_matches_project_config(keeper) is True
+
+
+def test_project_keeper_tolerates_config_drift_with_wrong_holder_handoff(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path / 'repo-keeper-reload-handoff-holder'
+    ctx = _context(project_root, 'agent1:codex\n')
+    old_signature = project_config_identity_payload(load_project_config(project_root).config)['config_signature']
+    _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex, agent2:claude\n')
+    new_signature = project_config_identity_payload(load_project_config(project_root).config)['config_signature']
+    keeper = ProjectKeeper(project_root, pid=895, clock=lambda: '2026-05-29T00:00:20Z')
+    keeper._ownership_guard = SimpleNamespace(
+        inspect=lambda: _inspection(
+            ctx,
+            health=LeaseHealth.HEALTHY,
+            socket_connectable=True,
+            pid_alive=True,
+            heartbeat_fresh=True,
+            reason='healthy',
+            config_signature=old_signature,
+            daemon_instance_id='daemon-2',
+            generation=1,
+        )
+    )
+    ReloadHandoffStore(keeper.paths).save(
+        ReloadHandoff(
+            project_id=ctx.project.project_id,
+            started_at='2026-05-29T00:00:00Z',
+            old_config_signature=old_signature,
+            target_config_signature=new_signature,
+            daemon_pid=321,
+            daemon_instance_id='daemon-1',
+            generation=1,
+        )
+    )
+
+    class _FakeClient:
+        def __init__(self, socket_path, *, timeout_s=None) -> None:
+            del socket_path, timeout_s
+
+        def ping(self, target: str) -> dict[str, object]:
+            assert target == 'ccbd'
+            return {'config_signature': old_signature}
+
+    monkeypatch.setattr(keeper_loop, 'CcbdClient', _FakeClient)
+
+    assert reload_handoff_allows_signature_mismatch(
+        keeper,
+        expected_config_signature=new_signature,
+        actual_config_signature=old_signature,
+    ) is False
+    assert keeper_loop.daemon_matches_project_config(keeper) is True
 
 
 def test_project_keeper_stops_when_shutdown_intent_exists(tmp_path: Path) -> None:

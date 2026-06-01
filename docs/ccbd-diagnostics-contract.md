@@ -12,6 +12,7 @@ It is the authoritative design anchor for:
 - `.ccb/ccbd/start-policy.json`
 - `.ccb/ccbd/lifecycle.jsonl`
 - `.ccb/ccbd/heartbeats/<subject-kind>/*.json`
+- `.ccb/ccbd/reload-drain.json`
 - `.ccb/ccbd/artifacts/text/`
 - project-scoped backend log retention under `.ccb/ccbd/`
 - `ccb doctor`
@@ -125,6 +126,7 @@ Paths:
 - `.ccb/ccbd/start-policy.json`
 - `.ccb/ccbd/lifecycle.jsonl`
 - `.ccb/ccbd/heartbeats/<subject-kind>/*.json`
+- `.ccb/ccbd/reload-drain.json`
 
 Rules:
 
@@ -132,6 +134,16 @@ Rules:
 - `start-policy.json` records the persisted project recovery startup policy, including inherited `auto_permission` and forced recovery-restore semantics
 - `lifecycle.jsonl` records namespace creation/destruction and later runtime lifecycle events
 - `heartbeats/<subject-kind>/*.json` records non-lease heartbeat state for long-lived supervised subjects such as running jobs; these files are diagnostics/evidence, not backend ownership authority
+- `reload-drain.json` records bounded pending unload/replace drain state when
+  explicit reload state machinery is invoked; it is not lifecycle, lease,
+  runtime authority, or a config-watch trigger
+- `reload-handoff.json` records a short-lived explicit reload handoff while
+  plain `ccb reload` submits a non-dry-run request and, after daemon-side plan
+  acceptance, while additive apply with a changed config signature is in
+  progress; it lets keeper distinguish a bounded
+  old-signature-to-target-signature transition from daemon drift. It is cleared
+  after apply, is not lifecycle/lease/runtime/namespace authority, is not a
+  config-watch trigger, and stale or mismatched records fail closed.
 - `artifacts/text/` stores oversized CCB agent-to-agent message and reply text. Request bodies, terminal replies, notices, and callback continuations larger than 4 KiB are written there as UTF-8 text artifacts; ledgers store only the short preview plus artifact path, byte count, and sha256 metadata. These artifacts are diagnostics/evidence and transport support, not scheduling authority.
 - running-job heartbeat observations stay in diagnostics/events and must not be emitted as caller-visible mailbox replies; after three consecutive no-progress observations, the terminal `heartbeat_timeout` reply is the caller-visible outcome
 - daemon lease heartbeat and subject heartbeat must remain separate concepts and separate files
@@ -139,6 +151,11 @@ Rules:
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
 - `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
+- `ping('ccbd')` and `doctor` should surface lightweight control-plane metrics when available, including handler latency, heartbeat wall duration, heartbeat step duration, heartbeat runtime-store write count, project-view cache/response/build/tmux counts, process RSS/FD/thread counts, service-graph version/created-at/retained-count metadata, pending maintenance ticks, and reload timing fields when a reload feature exists; until old-graph in-flight retention is implemented, `service_graph_retained_count` means published graph count, not RCU-style old graph retention; these metrics are diagnostics only and must not add config watchers, tmux mutations, or heavy steady-state scans
+- `ccb reload --dry-run` / `project_reload_config(dry_run=true)` is a diagnostics-grade planning surface: it validates the current `.ccb/ccb.config`, returns old/new config signatures, plan class, no-mutation `safe_to_apply=false`, future classification safety, operations, optional drain intent suggestions for unload/replace, reasons, warnings, and errors, and updates reload timing fields without mutating tmux/runtime/lifecycle/service graph
+- `ccb reload` / `project_reload_config(dry_run=false)` is an explicit additive apply surface: only `view_only_change`, append-only `add_agent`, and `add_window` may publish; non-additive `remove_agent`, `replace_agent`, `move_agent`, and arbitrary `layout_change` must stop before graph publish and report structured diagnostics. Successful apply diagnostics must include stage, graph versions, publish flags, keeper handoff safety, and project-view cache invalidation state. Failure diagnostics must preserve stage-specific namespace/runtime residue while leaving the old published graph/config visible.
+- heartbeat wall duration may include lifecycle wrapper work outside the named step map; project-view build duration is updated only on cache misses, while project-view response duration is updated on cache hits and misses
+- process RSS, virtual memory, FD count, and thread count are best-effort process metrics; platforms without Linux `/proc` support may report `None`
 - `doctor` must also surface preferred/effective socket path byte lengths and an equivalent isolated-config `tmux -f /dev/null -S <effective-socket> start-server` command when a project tmux socket path is known, so macOS and WSL socket pathname failures can be diagnosed from one report
 - malformed namespace diagnostics must surface as diagnostics errors, not silently disappear
 - supervision diagnostics must preserve mount-attempt distinctions:

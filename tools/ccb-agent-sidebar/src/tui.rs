@@ -30,9 +30,9 @@ use crate::status::{activity_color, activity_symbol};
 const PROJECT_VIEW_REFRESH_MIN_MS: u64 = 100;
 const PROJECT_VIEW_REFRESH_MAX_MS: u64 = 5000;
 const PROJECT_VIEW_REFRESH_DEFAULT_MS: u64 = 1000;
-const DEFAULT_TREE_HEIGHT_PERCENT: u16 = 33;
-const SIDEBAR_RATIO_DENOMINATOR: u16 = 12;
-const SIDEBAR_COMMS_RATIO_NUMERATOR: u16 = 3;
+const DEFAULT_TREE_HEIGHT_PERCENT: u16 = 50;
+const DEFAULT_COMMS_HEIGHT_PERCENT: u16 = 15;
+const DEFAULT_TIPS_HEIGHT_PERCENT: u16 = 35;
 const TREE_CONTROL_CONTENT_WIDTH: u16 = 3;
 const TREE_REFRESH_SYMBOL: &str = "↻";
 const TREE_KILL_SYMBOL: &str = "×";
@@ -79,7 +79,7 @@ fn run_tui(args: &Args) -> io::Result<ExitAction> {
                     KeyCode::Char('Q') => return Ok(ExitAction::KillProject),
                     KeyCode::Char('j') | KeyCode::Down => app.move_selection(1),
                     KeyCode::Char('k') | KeyCode::Up => app.move_selection(-1),
-                    KeyCode::Char('r') => app.force_refresh(),
+                    KeyCode::Char('r') => app.reload_config(&client),
                     KeyCode::Char('R') => app.recover_first_visible_comms(&client),
                     KeyCode::Enter => app.focus_selected_target(&client),
                     KeyCode::Tab => app.focus_pane_window(&client),
@@ -201,6 +201,16 @@ impl SidebarApp {
         self.refresh_after = Instant::now();
     }
 
+    pub fn reload_config(&mut self, client: &CcbdClient) {
+        match client.reload_config() {
+            Ok(()) => self.force_refresh(),
+            Err(err) => {
+                self.set_error(err);
+                self.force_refresh();
+            }
+        }
+    }
+
     pub fn needs_refresh(&self) -> bool {
         Instant::now() >= self.refresh_after
     }
@@ -254,7 +264,7 @@ impl SidebarApp {
     ) -> Option<ExitAction> {
         match header_action_at(column, row, sidebar_areas(area, self.sidebar_view()).tree) {
             Some(HeaderMouseAction::Refresh) => {
-                self.force_refresh();
+                self.reload_config(client);
                 return None;
             }
             Some(HeaderMouseAction::KillProject) => return Some(ExitAction::KillProject),
@@ -577,13 +587,11 @@ fn sidebar_areas(area: Rect, view: &SidebarViewInfo) -> SidebarAreas {
     }
     let tree_height = tree_height_for(area.height, view).min(area.height);
     let remaining_after_tree = area.height.saturating_sub(tree_height);
-    let desired_comms_height = ratio_height(
-        area.height,
-        SIDEBAR_COMMS_RATIO_NUMERATOR,
-        SIDEBAR_RATIO_DENOMINATOR,
-    );
+    let desired_comms_height = comms_height_for(area.height, view);
     let comms_height = desired_comms_height.min(remaining_after_tree);
-    let tips_height = remaining_after_tree.saturating_sub(comms_height);
+    let remaining_after_comms = remaining_after_tree.saturating_sub(comms_height);
+    let desired_tips_height = tips_height_for(area.height, view);
+    let tips_height = desired_tips_height.min(remaining_after_comms);
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -600,14 +608,42 @@ fn sidebar_areas(area: Rect, view: &SidebarViewInfo) -> SidebarAreas {
 }
 
 fn tree_height_for(total_height: u16, view: &SidebarViewInfo) -> u16 {
-    match &view.agents_height {
+    view_height_for(
+        total_height,
+        &view.agents_height,
+        DEFAULT_TREE_HEIGHT_PERCENT,
+    )
+}
+
+fn comms_height_for(total_height: u16, view: &SidebarViewInfo) -> u16 {
+    view_height_for(
+        total_height,
+        &view.comms_height,
+        DEFAULT_COMMS_HEIGHT_PERCENT,
+    )
+}
+
+fn tips_height_for(total_height: u16, view: &SidebarViewInfo) -> u16 {
+    view_height_for(
+        total_height,
+        &view.tips_height,
+        DEFAULT_TIPS_HEIGHT_PERCENT,
+    )
+}
+
+fn view_height_for(
+    total_height: u16,
+    value: &serde_json::Value,
+    default_percent: u16,
+) -> u16 {
+    match value {
         serde_json::Value::Number(number) => number
             .as_u64()
             .and_then(|value| u16::try_from(value).ok())
-            .unwrap_or_else(|| percent_height(total_height, DEFAULT_TREE_HEIGHT_PERCENT)),
+            .unwrap_or_else(|| percent_height(total_height, default_percent)),
         serde_json::Value::String(text) => parse_height_value(total_height, text)
-            .unwrap_or_else(|| percent_height(total_height, DEFAULT_TREE_HEIGHT_PERCENT)),
-        _ => percent_height(total_height, DEFAULT_TREE_HEIGHT_PERCENT),
+            .unwrap_or_else(|| percent_height(total_height, default_percent)),
+        _ => percent_height(total_height, default_percent),
     }
     .clamp(3.min(total_height), total_height)
 }
@@ -629,18 +665,6 @@ fn percent_height(total_height: u16, percent: u16) -> u16 {
     let numerator = u32::from(total_height) * u32::from(percent);
     let value = numerator.saturating_add(99) / 100;
     u16::try_from(value).unwrap_or(total_height).max(1)
-}
-
-fn ratio_height(total_height: u16, numerator: u16, denominator: u16) -> u16 {
-    let denominator = u32::from(denominator).max(1);
-    let numerator = u32::from(numerator);
-    let value = u32::from(total_height)
-        .saturating_mul(numerator)
-        .saturating_add(denominator.saturating_sub(1))
-        / denominator;
-    u16::try_from(value)
-        .unwrap_or(total_height)
-        .min(total_height)
 }
 
 fn default_sidebar_view() -> &'static SidebarViewInfo {
@@ -1520,7 +1544,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_three_panel_sidebar_with_five_compact_comms_rows() {
+    fn renders_three_panel_sidebar_with_default_compact_comms_rows() {
         let mut app = SidebarApp::new("main".into());
         app.apply_response(sample_response_with_comms(6));
 
@@ -1530,27 +1554,44 @@ mod tests {
 
         let rendered = terminal.backend().to_string();
         assert!(rendered.contains("↻  X  ⌫  agent4>agent1 ok"));
-        assert!(rendered.contains("↻  X  ⌫  agent5>agent1 ok"));
+        assert!(!rendered.contains("agent5>agent1"));
         assert!(!rendered.contains("agent6>agent1"));
         assert!(rendered.contains("Tips"));
         let buffer = terminal.backend().buffer();
-        assert_eq!(buffer[(0, 12)].symbol(), "┌");
-        assert_eq!(buffer[(1, 12)].symbol(), "C");
-        assert_eq!(buffer[(0, 21)].symbol(), "┌");
-        assert_eq!(buffer[(1, 21)].symbol(), "T");
+        assert_eq!(buffer[(0, 18)].symbol(), "┌");
+        assert_eq!(buffer[(1, 18)].symbol(), "C");
+        assert_eq!(buffer[(0, 24)].symbol(), "┌");
+        assert_eq!(buffer[(1, 24)].symbol(), "T");
     }
 
     #[test]
-    fn tall_sidebar_uses_one_third_one_quarter_and_five_twelfths_split() {
+    fn tall_sidebar_uses_default_half_fifteen_and_thirty_five_split() {
         let mut app = SidebarApp::new("main".into());
         app.apply_response(sample_response_with_comms(6));
-        let area = Rect::new(0, 0, 24, 47);
+        let area = Rect::new(0, 0, 24, 40);
+
+        let areas = sidebar_areas(area, app.sidebar_view());
+
+        assert_eq!(areas.tree.height, 20);
+        assert_eq!(areas.comms.height, 6);
+        assert_eq!(areas.tips.map(|area| area.height), Some(14));
+    }
+
+    #[test]
+    fn configured_sidebar_view_can_adjust_all_three_sections() {
+        let mut app = SidebarApp::new("main".into());
+        let mut response = sample_response_with_comms(6);
+        response.view.namespace.sidebar.view.agents_height = serde_json::Value::String("40%".into());
+        response.view.namespace.sidebar.view.comms_height = serde_json::Value::String("20%".into());
+        response.view.namespace.sidebar.view.tips_height = serde_json::Value::String("40%".into());
+        app.apply_response(response);
+        let area = Rect::new(0, 0, 24, 40);
 
         let areas = sidebar_areas(area, app.sidebar_view());
 
         assert_eq!(areas.tree.height, 16);
-        assert_eq!(areas.comms.height, 12);
-        assert_eq!(areas.tips.map(|area| area.height), Some(19));
+        assert_eq!(areas.comms.height, 8);
+        assert_eq!(areas.tips.map(|area| area.height), Some(16));
     }
 
     #[test]
@@ -1742,6 +1783,9 @@ mod tests {
     fn mouse_coordinates_map_to_comms_rows() {
         let mut app = SidebarApp::new("main".into());
         let mut response = sample_response_with_comms(3);
+        response.view.namespace.sidebar.view.agents_height = serde_json::Value::String("50%".into());
+        response.view.namespace.sidebar.view.comms_height = serde_json::Value::String("40%".into());
+        response.view.namespace.sidebar.view.tips_height = serde_json::Value::String("10%".into());
         response.view.comms[0].body_preview = "line two".into();
         response.view.comms[1].body_preview = "line two".into();
         app.apply_response(response);
@@ -1762,7 +1806,9 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn header_buttons_are_right_aligned_and_kill_project() {
-        let client = CcbdClient::new("/tmp/not-used.sock");
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (socket_path, handle) = spawn_reload_server(Arc::clone(&seen), "published");
+        let client = CcbdClient::new(socket_path);
         let mut app = SidebarApp::new("main".into());
         app.apply_response(sample_response());
         let area = Rect::new(0, 0, 24, 20);
@@ -1771,11 +1817,37 @@ mod tests {
         assert_eq!(controls, Rect::new(20, 0, 3, 1));
         assert_eq!(app.handle_mouse_down(1, 0, area, &client), None);
         assert_eq!(app.handle_mouse_down(controls.x, 0, area, &client), None);
+        handle.join().unwrap();
+
+        assert_eq!(seen.lock().unwrap().as_slice(), ["project_reload_config"]);
+        assert!(app.last_error.is_none());
         assert!(app.needs_refresh());
         assert_eq!(
             app.handle_mouse_down(controls.x + 2, 0, area, &client),
             Some(ExitAction::KillProject)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn header_reload_rejection_still_refreshes_with_error() {
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (socket_path, handle) = spawn_reload_server(Arc::clone(&seen), "blocked");
+        let client = CcbdClient::new(socket_path);
+        let mut app = SidebarApp::new("main".into());
+        app.apply_response(sample_response());
+        let area = Rect::new(0, 0, 24, 20);
+        let controls = tree_controls_area(sidebar_areas(area, app.sidebar_view()).tree);
+
+        assert_eq!(app.handle_mouse_down(controls.x, 0, area, &client), None);
+        handle.join().unwrap();
+
+        assert_eq!(seen.lock().unwrap().as_slice(), ["project_reload_config"]);
+        assert_eq!(
+            app.last_error.as_deref(),
+            Some("reload blocked: unsupported_plan_class")
+        );
+        assert!(app.needs_refresh());
     }
 
     #[test]
@@ -2443,6 +2515,53 @@ mod tests {
                     )
                     .as_bytes(),
                 )
+                .unwrap();
+            let _ = std::fs::remove_file(path_for_thread);
+            let _ = std::fs::remove_dir(dir);
+        });
+        (socket_path, handle)
+    }
+
+    #[cfg(unix)]
+    fn spawn_reload_server(
+        seen: Arc<Mutex<Vec<String>>>,
+        status: &'static str,
+    ) -> (std::path::PathBuf, thread::JoinHandle<()>) {
+        let dir = std::env::temp_dir().join(format!(
+            "ccb-agent-sidebar-reload-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let socket_path = dir.join("ccbd.sock");
+        let listener = UnixListener::bind(&socket_path).unwrap();
+        let path_for_thread = socket_path.clone();
+        let handle = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut line = String::new();
+            {
+                let mut reader = BufReader::new(&stream);
+                reader.read_line(&mut line).unwrap();
+            }
+            let request: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+            assert_eq!(request["op"], "project_reload_config");
+            assert_eq!(request["request"]["dry_run"], false);
+            seen.lock().unwrap().push("project_reload_config".into());
+            let response = if status == "published" {
+                json!({"api_version": 2, "ok": true, "status": "published"})
+            } else {
+                json!({
+                    "api_version": 2,
+                    "ok": true,
+                    "status": status,
+                    "diagnostics": {"reason": "unsupported_plan_class"}
+                })
+            };
+            stream
+                .write_all(format!("{response}\n").as_bytes())
                 .unwrap();
             let _ = std::fs::remove_file(path_for_thread);
             let _ = std::fs::remove_dir(dir);

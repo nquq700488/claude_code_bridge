@@ -16,6 +16,7 @@ from cli.render import (
     render_logs,
     render_ps,
     render_queue,
+    render_reload,
     render_resubmit,
     render_retry,
     render_start,
@@ -106,6 +107,70 @@ def test_render_clear_includes_agent_results() -> None:
         'clear_agent: agent=agent2 status=skipped reason=runtime_missing',
         'clear_agent: agent=agent3 status=failed pane_id=%3 reason=send failed',
     )
+
+
+def test_render_reload_non_dry_run_apply_diagnostics() -> None:
+    lines = render_reload(
+        {
+            'status': 'failed',
+            'dry_run': False,
+            'mutation_enabled': False,
+            'plan_class': 'add_window',
+            'stage': 'runtime_mount',
+            'safe_to_apply': False,
+            'future_safe_to_apply': True,
+            'old_graph_version': 1,
+            'target_graph_version': 2,
+            'published_graph_version': None,
+            'old_config_signature': 'old',
+            'new_config_signature': 'new',
+            'operations': [{'op': 'add_window', 'window': 'review', 'reason': 'new'}],
+            'drain_intents': [],
+            'namespace_patch_plan': {'status': 'planned', 'apply_deferred': True, 'steps': [], 'blocked_operations': []},
+            'diagnostics': {
+                'reason': 'runtime_mount_failed',
+                'message': 'provider launch failed',
+                'graph_published': False,
+                'lease_or_lifecycle_written': False,
+                'config_watch_started': False,
+                'unload_or_replace_executed': False,
+                'namespace_residue': {
+                    'partial': False,
+                    'created_windows': ['review'],
+                    'created_panes': ['%3', '%4'],
+                    'agent_panes': {'agent3': '%4'},
+                    'sidebar_panes': {'review': '%3'},
+                },
+                'runtime_residue': {
+                    'partial': True,
+                    'requested_agents': ['agent3'],
+                    'mounted_agents': ['agent3'],
+                    'runtime_authority_written_agents': ['agent3'],
+                },
+            },
+            'warnings': [],
+            'reasons': [],
+            'errors': ['runtime_mount_failed: provider launch failed'],
+        }
+    )
+
+    assert 'reload_status: failed' in lines
+    assert 'dry_run: false' in lines
+    assert 'reload_stage: runtime_mount' in lines
+    assert 'reload_old_graph_version: 1' in lines
+    assert 'reload_target_graph_version: 2' in lines
+    assert 'reload_diagnostic: reason=runtime_mount_failed' in lines
+    assert 'reload_diagnostic: graph_published=false' in lines
+    assert 'reload_diagnostic: config_watch_started=false' in lines
+    assert (
+        'reload_namespace_residue: partial=false created_windows=review '
+        'created_panes=%3,%4 agent_panes=agent3:%4 sidebar_panes=review:%3'
+    ) in lines
+    assert (
+        'reload_runtime_residue: partial=true requested_agents=agent3 '
+        'mounted_agents=agent3 runtime_authority_written_agents=agent3'
+    ) in lines
+    assert 'reload_error: runtime_mount_failed: provider launch failed' in lines
 
 
 def test_render_fault_commands() -> None:
@@ -604,8 +669,31 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
             'last_request_queue_wait_s': 0.012,
             'last_submit_duration_s': 0.034,
             'last_ping_duration_s': 0.056,
+            'last_handler_latency_s_by_op': {'ping': 0.056, 'project_view': 0.067},
             'last_maintenance_duration_s': 0.078,
+            'last_heartbeat_duration_s': 0.089,
+            'heartbeat_step_duration_s': {'health_monitor': 0.001, 'runtime_supervision': 0.002},
+            'last_heartbeat_agents_inspected': 1,
+            'last_heartbeat_runtime_store_writes': 0,
             'pending_maintenance_ticks': 2.0,
+            'last_project_view_response_duration_s': 0.044,
+            'last_project_view_build_duration_s': 0.045,
+            'project_view_cache_hits': 3.0,
+            'project_view_cache_misses': 4.0,
+            'last_project_view_tmux_command_count': 5.0,
+            'last_project_view_capture_pane_count': 1.0,
+            'last_project_view_store_scan_count': 2.0,
+            'rss_bytes': 123456.0,
+            'virtual_memory_bytes': 654321.0,
+            'fd_count': 8.0,
+            'thread_count': 3.0,
+            'service_graph_version': 1,
+            'service_graph_created_at': '2026-05-29T00:00:00Z',
+            'service_graph_retained_count': 1,
+            'service_graph_retained_count_scope': 'published_graph_count_not_inflight_retention',
+            'last_reload_duration_s': None,
+            'last_reload_plan_class': None,
+            'last_reload_error': None,
             'active_execution_count': 0,
             'recoverable_execution_count': 0,
             'nonrecoverable_execution_count': 0,
@@ -715,8 +803,28 @@ def test_render_ps_and_doctor_keep_expected_line_shapes() -> None:
     assert 'ccbd_last_request_queue_wait_s: 0.012' in doctor_lines
     assert 'ccbd_last_submit_duration_s: 0.034' in doctor_lines
     assert 'ccbd_last_ping_duration_s: 0.056' in doctor_lines
+    assert 'ccbd_last_handler_latency_s_by_op: ping=0.056,project_view=0.067' in doctor_lines
     assert 'ccbd_last_maintenance_duration_s: 0.078' in doctor_lines
+    assert 'ccbd_last_heartbeat_duration_s: 0.089' in doctor_lines
+    assert 'ccbd_heartbeat_step_duration_s: health_monitor=0.001,runtime_supervision=0.002' in doctor_lines
+    assert 'ccbd_last_heartbeat_agents_inspected: 1' in doctor_lines
+    assert 'ccbd_last_heartbeat_runtime_store_writes: 0' in doctor_lines
     assert 'ccbd_pending_maintenance_ticks: 2.0' in doctor_lines
+    assert 'ccbd_last_project_view_response_duration_s: 0.044' in doctor_lines
+    assert 'ccbd_last_project_view_build_duration_s: 0.045' in doctor_lines
+    assert 'ccbd_project_view_cache_hits: 3.0' in doctor_lines
+    assert 'ccbd_project_view_cache_misses: 4.0' in doctor_lines
+    assert 'ccbd_last_project_view_tmux_command_count: 5.0' in doctor_lines
+    assert 'ccbd_last_project_view_capture_pane_count: 1.0' in doctor_lines
+    assert 'ccbd_last_project_view_store_scan_count: 2.0' in doctor_lines
+    assert 'ccbd_rss_bytes: 123456.0' in doctor_lines
+    assert 'ccbd_virtual_memory_bytes: 654321.0' in doctor_lines
+    assert 'ccbd_fd_count: 8.0' in doctor_lines
+    assert 'ccbd_thread_count: 3.0' in doctor_lines
+    assert 'ccbd_service_graph_version: 1' in doctor_lines
+    assert 'ccbd_service_graph_created_at: 2026-05-29T00:00:00Z' in doctor_lines
+    assert 'ccbd_service_graph_retained_count: 1' in doctor_lines
+    assert 'ccbd_service_graph_retained_count_scope: published_graph_count_not_inflight_retention' in doctor_lines
     assert 'ccbd_tmux_effective_socket_path: /home/demo/.local/state/ccb/projects/proj-1/ccbd/tmux.sock' in doctor_lines
     assert 'ccbd_tmux_effective_socket_path_bytes: 58' in doctor_lines
     assert 'ccbd_tmux_start_server_command: tmux -f /dev/null -S /home/demo/.local/state/ccb/projects/proj-1/ccbd/tmux.sock start-server' in doctor_lines

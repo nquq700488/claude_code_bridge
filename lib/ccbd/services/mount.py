@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from dataclasses import replace
 
 from ccbd.models import CcbdLease, MountState, SCHEMA_VERSION
 from ccbd.system import current_uid, read_boot_id, utc_now
@@ -53,14 +54,27 @@ class MountManager:
             last_heartbeat_at=timestamp,
             mount_state=MountState.MOUNTED,
             generation=generation,
-            config_signature=(str(config_signature).strip() or None) if config_signature is not None else None,
+            config_signature=(
+                (str(config_signature).strip() or None)
+                if config_signature is not None
+                else None
+            ),
             keeper_pid=int(keeper_pid) if keeper_pid else None,
-            daemon_instance_id=(str(daemon_instance_id).strip() or None) if daemon_instance_id is not None else None,
+            daemon_instance_id=(
+                (str(daemon_instance_id).strip() or None)
+                if daemon_instance_id is not None
+                else None
+            ),
         )
         self._store.save(self._layout.ccbd_lease_path, lease, serializer=lambda value: value.to_record())
         return lease
 
-    def refresh_heartbeat(self, *, expected_pid: int | None = None, expected_daemon_instance_id: str | None = None) -> CcbdLease:
+    def refresh_heartbeat(
+        self,
+        *,
+        expected_pid: int | None = None,
+        expected_daemon_instance_id: str | None = None,
+    ) -> CcbdLease:
         lease = self.load_state()
         if lease is None:
             raise RuntimeError('ccbd lease does not exist')
@@ -72,6 +86,40 @@ class MountManager:
             expected_daemon_instance_id=expected_daemon_instance_id,
         )
         updated = lease.with_heartbeat(self._clock())
+        self._store.save(self._layout.ccbd_lease_path, updated, serializer=lambda value: value.to_record())
+        return updated
+
+    def update_config_signature(
+        self,
+        *,
+        config_signature: str,
+        expected_pid: int,
+        expected_daemon_instance_id: str,
+        expected_generation: int,
+    ) -> CcbdLease:
+        lease = self.load_state()
+        if lease is None:
+            raise RuntimeError('ccbd lease does not exist')
+        if lease.mount_state is not MountState.MOUNTED:
+            raise RuntimeError('ccbd lease is not mounted')
+        self._assert_expected_holder(
+            lease,
+            expected_pid=expected_pid,
+            expected_daemon_instance_id=expected_daemon_instance_id,
+        )
+        if int(lease.generation) != int(expected_generation):
+            raise RuntimeError(
+                'ccbd lease generation changed: '
+                f'expected generation={expected_generation}, found generation={lease.generation}'
+            )
+        signature = str(config_signature or '').strip()
+        if not signature:
+            raise RuntimeError('config_signature cannot be empty')
+        updated = replace(
+            lease,
+            config_signature=signature,
+            last_heartbeat_at=self._clock(),
+        )
         self._store.save(self._layout.ccbd_lease_path, updated, serializer=lambda value: value.to_record())
         return updated
 
@@ -110,7 +158,8 @@ class MountManager:
             if current_instance != expected_instance:
                 raise RuntimeError(
                     'ccbd lease holder changed: '
-                    f'expected daemon_instance_id={expected_instance}, found daemon_instance_id={current_instance or "<missing>"}'
+                    f'expected daemon_instance_id={expected_instance}, '
+                    f'found daemon_instance_id={current_instance or "<missing>"}'
                 )
 
 

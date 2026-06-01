@@ -832,7 +832,80 @@ Minimum content:
 - `requested_by_pid`
 - `reason`
 
-### 7.8 Diagnostics Bundle
+### 7.8 Reload Drain State
+
+Path:
+
+- `.ccb/ccbd/reload-drain.json`
+
+Required purpose:
+
+- record bounded pending unload/replace drain state before dynamic unload or
+  replacement is exposed
+- preserve explicit timeout, age, and pending-count bounds for drain decisions
+
+Minimum content:
+
+- `bounds`
+- `records`
+- for each record: intent kind, agent name, phase, status, created/updated
+  timestamps, timeout deadline, max-age deadline, reason, and busy observation
+
+Write semantics:
+
+- this file is not backend lifecycle authority, lease authority, runtime
+  authority, or namespace authority
+- writes must occur only from explicit drain state-machine operations; daemon
+  heartbeat and steady-state handler reads must not scan it
+- Phase 4 `retired` records are terminal state markers only and must not imply
+  tmux pane removal, provider stop, runtime authority deletion, service graph
+  publish, or namespace patch
+
+### 7.9 Reload Handoff
+
+Path:
+
+- `.ccb/ccbd/reload-handoff.json`
+
+Required purpose:
+
+- record explicit additive reload ownership while `.ccb/ccb.config` already
+  contains the target signature but the mounted daemon may still report the old
+  service-graph signature
+- prove that an accepted reload transaction is still being handled by the same
+  mounted daemon holder
+
+Minimum content:
+
+- `project_id`
+- `started_at`
+- `old_config_signature`
+- `target_config_signature`
+- current daemon `pid`, `daemon_instance_id`, and `generation`
+- `status=applying`
+- `ttl_s`
+
+Write semantics:
+
+- this file is not backend lifecycle authority, lease authority, runtime
+  authority, namespace authority, or a config-watch trigger
+- a modern mounted daemon with a config-signature mismatch is treated as
+  `reload pending`, not as daemon incompatibility. Keeper and CLI compatibility
+  checks must leave the daemon running so explicit `ccb reload` or sidebar
+  reload can apply the changed config without interrupting existing agents.
+- the `ccb reload` CLI may write it immediately before submitting the explicit
+  non-dry-run RPC, and the daemon may overwrite it inside the accepted apply
+  transaction after the plan is accepted; both writers use the same holder and
+  signature checks, only write when target and current config signatures
+  differ, and clear in `finally`
+- handoff acceptance still requires freshness, matching project id, matching
+  target signature, matching old daemon signature, and matching current lease
+  holder pid, daemon instance, generation, socket, and liveness evidence
+- stale, mismatched, unreadable, or missing handoff records must fail closed for
+  handoff trust, but must not by themselves trigger daemon restart while the
+  modern daemon remains mounted and connectable
+
+### 7.10 Diagnostics Bundle
 
 Command:
 

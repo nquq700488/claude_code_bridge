@@ -200,6 +200,10 @@ def _payload_project_focus_agent(agent: str, *, namespace_epoch: int | None = No
     return payload
 
 
+def _payload_project_reload_config(*, dry_run: bool = False) -> dict:
+    return {'dry_run': bool(dry_run)}
+
+
 client_endpoints = {
     'submit': ('submit', _payload_submit),
     'get': ('get', _payload_get),
@@ -223,6 +227,7 @@ client_endpoints = {
     'project_view_dismiss_comms': ('project_view_dismiss_comms', _payload_project_view_dismiss_comms),
     'project_restart_panes': ('project_restart_panes', _payload_project_restart_panes),
     'project_clear_context': ('project_clear_context', _payload_project_clear_context),
+    'project_reload_config': ('project_reload_config', _payload_project_reload_config),
     'project_focus_window': ('project_focus_window', _payload_project_focus_window),
     'project_focus_agent': ('project_focus_agent', _payload_project_focus_agent),
 }
