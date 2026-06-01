@@ -25,7 +25,7 @@
 
 > **名称演变**：CCB 最初代表 **Claude Code Bridge**。随着项目扩展到支持多模型协作（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX），这个缩写现在代表 **Collaborative Code Bridge** —— 协作代码桥。
 
-**CCB (Collaborative Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX），并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
+**CCB (Collaborative Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX、Antigravity/agy），并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
 
 核心能力：
 - 一键启停多个 AI CLI Agent
@@ -475,8 +475,8 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 # 同一 Provider 不同模型
 cmd; fast:codex, deep:codex
 
-# 全部 Provider（含本地 Kimi、MMX）
-cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx
+# 全部 Provider（含本地 Kimi、MMX、Antigravity）
+cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx, agent5:agy
 ```
 
 #### Chained Ask / Callback Routing（v6.2.x）
@@ -693,6 +693,7 @@ which codex      # 若使用 Codex agent
 which gemini     # 若使用 Gemini agent
 which kimi       # 若使用 Kimi agent
 which mmx-daemon # 若使用 MMX agent
+which agy        # 若使用 Antigravity agent
 ```
 
 > **Kimi 安装提示**：Kimi Code 是 VS Code 扩展，需要先在 VS Code 中安装 [Kimi Code 扩展](https://marketplace.visualstudio.com/items?itemName=moonshot-ai.kimi-code)。`kimi` CLI 通常位于 `~/.local/bin/kimi` 或 VS Code 扩展目录中。
@@ -957,6 +958,7 @@ cp -r useful_tools/claude_skills/plan-tree ~/.claude/skills/
 - Droid agent 的状态存储在 `.ccb/agents/<name>/provider-state/droid/home/`
 - Kimi agent 使用 VS Code 扩展原生配置，CCB session 文件为 `.ccb/.kimi-<agent>-session`，Kimi CLI 自身的会话日志存储在 `~/.kimi/sessions/`（v1.x）或 `~/.kimi-code/sessions/`（v2.x，wire.jsonl 格式）
 - MMX agent 使用 pane log 协议，无 managed home，session 状态存储在 pane log 中
+- Antigravity (`agy`) agent 使用 Google Antigravity CLI，session 由 CCB 标准 session 机制管理
 - 互不污染，全局 Provider 配置不会被修改
 
 ### Provider Activity 追踪（v7.0.11+）

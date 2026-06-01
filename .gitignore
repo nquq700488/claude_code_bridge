@@ -37,8 +37,8 @@ tmp/
 .tmp_pytest/
 .tmp_test_env_*/
 compare_with_mcp/
-CLAUDE.md
-AGENTS.md
+# CLAUDE.md
+# AGENTS.md
 GEMINI.md
 openspec
 *.log
