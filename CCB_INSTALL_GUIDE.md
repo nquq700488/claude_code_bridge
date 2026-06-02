@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.1.1 | 最后更新：2026-06-01
+> 版本：适用于 CCB v7.2.1 | 最后更新：2026-06-02
 
 ---
 
@@ -324,6 +324,17 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 - `;` — 左右分屏（horizontal split）
 - `,` — 上下堆叠（vertical split）
 - `(worktree)` — 该 Agent 使用独立 git worktree 隔离
+- `(N)` — 该 pane 的权重比例（默认 1），数字越大占空间越多
+
+比例规则：分割按权重总和分配空间，`right_size = round(right_weight_sum / total_weight_sum × 100%)`。叶子权重相同则等高/等宽；权重不同则按比例分配。
+
+```text
+# 权重示例：b 占 2 份，a 占 1 份 → b 宽度是 a 的两倍
+(a; b(2)), (c; d)  →  顶行左 33%，右 67%；底行等分
+
+# 无括号时左结合
+a, b; c, d, e       →  左列 a+b，右列 c+d+e（三行等高）
+```
 
 #### 完整配置示例（单窗口 / 经典模式）
 
@@ -477,6 +488,9 @@ cmd; fast:codex, deep:codex
 
 # 全部 Provider（含本地 Kimi、MMX、Antigravity）
 cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx, agent5:agy
+
+# 按权重非对称布局：主面板更宽
+cmd; main:codex(3), reviewer:claude; qa:gemini
 ```
 
 #### Chained Ask / Callback Routing（v6.2.x）
@@ -516,6 +530,61 @@ Use `ccb trace job_abc` to view the full result.
 - `--callback`：创建 callback edge 和 continuation job，**要求 parent Agent 有活跃的 provider session 来接收回传任务**（Claude/Codex 支持，Kimi  pane-log 模式不支持持续 watch）
 - `--notify-sender`：仅在任务完成时向 sender inbox 发送一条系统 notice，**不创建 continuation job，不依赖 provider watch 机制**，适合所有 provider（包括 Kimi）
 - 两者可以独立使用，也可以组合使用
+
+#### Role Packs（v7.2.0+）
+
+Role Pack 是可复用的 Agent 角色模板，包含稳定的身份、职责、记忆、provider-specific skills 和依赖准备逻辑。使用 Role Pack 可以让项目配置更短，角色在项目间复用。
+
+目前内置 `ccb.archi` 角色（架构审查，由 Architec 支撑），后续会陆续引入更多专业角色。
+
+**安装/刷新 Role**：
+
+```bash
+# 安装或刷新内置 role（install.sh 和 ccb update 也会交互提示）
+ccb roles update ccb.archi
+```
+
+**在项目中使用 Role**：
+
+```bash
+# 将 role 绑定到项目，紧凑形式写入 ccb.config
+ccb roles add ccb.archi:codex
+
+# 动态应用变更
+ccb reload
+```
+
+运行时 CCB 会将 `ccb.archi:codex` 解析为项目本地 agent `archi`，并自动投影 role memory 和 skills。
+
+**配置格式**：在 layout 中直接使用 `role:provider` 形式：
+
+```toml
+[windows]
+main = "ccb.archi:codex, developer:codex"
+review = "reviewer:claude"
+```
+
+#### 托管工具 Window（v7.2.0+）
+
+工具 window 是 CCB 管理的 tmux window，但不是 Agent。它不会出现在 `ccb ask` 目标中，也不会创建 provider runtime 记录。目前内置 Neovim 托管工具。
+
+```toml
+[tool_windows.neovim]
+command = "ccb-nvim"
+label = "neovim"
+```
+
+**工具安装与诊断**：
+
+```bash
+# 安装托管 Neovim（隔离的 ccb-nvim wrapper + LazyVim profile）
+ccb tools install neovim
+
+# 诊断托管 profile 健康状态
+ccb tools doctor neovim
+```
+
+`install.sh install` 和 `ccb update` 会在交互终端询问是否安装；非交互安装会跳过并打印后续命令。设置 `CCB_INSTALL_NEOVIM=1` 可强制 provisioning，`CCB_INSTALL_NEOVIM=0` 跳过。
 
 ---
 
@@ -992,6 +1061,15 @@ ccb restart            # 重启所有 Agent pane
 ccb restart <agent>    # 重启指定 Agent pane
 ccb reload             # 动态应用支持的配置变更（v7.1.0+）
 ccb reload --dry-run   # 预览 reload 计划而不执行（v7.1.0+）
+
+# Role Packs（v7.2.0+）
+ccb roles add <role:provider>    # 将 role 绑定到项目
+ccb roles install <role>         # 安装 role 资产和依赖
+ccb roles update <role>          # 刷新 role 资产
+
+# 托管工具（v7.2.0+）
+ccb tools install <tool>         # 安装托管工具
+ccb tools doctor <tool>          # 诊断托管工具健康状态
 
 # 安装/更新
 ./install.sh install   # 安装或更新
