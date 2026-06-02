@@ -53,11 +53,31 @@ echo -e "${YELLOW}▶ 清理 .ccb 运行时文件...${NC}"
 echo "  项目: $PROJECT_ROOT"
 echo ""
 
+# ── 先停止 CCB 守护进程，否则删除后文件会被恢复 ──
+if command -v ccb &> /dev/null; then
+    if ccb --project "$PROJECT_ROOT" ping ccbd 2>/dev/null | grep -q "pid_alive: True"; then
+        echo -e "${YELLOW}⚠ 检测到 CCB 守护进程仍在运行，先停止...${NC}"
+        cd "$PROJECT_ROOT"
+        if [[ "$FORCE" == true ]]; then
+            ccb --project "$PROJECT_ROOT" kill -f
+        else
+            ccb --project "$PROJECT_ROOT" kill
+        fi
+        echo -e "${GREEN}✓ CCB 守护进程已停止${NC}"
+        sleep 1
+        echo ""
+    fi
+else
+    echo -e "${YELLOW}⚠ ccb 命令未找到，跳过守护进程检查${NC}"
+    echo "   （若守护进程仍在运行，删除的文件可能会被自动恢复）"
+    echo ""
+fi
+
 # 检查哪些将被删除
+shopt -s dotglob nullglob
 TO_DELETE=()
 TO_KEEP=()
-for item in "$SCRIPT_DIR"/* "$SCRIPT_DIR"/.[!.]* "$SCRIPT_DIR"/..?*; do
-    [[ -e "$item" ]] || continue
+for item in "$SCRIPT_DIR"/*; do
     name="$(basename "$item")"
 
     # 跳过 . 和 ..
@@ -69,6 +89,7 @@ for item in "$SCRIPT_DIR"/* "$SCRIPT_DIR"/.[!.]* "$SCRIPT_DIR"/..?*; do
         TO_DELETE+=("$item")
     fi
 done
+shopt -u dotglob nullglob
 
 # 列出将被删除的内容
 if [[ ${#TO_DELETE[@]} -eq 0 ]]; then

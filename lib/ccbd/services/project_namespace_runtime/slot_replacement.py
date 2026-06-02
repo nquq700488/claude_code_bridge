@@ -96,12 +96,12 @@ def relabel_project_slot_pane(
         backend = TmuxBackend(socket_path=context.tmux_socket_path)
     except TypeError:
         backend = TmuxBackend()
-    label = f"{context.slot_key}:{context.provider}" if context.provider else context.slot_key
+    display_title = f"{context.slot_key}:{context.provider}" if context.provider else context.slot_key
     apply_ccb_pane_identity(
         backend,
         pane_text,
-        title=label,
-        agent_label=label,
+        title=display_title,
+        agent_label=context.slot_key,
         project_id=context.project_id,
         order_index=context.style_index,
         slot_key=context.slot_key,

@@ -127,7 +127,7 @@ def resolve_cmd_local_replacement_plan(ctx: RuntimeSupervisionContext) -> CmdLoc
     parent = find_cmd_leaf_parent(layout)
     if parent is None or parent.right is None:
         return None
-    total = max(1, int(parent.leaf_count))
+    total = max(1, int(parent.weight_sum))
     left_percent = max(1, min(99, round(100 / total)))
     return CmdLocalReplacementPlan(
         tmux_direction_flag='-h' if parent.kind == 'horizontal' else '-v',

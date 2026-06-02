@@ -220,33 +220,39 @@ def _resolve_wire_session(work_dir: Path, *, prefer_uuid: Optional[str] = None) 
     return best_wire_path
 
 
-def _extract_wire_reply_text(events: list[dict]) -> Tuple[Optional[str], Optional[str]]:
+def _extract_wire_reply_text_and_terminal(events: list[dict]) -> Tuple[Optional[str], Optional[str], bool]:
     """Extract reply text and think content from wire.jsonl events.
 
-    Returns (text, think) — the concatenated text/think parts from
-    content.part events, or None if none found.
+    Returns (text, think, has_end_turn) — the concatenated text/think parts
+    from content.part events, and whether a turn-ending step.end event
+    with finishReason == 'end_turn' was observed.
     """
     text_parts: list[str] = []
     think_parts: list[str] = []
+    has_end_turn = False
     for ev in events:
-        if ev.get("type") != "context.append_loop_event":
+        ev_type = ev.get("type")
+        if ev_type != "context.append_loop_event":
             continue
         inner = ev.get("event") or {}
-        if inner.get("type") != "content.part":
-            continue
-        part = inner.get("part") or {}
-        part_type = part.get("type")
-        if part_type == "text":
-            t = (part.get("text") or "").strip()
-            if t:
-                text_parts.append(t)
-        elif part_type == "think":
-            t = (part.get("think") or "").strip()
-            if t:
-                think_parts.append(t)
+        inner_type = inner.get("type")
+        if inner_type == "content.part":
+            part = inner.get("part") or {}
+            part_type = part.get("type")
+            if part_type == "text":
+                t = (part.get("text") or "").strip()
+                if t:
+                    text_parts.append(t)
+            elif part_type == "think":
+                t = (part.get("think") or "").strip()
+                if t:
+                    think_parts.append(t)
+        elif inner_type == "step.end":
+            if inner.get("finishReason") == "end_turn":
+                has_end_turn = True
     text = "\n".join(text_parts) if text_parts else None
     think = "\n".join(think_parts) if think_parts else None
-    return text, think
+    return text, think, has_end_turn
 
 
 # ── unified reader ─────────────────────────────────────────────────────────
@@ -282,7 +288,7 @@ class KimiLogReader:
 
     def _capture_wire_state(self, wire_path: Path) -> Dict[str, Any]:
         events, file_pos = _parse_new_lines(wire_path, 0)
-        text, think = _extract_wire_reply_text(events)
+        text, think, _ = _extract_wire_reply_text_and_terminal(events)
         try:
             inode = wire_path.stat().st_ino
         except OSError:
@@ -298,6 +304,7 @@ class KimiLogReader:
             "last_think_hash": hashlib.sha256((think or "").encode()).hexdigest() if think else "",
             "last_pos": file_pos,
             "last_inode": inode,
+            "pending_text": "",
         }
 
     def _capture_context_state(self, context_path: Path, uuid: Optional[str]) -> Dict[str, Any]:
@@ -356,37 +363,46 @@ class KimiLogReader:
                 "last_inode": current_inode,
             }
 
-        new_text, new_think = _extract_wire_reply_text(events)
-        if not new_text:
-            return None, {
-                **state,
-                "context_path": str(wire_path),
-                "last_think": new_think or state.get("last_think", ""),
-                "last_think_hash": hashlib.sha256((new_think or "").encode()).hexdigest(),
-                "last_pos": file_pos,
-                "last_inode": current_inode,
-            }
+        new_text, new_think, has_end_turn = _extract_wire_reply_text_and_terminal(events)
 
-        text_hash = hashlib.sha256(new_text.encode()).hexdigest()
-        if text_hash == state.get("last_text_hash"):
-            return None, {
-                **state,
-                "last_think": new_think or state.get("last_think", ""),
-                "last_think_hash": hashlib.sha256((new_think or "").encode()).hexdigest(),
-                "last_pos": file_pos,
-                "last_inode": current_inode,
-            }
+        # If the file was replaced (inode changed), discard any pending text from the old file.
+        pending_text = str(state.get("pending_text") or "") if (current_inode == last_inode) else ""
+        if new_text:
+            pending_text = (pending_text + "\n" + new_text).strip()
 
-        new_state = {
+        # Build updated state with new think/position (think partials can still be emitted).
+        updated_state = {
             **state,
             "context_path": str(wire_path),
-            "last_text_hash": text_hash,
-            "last_think": new_think or "",
+            "last_think": new_think or state.get("last_think", ""),
             "last_think_hash": hashlib.sha256((new_think or "").encode()).hexdigest(),
             "last_pos": file_pos,
             "last_inode": current_inode,
+            "pending_text": pending_text,
         }
-        return new_text, new_state
+
+        # Only emit a reply once the turn has definitively ended.
+        if not has_end_turn:
+            return None, updated_state
+
+        if not pending_text:
+            return None, {
+                **updated_state,
+                "pending_text": "",
+            }
+
+        text_hash = hashlib.sha256(pending_text.encode()).hexdigest()
+        if text_hash == state.get("last_text_hash"):
+            return None, {
+                **updated_state,
+                "pending_text": "",
+            }
+
+        return pending_text, {
+            **updated_state,
+            "last_text_hash": text_hash,
+            "pending_text": "",
+        }
 
     def _try_get_context_message(self, state: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
         prefer_uuid: Optional[str] = state.get("session_uuid")

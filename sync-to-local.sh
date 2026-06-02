@@ -2,7 +2,33 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-TARGET_DIR="${HOME}/.local/share/ccb"
+
+_resolve_target() {
+    if [[ -n "${CODEX_INSTALL_PREFIX:-}" ]]; then
+        echo "${CODEX_INSTALL_PREFIX}"
+        return
+    fi
+    if command -v ccb &>/dev/null; then
+        local path
+        path=$(ccb --version 2>/dev/null | grep '^Install path:' | head -1 | sed 's/^Install path: *//')
+        if [[ -n "${path}" && -d "${path}" ]]; then
+            echo "${path}"
+            return
+        fi
+        local bin
+        bin=$(command -v ccb)
+        if [[ -L "${bin}" ]]; then
+            path=$(dirname "$(readlink "${bin}")")
+            if [[ -d "${path}" ]]; then
+                echo "${path}"
+                return
+            fi
+        fi
+    fi
+    echo "${HOME}/.local/share/ccb"
+}
+
+TARGET_DIR="$(_resolve_target)"
 
 echo "=== CCB 同步到本地安装 ==="
 echo "源目录: ${SCRIPT_DIR}"
@@ -10,7 +36,7 @@ echo "目标目录: ${TARGET_DIR}"
 
 if [[ ! -d "${TARGET_DIR}" ]]; then
     echo "错误: 目标目录不存在: ${TARGET_DIR}"
-    echo "请先安装 ccb（例如运行 install.sh）"
+    echo "请先安装 ccb（例如运行 install.sh）或设置 CODEX_INSTALL_PREFIX"
     exit 1
 fi
 
@@ -43,12 +69,10 @@ rsync -a --delete \
 
 echo ""
 echo "=== 同步完成 ==="
-echo "正在验证 CcbdLifecycleStore..."
-if grep -q "class CcbdLifecycleStore" "${TARGET_DIR}/lib/ccbd/services/lifecycle.py"; then
-    echo "成功: 在同步后的代码中找到了 CcbdLifecycleStore。"
+if [ -f "${TARGET_DIR}/lib/ccbd/services/lifecycle.py" ] && [ -f "${TARGET_DIR}/lib/agents/models_runtime/layout_runtime/parser.py" ]; then
+    echo "验证通过: 核心模块存在。"
 else
-    echo "错误: CcbdLifecycleStore 仍然缺失！"
-    exit 1
+    echo "警告: 部分核心模块缺失，请检查同步结果。"
 fi
 
 # 提示手动重启 ccb

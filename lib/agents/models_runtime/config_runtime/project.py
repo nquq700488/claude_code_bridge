@@ -57,6 +57,7 @@ class ProjectConfig:
             self.windows,
             layout_spec=rendered_layout,
             default_agents=defaults,
+            cmd_enabled=bool(self.cmd_enabled),
         )
         validate_windows_reference_agents(windows, normalized_agents=normalized_agents)
         entry_window = validate_entry_window(self.entry_window, windows=windows)

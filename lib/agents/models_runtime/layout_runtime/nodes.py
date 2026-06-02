@@ -8,6 +8,7 @@ class LayoutLeaf:
     name: str
     provider: str | None = None
     workspace_mode: str | None = None
+    weight: int = 1
 
 
 @dataclass(frozen=True)
@@ -37,6 +38,15 @@ class LayoutNode:
         assert self.right is not None
         return self.left.leaf_count + self.right.leaf_count
 
+    @property
+    def weight_sum(self) -> int:
+        if self.kind == 'leaf':
+            assert self.leaf is not None
+            return max(1, self.leaf.weight)
+        assert self.left is not None
+        assert self.right is not None
+        return self.left.weight_sum + self.right.weight_sum
+
     def iter_leaves(self) -> tuple[LayoutLeaf, ...]:
         if self.kind == 'leaf':
             assert self.leaf is not None
@@ -48,11 +58,14 @@ class LayoutNode:
     def render(self) -> str:
         if self.kind == 'leaf':
             assert self.leaf is not None
+            suffix = ''
+            if self.leaf.weight != 1:
+                suffix = f'({self.leaf.weight})'
             if self.leaf.provider:
                 if str(self.leaf.workspace_mode or '').strip() == 'worktree':
-                    return f'{self.leaf.name}:{self.leaf.provider}(worktree)'
-                return f'{self.leaf.name}:{self.leaf.provider}'
-            return self.leaf.name
+                    return f'{self.leaf.name}:{self.leaf.provider}(worktree){suffix}'
+                return f'{self.leaf.name}:{self.leaf.provider}{suffix}'
+            return f'{self.leaf.name}{suffix}'
         assert self.left is not None
         assert self.right is not None
         sep = ';' if self.kind == 'horizontal' else ','

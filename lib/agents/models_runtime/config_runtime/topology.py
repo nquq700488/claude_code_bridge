@@ -230,15 +230,17 @@ def normalize_windows(
     *,
     layout_spec: str,
     default_agents: tuple[str, ...],
+    cmd_enabled: bool = False,
 ) -> tuple[WindowSpec, ...]:
     if windows:
         return _validate_windows(windows)
-    return (legacy_main_window(layout_spec=layout_spec, default_agents=default_agents),)
+    return (legacy_main_window(layout_spec=layout_spec, default_agents=default_agents, cmd_enabled=cmd_enabled),)
 
 
-def legacy_main_window(*, layout_spec: str, default_agents: tuple[str, ...]) -> WindowSpec:
+def legacy_main_window(*, layout_spec: str, default_agents: tuple[str, ...], cmd_enabled: bool = False) -> WindowSpec:
     layout = parse_layout_spec(layout_spec)
-    pruned = prune_layout(layout, include_names=default_agents)
+    include_names = (('cmd',) if cmd_enabled else ()) + default_agents
+    pruned = prune_layout(layout, include_names=include_names)
     if pruned is None:
         raise AgentValidationError('legacy layout does not contain any configured agents')
     leaf_names = tuple(normalize_agent_name(leaf.name) for leaf in pruned.iter_leaves())

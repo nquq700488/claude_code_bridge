@@ -11,12 +11,6 @@ YELLOW='\033[1;33m'
 RED='\033[0;31m'
 NC='\033[0m'
 
-# 检查 ccb 是否已安装
-if ! command -v ccb &> /dev/null; then
-    echo -e "${RED}✗ ccb 未安装或不在 PATH 中${NC}" >&2
-    exit 1
-fi
-
 # 解析参数
 FORCE=false
 while [[ $# -gt 0 ]]; do
@@ -38,22 +32,68 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# 检查 ccb 是否正在运行（需确认进程实际存活，而非仅项目已注册）
-if ! ccb --project "$PROJECT_ROOT" ping ccbd 2>/dev/null | grep -q "pid_alive: True"; then
+# ── 收集属于当前项目的守护进程 PID ──
+_collect_pids() {
+    # 使用 -F 固定字符串匹配项目路径，避免正则特殊字符或前缀重叠导致误杀
+    ps aux \
+        | grep -E 'ccbd/(keeper_main|main)\.py' \
+        | grep -F -- "--project ${PROJECT_ROOT}" \
+        | grep -v grep \
+        | awk '{print $2}' \
+        | sort -u
+}
+
+# ── 方式1：通过 ccb CLI 停止（首选）──
+if command -v ccb &> /dev/null; then
+    if ccb --project "$PROJECT_ROOT" ping ccbd 2>/dev/null | grep -q "pid_alive: True"; then
+        echo -e "${YELLOW}▶ 正在停止 ccb...${NC}"
+        echo "  项目: $PROJECT_ROOT"
+        cd "$PROJECT_ROOT"
+        if [[ "$FORCE" == true ]]; then
+            ccb --project "$PROJECT_ROOT" kill -f
+            echo -e "${GREEN}✓ ccb 已强制停止${NC}"
+        else
+            ccb --project "$PROJECT_ROOT" kill
+            echo -e "${GREEN}✓ ccb 已停止${NC}"
+        fi
+        exit 0
+    fi
+fi
+
+# ── 方式2：直接查找并终止残留进程（ccb 不可用或 ping 不通时）──
+PIDS=$(_collect_pids)
+if [[ -z "$PIDS" ]]; then
     echo -e "${YELLOW}⚠ ccb 未运行${NC}"
     echo "  项目: $PROJECT_ROOT"
     exit 0
 fi
 
-# 停止 ccb
-echo -e "${YELLOW}▶ 正在停止 ccb...${NC}"
+echo -e "${YELLOW}▶ 发现残留守护进程，正在停止...${NC}"
 echo "  项目: $PROJECT_ROOT"
 
-cd "$PROJECT_ROOT"
-if [[ "$FORCE" == true ]]; then
-    ccb --project "$PROJECT_ROOT" kill -f
-    echo -e "${GREEN}✓ ccb 已强制停止${NC}"
+# 先尝试优雅终止
+for pid in $PIDS; do
+    if [[ "$FORCE" == true ]]; then
+        kill -9 "$pid" 2>/dev/null || true
+    else
+        kill -15 "$pid" 2>/dev/null || true
+    fi
+done
+
+# 等待进程退出
+sleep 1
+
+# 验证
+STILL_ALIVE=0
+for pid in $PIDS; do
+    if kill -0 "$pid" 2>/dev/null; then
+        ((STILL_ALIVE++)) || true
+    fi
+done
+
+if [[ $STILL_ALIVE -eq 0 ]]; then
+    echo -e "${GREEN}✓ 守护进程已停止${NC}"
 else
-    ccb --project "$PROJECT_ROOT" kill
-    echo -e "${GREEN}✓ ccb 已停止${NC}"
+    echo -e "${RED}✗ $STILL_ALIVE 个进程未能停止，请使用 -f 强制停止${NC}" >&2
+    exit 1
 fi

@@ -367,6 +367,7 @@ def _maybe_rotate_session(
         "last_inode": None,
         "last_checkpoint": -1,
         "last_text_hash": "",
+        "pending_text": "",
     }
     return new_state, True
 

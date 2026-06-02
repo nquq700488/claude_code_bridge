@@ -215,8 +215,8 @@ def _materialize_layout(
 
 
 def _right_pane_percent(node) -> int:
-    total = max(1, node.leaf_count)
-    right_count = max(1, node.right.leaf_count)
+    total = max(1, node.weight_sum)
+    right_count = max(1, node.right.weight_sum)
     return max(1, min(99, round((right_count * 100) / total)))
 
 

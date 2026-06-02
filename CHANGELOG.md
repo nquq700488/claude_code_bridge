@@ -1,5 +1,9 @@
 ## Unreleased
 
+### Clean Script Hardening
+
+- **`.ccb/clean.sh` Auto-Stops Daemon Before Deletion**: The clean script now detects if the CCB daemon (keeper/ccbd) is still running and automatically stops it via `ccb kill` before removing runtime files. This prevents the "deleted files keep coming back" issue caused by the supervision loop recreating removed state. If `ccb` is not in PATH, a warning is printed instead.
+
 ### ccb restart Command
 
 - **`ccb restart [agent...]`**: New CLI command to restart agent tmux panes in place. `ccb restart` restarts all agents; `ccb restart <agent>` restarts a specific one. The handler kills and respawns the agent's tmux pane with the same launch command. Does not delete .ccb state, sessions, or logs.

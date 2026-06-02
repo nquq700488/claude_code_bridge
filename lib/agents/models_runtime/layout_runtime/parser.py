@@ -1,3 +1,31 @@
+# Layout config syntax:
+#
+#   agent_name:provider  =  agent leaf (e.g. "designer:codex")
+#   agent_name:provider(N) =  agent leaf with weight N (default 1), e.g. "db:codex(2)"
+#   cmd                  =  command slot (spawns shell in the pane)
+#   A , B                =  vertical split: A on top, B on bottom
+#   A ; B                =  horizontal split: A on left, B on right
+#   ( ... )              =  group expressions, override default precedence
+#
+# Precedence: (group) > , (vertical) > ; (horizontal)
+# Association: , and ; are both left-associative.
+#
+# Proportion rule:
+#   Each split divides space by weight sum.
+#   right_size = round(right_weight_sum / total_weight_sum * 100%)
+#   Leaves with higher weight get proportionally more space.
+#
+#   Rows align when sibling subtrees have equal weight sums.
+#   For grid-like layouts, use parentheses to nest horizontal splits inside
+#   a vertical split (or vice versa):
+#
+#     (a; b), (c; d; e)  →  top row 2 cols, bottom row 3 cols
+#     (a; b(2)), (c; d)  →  top left 33%, top right 67%; bottom equal
+#
+#   Without parentheses, left-association controls the grouping:
+#
+#     a, b; c, d, e      →  left column a+b, right column c+d+e
+#
 from __future__ import annotations
 
 import re
@@ -8,7 +36,8 @@ _LEAF_TOKEN_RE = re.compile(
     r'(?P<name>[A-Za-z][A-Za-z0-9_-]{0,31})'
     r'(?:\s*:\s*(?P<provider>[A-Za-z0-9_-]+)'
     r'(?:\s*\(\s*(?P<workspace_mode>worktree)\s*\))?'
-    r')?$'
+    r')?'
+    r'(?:\s*\(\s*(?P<weight>[1-9][0-9]*)\s*\))?$'
 )
 
 
@@ -64,12 +93,15 @@ class _LayoutParser:
             raise LayoutParseError(
                 f"invalid layout token {token!r}; expected 'cmd', 'agent', 'agent:provider', or 'agent:provider(worktree)'"
             )
+        weight_str = match.group('weight')
+        weight = int(weight_str) if weight_str else 1
         return LayoutNode(
             kind='leaf',
             leaf=LayoutLeaf(
                 name=match.group('name').strip(),
                 provider=(match.group('provider') or None),
                 workspace_mode=(match.group('workspace_mode') or None),
+                weight=weight,
             ),
         )
 
