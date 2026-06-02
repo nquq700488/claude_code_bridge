@@ -62,6 +62,26 @@
 
 ## Unreleased
 
+## v7.2.1 (2026-06-02)
+
+### Antigravity Runtime Follow-Up
+
+- **Antigravity Runtime Specs Completed**: `agy` now has provider runtime/client specs, public provider-core exports, and `.agy-<agent>-session` naming alongside the backend registration added in v7.2.0.
+- **Antigravity Launch Coverage Added**: tests now cover named Antigravity pane launch, `AGY_START_CMD`, auto-permission, restore continuation, and prepared-state compatibility.
+- **Provider README Surface Aligned**: README and README_zh now show Antigravity in the top provider badge, comparison tables, and install prerequisites.
+- **Reload No-Change Semantics Clarified**: docs and tests describe non-dry-run no-change reload as `noop` / `no_op` with no graph publish.
+- **Agent Roles Planning Added**: plantree now records the future host-neutral `agent-roles` RolePack specification project plan.
+
+## v7.2.0 (2026-06-02)
+
+### Role Packs And Managed Tools Release
+
+- **Role Pack UX Added**: `ccb roles add ccb.archi:codex` is now the primary project entry point; configs keep the shorthand `ccb.archi:codex`, while runtime resolves it to the local `archi` agent and projects role memory plus provider skills.
+- **Bundled `ccb.archi` Role Added**: the first built-in Role Pack provides an Architec-backed architecture reviewer with role memory, Codex/Claude skills, and CCB-managed Architec tooling.
+- **Role Dependency Flow Simplified**: `ccb roles install ccb.archi` and `ccb roles update ccb.archi` install or refresh both role assets and dependencies by default; `install.sh install` and `ccb update` prompt interactive users and show `ccb roles update ccb.archi` as the non-interactive follow-up.
+- **Managed Tool Windows Added**: CCB config now supports `[tool_windows.<name>]` for non-agent windows such as the bundled `neovim` tool, including sidebar/project-view rows, reload add/remove support, and `ccb tools install/doctor neovim` provisioning.
+- **Antigravity Provider Included**: the release includes the new `agy` / Google Antigravity CLI provider support already landed on `main`.
+
 ## v7.1.1 (2026-05-31)
 
 ### Sidebar View Height Release

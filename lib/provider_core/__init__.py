@@ -6,6 +6,8 @@ from .catalog import (
     build_default_provider_catalog,
 )
 from .runtime_specs import (
+    AGY_CLIENT_SPEC,
+    AGY_RUNTIME_SPEC,
     CLAUDE_CLIENT_SPEC,
     CLAUDE_RUNTIME_SPEC,
     CLIENT_SPECS_BY_PROVIDER,
@@ -61,6 +63,8 @@ from .registry import (
 from .runtime_lock import ProviderLock
 
 __all__ = [
+    'AGY_CLIENT_SPEC',
+    'AGY_RUNTIME_SPEC',
     'CLAUDE_CLIENT_SPEC',
     'CLAUDE_RUNTIME_SPEC',
     'CLIENT_SPECS_BY_PROVIDER',

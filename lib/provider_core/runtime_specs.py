@@ -66,6 +66,7 @@ GEMINI_RUNTIME_SPEC = _provider_runtime_spec("gemini")
 OPENCODE_RUNTIME_SPEC = _provider_runtime_spec("opencode")
 CLAUDE_RUNTIME_SPEC = _provider_runtime_spec("claude")
 DROID_RUNTIME_SPEC = _provider_runtime_spec("droid")
+AGY_RUNTIME_SPEC = _provider_runtime_spec("agy")
 COPILOT_RUNTIME_SPEC = _provider_runtime_spec("copilot")
 CODEBUDDY_RUNTIME_SPEC = _provider_runtime_spec("codebuddy")
 QWEN_RUNTIME_SPEC = _provider_runtime_spec("qwen")
@@ -91,6 +92,10 @@ CLAUDE_CLIENT_SPEC = _client_spec(
 DROID_CLIENT_SPEC = _client_spec(
     provider_key="droid",
     session_filename=".droid-session",
+)
+AGY_CLIENT_SPEC = _client_spec(
+    provider_key="agy",
+    session_filename=".agy-session",
 )
 COPILOT_CLIENT_SPEC = _client_spec(
     provider_key="copilot",
@@ -119,6 +124,7 @@ RUNTIME_SPECS_BY_PROVIDER = {
     "opencode": OPENCODE_RUNTIME_SPEC,
     "claude": CLAUDE_RUNTIME_SPEC,
     "droid": DROID_RUNTIME_SPEC,
+    "agy": AGY_RUNTIME_SPEC,
     "copilot": COPILOT_RUNTIME_SPEC,
     "codebuddy": CODEBUDDY_RUNTIME_SPEC,
     "qwen": QWEN_RUNTIME_SPEC,
@@ -132,6 +138,7 @@ CLIENT_SPECS_BY_PROVIDER = {
     "opencode": OPENCODE_CLIENT_SPEC,
     "claude": CLAUDE_CLIENT_SPEC,
     "droid": DROID_CLIENT_SPEC,
+    "agy": AGY_CLIENT_SPEC,
     "copilot": COPILOT_CLIENT_SPEC,
     "codebuddy": CODEBUDDY_CLIENT_SPEC,
     "qwen": QWEN_CLIENT_SPEC,
@@ -158,6 +165,8 @@ def make_qualified_key(base: str, instance: str | None) -> str:
 
 
 __all__ = [
+    "AGY_CLIENT_SPEC",
+    "AGY_RUNTIME_SPEC",
     "CLAUDE_CLIENT_SPEC",
     "CLAUDE_RUNTIME_SPEC",
     "CLIENT_SPECS_BY_PROVIDER",

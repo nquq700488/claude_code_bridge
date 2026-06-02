@@ -28,6 +28,7 @@ from provider_backends.codex import launcher as codex_launcher
 from provider_backends.droid import launcher as droid_launcher
 from provider_backends.gemini import launcher as gemini_launcher
 from provider_backends.opencode import launcher as opencode_launcher
+from provider_backends.agy import launcher as agy_launcher
 from provider_backends.runtime_restore import ProviderRestoreTarget
 from provider_backends.codex.launcher_runtime.command import prepare_codex_home_overrides as prepare_codex_home_overrides_for_test
 import provider_profiles.codex_home_config as codex_home_config
@@ -957,6 +958,51 @@ def test_ensure_agent_runtime_launches_named_opencode_session(monkeypatch, tmp_p
     assert config_path.is_file()
 
 
+def test_ensure_agent_runtime_launches_named_agy_session(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-agy'
+    (project_root / '.ccb').mkdir(parents=True)
+    ctx = _context(project_root, ParsedStartCommand(project=None, agent_names=('antigravity',), restore=True, auto_permission=True))
+    spec = _spec('antigravity', provider='agy')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+
+    class FakeTmuxBackend:
+        def create_pane(self, cmd: str, cwd: str, direction: str = 'right', percent: int = 50, parent_pane: str | None = None) -> str:
+            self.cmd = cmd
+            self.cwd = cwd
+            return '%68'
+
+        def set_pane_title(self, pane_id: str, title: str) -> None:
+            self.title = (pane_id, title)
+
+        def set_pane_user_option(self, pane_id: str, name: str, value: str) -> None:
+            self.user_option = (pane_id, name, value)
+
+    monkeypatch.setattr('cli.services.runtime_launch._inside_tmux', lambda: True)
+    monkeypatch.setattr('cli.services.runtime_launch.shutil.which', lambda name: f'/usr/bin/{name}')
+    monkeypatch.setattr('cli.services.runtime_launch.TmuxBackend', FakeTmuxBackend)
+    monkeypatch.setenv('AGY_START_CMD', 'agy --profile demo')
+
+    result = ensure_agent_runtime(ctx, ctx.command, spec, plan, None)
+
+    assert result.launched is True
+    assert result.binding is not None
+    expected_session = project_root / '.ccb' / '.agy-antigravity-session'
+    assert result.binding.session_file == str(expected_session)
+    assert result.binding.session_ref == result.binding.ccb_session_id
+    assert result.binding.session_ref.startswith('ccb-antigravity-')
+    payload = json.loads(expected_session.read_text(encoding='utf-8'))
+    assert payload['pane_title_marker'].startswith('CCB-antigravity-')
+    _assert_caller_env_exports(
+        payload['start_cmd'],
+        actor='antigravity',
+        runtime_dir=ctx.paths.agent_dir('antigravity') / 'provider-runtime' / 'agy',
+        session_id=payload['ccb_session_id'],
+    )
+    assert payload['start_cmd'].endswith('agy --profile demo --dangerously-skip-permissions --continue')
+    assert payload['ccb_session_id'] == result.binding.session_ref
+
+
 def test_ensure_agent_runtime_uses_assigned_tmux_pane(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-assigned'
     (project_root / '.ccb').mkdir(parents=True)
@@ -1130,6 +1176,8 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
     assert any(name == 'set-option' for name, _ in calls)
     assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'focus-events', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'escape-time', '10')) in calls
     assert ('set-window-option', ('set-window-option', '-g', 'mode-keys', 'vi')) in calls
     assert ('bind-key', ('bind-key', '-T', 'copy-mode-vi', 'v', 'send-keys', '-X', 'begin-selection')) in calls
     assert _clipboard_bind_call('y') in calls
@@ -1308,6 +1356,8 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
     assert any(name == 'start-server' for name, _ in calls)
     assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'focus-events', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'escape-time', '10')) in calls
     assert ('set-window-option', ('set-window-option', '-g', 'mode-keys', 'vi')) in calls
     assert ('bind-key', ('bind-key', '-T', 'copy-mode-vi', 'y', 'send-keys', '-X', 'copy-selection-and-cancel')) not in calls
     assert _clipboard_bind_call('y') in calls
@@ -1559,6 +1609,8 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert any(name == 'set-option' for name, _ in calls)
     assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'focus-events', 'on')) in calls
+    assert ('set-option', ('set-option', '-g', 'escape-time', '10')) in calls
     assert ('set-window-option', ('set-window-option', '-g', 'mode-keys', 'vi')) in calls
     assert _clipboard_bind_call('MouseDragEnd1Pane') in calls
     assert ('bind-key', ('bind-key', 'l', 'select-pane', '-R')) in calls
@@ -1968,6 +2020,7 @@ def test_claude_launcher_build_start_cmd_requires_launch_context(tmp_path: Path)
     ('provider', 'launcher', 'session_id'),
     (
         ('droid', droid_launcher, 'droid-sess-prepared'),
+        ('agy', agy_launcher, 'agy-sess-prepared'),
     ),
 )
 def test_non_claude_build_start_cmd_accepts_prepared_state_keyword(

@@ -396,9 +396,9 @@ Current status:
   namespace patch/runtime/publish stages.
 - `remove_agent` can reach namespace/runtime/publish stages only for idle
   agents with no outstanding dispatcher work and preserved remaining order.
-- `no_change`, busy `remove_agent`, `replace_agent`, `move_agent`, and
-  arbitrary `layout_change` return blocked/failed structured output and do not
-  publish.
+- `no_change` returns noop without graph publish; busy `remove_agent`,
+  `replace_agent`, `move_agent`, and arbitrary `layout_change` return
+  blocked/failed structured output and do not publish.
 - Successful publish invalidates the current project-view cache so the next
   `project_view` and `ping('ccbd')` read the newly published graph/config.
 - Apply writes and clears a bounded keeper handoff record so the pre-publish

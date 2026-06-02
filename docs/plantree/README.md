@@ -31,6 +31,9 @@ to resume across agents and sessions.
 | [sidebar-tips-layout](plans/sidebar-tips-layout/README.md) | In progress | Add a three-panel sidebar layout with compact Comms and configurable tmux Tips. |
 | [sidebar-provider-activity](plans/sidebar-provider-activity/README.md) | Planning | Add provider-native activity evidence for accurate sidebar status, including Codex/Claude manual-pane state and API fault validation. |
 | [ccbd-agent-hot-reload](plans/ccbd-agent-hot-reload/README.md) | Planning | Dynamically load, unload, and later replace agents in a running daemon without breaking unrelated panes. |
+| [managed-tool-windows](plans/managed-tool-windows/README.md) | Planning | Add first-class non-agent tool windows such as Neovim that appear in sidebar without provider/agent rows. |
+| [rolepack-system](plans/rolepack-system/README.md) | Planning | Define a host-neutral Role Pack system for reusable agent roles, with CCB installation, projection, and governance as the first adapter. |
+| [agent-roles-open-source](plans/agent-roles-open-source/README.md) | Planning | Plan the public `agent-roles` GitHub project as a spec-first RolePack standard with templates, reference roles, and future host adapters. |
 
 ## Legacy Planning Sources
 

@@ -7,13 +7,16 @@ from ..names import SCHEMA_VERSION, AgentValidationError
 from .topology import (
     SidebarSpec,
     SidebarViewSpec,
+    ToolWindowSpec,
     WindowSpec,
     default_sidebar_spec,
     default_sidebar_view_spec,
+    normalize_tool_windows,
     normalize_windows,
     topology_signature,
     topology_signature_payload,
     validate_entry_window,
+    validate_tool_windows_do_not_conflict,
     validate_windows_reference_agents,
 )
 from .validation import normalize_agent_specs, normalize_default_agents, resolve_layout_spec
@@ -27,6 +30,7 @@ class ProjectConfig:
     cmd_enabled: bool = False
     layout_spec: str | None = None
     windows: tuple[WindowSpec, ...] | None = None
+    tool_windows: tuple[ToolWindowSpec, ...] | None = None
     entry_window: str | None = None
     sidebar: SidebarSpec | None = None
     sidebar_view: SidebarViewSpec | None = None
@@ -59,10 +63,13 @@ class ProjectConfig:
             default_agents=defaults,
             cmd_enabled=bool(self.cmd_enabled),
         )
+        tool_windows = normalize_tool_windows(self.tool_windows)
+        validate_tool_windows_do_not_conflict(windows, tool_windows)
         validate_windows_reference_agents(windows, normalized_agents=normalized_agents)
-        entry_window = validate_entry_window(self.entry_window, windows=windows)
+        entry_window = validate_entry_window(self.entry_window, windows=windows, tool_windows=tool_windows)
         signature_payload = topology_signature_payload(
             windows=windows,
+            tool_windows=tool_windows,
             entry_window=entry_window,
             sidebar=sidebar,
         )
@@ -70,6 +77,7 @@ class ProjectConfig:
         object.__setattr__(self, 'agents', normalized_agents)
         object.__setattr__(self, 'layout_spec', rendered_layout)
         object.__setattr__(self, 'windows', windows)
+        object.__setattr__(self, 'tool_windows', tool_windows)
         object.__setattr__(self, 'entry_window', entry_window)
         object.__setattr__(self, 'sidebar', sidebar)
         object.__setattr__(self, 'sidebar_view', sidebar_view)
@@ -87,6 +95,7 @@ class ProjectConfig:
             'cmd_enabled': bool(self.cmd_enabled),
             'layout_spec': self.layout_spec,
             'windows': [window.to_record() for window in self.windows],
+            'tool_windows': [tool.to_record() for tool in self.tool_windows],
             'entry_window': self.entry_window,
             'sidebar': self.sidebar.to_record(),
             'sidebar_view': self.sidebar_view.to_record(),

@@ -112,8 +112,9 @@ Date: 2026-05-29
     additive apply orchestrator;
   - non-dry-run `view_only_change`, append-only `add_agent`, and `add_window`
     succeed in focused tests;
-  - `no_change`, `replace_agent`, `move_agent`, and arbitrary `layout_change`
-    are rejected or blocked without graph publish;
+  - `no_change` returns noop without graph publish; `replace_agent`,
+    `move_agent`, and arbitrary `layout_change` are rejected or blocked without
+    graph publish;
   - idle `remove_agent` kills only the removed agent pane, stops that runtime
     authority/helper, and publishes the new graph;
   - busy or outstanding `remove_agent` blocks before namespace mutation;

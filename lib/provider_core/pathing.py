@@ -13,6 +13,7 @@ PROVIDER_SESSION_FILENAMES = {
     'droid': '.droid-session',
     'mmx': '.mmx-session',
     'kimi': '.kimi-session',
+    'agy': '.agy-session',
 }
 
 
