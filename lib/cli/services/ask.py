@@ -17,11 +17,11 @@ from .daemon import CcbdServiceError, connect_mounted_daemon, invoke_mounted_dae
 
 
 def watch_timeout_seconds() -> float:
-    raw = str(os.environ.get("CCB_WATCH_TIMEOUT_S") or "3600").strip()
+    raw = str(os.environ.get("CCB_WATCH_TIMEOUT_S") or "600").strip()
     try:
         return float(raw)
     except ValueError:
-        return 3600.0
+        return 600.0
 
 
 def watch_poll_interval_seconds() -> float:

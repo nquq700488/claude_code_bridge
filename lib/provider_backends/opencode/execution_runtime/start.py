@@ -66,6 +66,7 @@ def start_submission(
             "reply_buffer": "",
             "session_path": state_session_path(state),
             "no_wrap": no_wrap,
+            "workspace_path": str(prepared.work_dir),
         },
     )
 

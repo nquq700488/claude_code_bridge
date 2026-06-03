@@ -959,6 +959,48 @@
   - `FRESH` + `restore=True`：命令不含 `--continue`
   - 环境变量 `PROMPT_TOOLKIT_NO_CPR=1` 和 `TERM=xterm-256color` 正确注入
 
+### ISSUE-020
+
+- 状态：`fixed`
+- 标题：`Claude/OpenCode/Kimi Agent 长时间空闲后返回过期结果或历史回复`
+- 根因分类：`mailbox-dispatch` / `provider-facts`
+- 测试场景：`Agent 空闲一段时间（10 分钟以上）后，orchestrator 拿到的是之前某次任务的旧结果`
+- 最小复现：
+  - 启动 CCB 项目
+  - 发起一次 ask，获取正常回复
+  - 等待 10+ 分钟，期间 Provider CLI 可能创建新的本地 session
+  - 再次 ask
+  - 观察返回的回复是否为当前执行的结果
+- 预期结果：
+  - 每次 ask 都应返回当前执行的最新结果
+  - 不应将历史 session 中的旧消息当作当前完成结果
+- 实际结果：
+  - Claude：当文件系统上出现更新的 session 文件时，`poll_session_loop` 会重置 `offset=0`，将新 session 中的全部历史 assistant 消息重新输出为"当前完成结果"
+  - OpenCode：当 session_id 因 DB rollover 或文件变更而变化时，`reset_state_for_session` 将 `session_updated` 设为 `-1`，导致 `should_scan_session` 重新扫描所有历史消息
+  - Kimi：当 session UUID 或 context path 在空闲期变更时，reader 状态中的旧指针指向已过期的会话数据
+  - 三个 Provider 的共同缺陷：Codex 在 ISSUE-017 中已修复的执行期 reader 刷新机制未推广到其他 Provider
+- 影响范围：
+  - 所有使用 Claude、OpenCode、Kimi Provider 的 Agent
+  - 空闲期跨越 Provider CLI session 轮转时概率触发
+  - orchestrator 层面的任务状态判断依赖回复内容，错误回复会污染后续决策链
+- 根因：
+  - Claude：`poll_session_loop` 在检测到 session 文件变更时，将 `offset` 重置为 `0` 而非文件末尾，同时缺少执行层的 `_refresh_reader_for_current_session_binding()`
+  - OpenCode：`reset_state_for_session` 未从 session_entry 获取实际 `session_updated` 值；执行层缺少 reader 重建逻辑
+  - Kimi：执行层缺少 reader 重建逻辑，依赖 poll 内部的 `_maybe_rotate_session` 但该函数仅处理 session UUID 轮转，不重建 reader 对象
+- 系统性修复方案：
+  - Claude（3 文件）：修复 `poll_session_loop` offset 改为 `st_size`；新增 `_refresh_reader_for_current_session_binding()` 在每轮 poll 前检查并重建 reader；`runtime_state` 存储 `workspace_path`
+  - OpenCode（4 文件）：修复 `reset_state_for_session` 接受 `session_entry` 参数设置正确的 `session_updated`；透传 `session_entry` 到 `advance_session_state`；新增执行层 `_refresh_reader_for_current_session_binding()`；`runtime_state` 存储 `workspace_path`
+  - Kimi（1 文件）：新增 `_refresh_reader_for_current_session_binding()` 在 session_uuid 或 context_path 变更时重建 reader；`runtime_state` 存储 `workspace_path`
+  - 刷新逻辑遵循 Codex ISSUE-017 已验证的模式：重载 session → 比较绑定 → 重建 reader + capture_state（offset=filesize）→ 标记 anchor_seen/emitted
+- 回归测试：
+  - 所有修改文件 Python 编译检查通过
+  - execution_service 相关测试 70 passed
+  - Claude/OpenCode 相关测试 276 passed（2 个失败为预存问题）
+  - 待补：`_refresh_reader_for_current_session_binding` 单元测试覆盖 mode 检查、路径缺失、session 加载失败、session 不变快速路径、session 变更重建路径
+- 复测结论：
+  - 2026-06-03 代码修复完成，语法检查和现有测试套件验证通过
+  - 待人工在真实空闲场景下验证端到端行为
+
 ## 6. 关闭标准
 
 问题只有同时满足以下条件才关闭：

@@ -77,10 +77,12 @@ class KimiProviderAdapter:
                 "session_path": state.get("context_path", ""),
                 "session_uuid": state.get("session_uuid", ""),
                 "no_wrap": no_wrap,
+                "workspace_path": str(prepared.work_dir),
             },
         )
 
     def poll(self, submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
+        submission = _refresh_reader_for_current_session_binding(submission)
         prepared = prepare_active_poll(submission, now=now)
         if prepared is None or isinstance(prepared, ProviderPollResult):
             return prepared
@@ -130,6 +132,50 @@ class KimiProviderAdapter:
         if not items and updated.reply == submission.reply and updated.runtime_state == submission.runtime_state:
             return None
         return ProviderPollResult(submission=updated, items=tuple(items))
+
+
+def _refresh_reader_for_current_session_binding(submission: ProviderSubmission) -> ProviderSubmission:
+    """Rebuild the reader if the on-disk Kimi session binding has changed.
+
+    Kimi's reader re-resolves session paths on every try_get_message call,
+    so the reader itself is less stale-prone. This acts as defense-in-depth
+    to catch cases where the session uuid or context path changed since start.
+    """
+    state = dict(submission.runtime_state)
+    if str(state.get('mode') or '').strip().lower() != 'active':
+        return submission
+    diagnostics = submission.diagnostics if isinstance(submission.diagnostics, dict) else {}
+    raw = state.get('workspace_path') or diagnostics.get('workspace_path')
+    if not raw:
+        return submission
+    try:
+        work_dir = Path(str(raw)).expanduser()
+    except Exception:
+        return submission
+    session = _load_session(work_dir, agent_name=submission.agent_name)
+    if session is None:
+        return submission
+    new_reader = KimiLogReader(work_dir=Path(session.work_dir))
+    new_state = new_reader.capture_state()
+    old_session_uuid = str(state.get('session_uuid') or '')
+    new_session_uuid = str(new_state.get('session_uuid') or '')
+    old_context_path = str(state.get('state', {}).get('context_path') or state.get('session_path') or '')
+    new_context_path = str(new_state.get('context_path') or '')
+    if old_session_uuid == new_session_uuid and old_context_path == new_context_path:
+        return submission
+    return replace(
+        submission,
+        runtime_state={
+            **state,
+            'reader': new_reader,
+            'state': new_state,
+            'session_path': new_state.get('context_path', ''),
+            'session_uuid': new_state.get('session_uuid', ''),
+            'workspace_path': str(work_dir),
+            'anchor_emitted': state.get('no_wrap', False),
+            'reply_buffer': '',
+        },
+    )
 
 
 def _poll_runtime_state(submission: ProviderSubmission) -> dict[str, object]:

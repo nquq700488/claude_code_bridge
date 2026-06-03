@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.2.1 | 最后更新：2026-06-02
+> 版本：适用于 CCB v7.2.1 | 最后更新：2026-06-03
 
 ---
 
@@ -234,6 +234,8 @@ cd claude_code_bridge
 | `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
 | `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
 | `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒） |
+| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` / `ask --wait` 默认超时（秒，v7.2.1+） |
+| `CCB_WAIT_POLL_INTERVAL_S` | `0.1` | `ask --wait` 轮询间隔（秒） |
 | `CCB_KEYCHAIN_SERVICE_OVERRIDE` | 空 | macOS Keychain 服务名覆盖（v7.0.4+） |
 | `CODEX_CLAUDE_COMMAND_DIR` | 自动检测 | 自定义 Claude commands 目录 |
 
@@ -898,7 +900,19 @@ restore = "provider"   # 仅在需要恢复 Kimi 本地历史会话时启用
 
 > **注意**：Kimi 的 CCB manifest 声明 `supports_resume=False`，CCB 层面不支持跨重启的 submission 恢复。`restore = "provider"` 仅控制是否让 Kimi CLI 自身尝试 `--continue` 恢复本地会话。
 
-### Q16: Source dev 安装后 `ccb` 报 Python 版本冲突
+### Q16: Agent 长时间空闲后返回旧结果/过期回复
+
+**现象**：Agent 空闲一段时间（如 10 分钟以上）后，orchestrator 拿到的是之前某次任务的旧结果，而不是当前最新执行的结果。但 agent 终端显示执行正常，手动重新 ask 后可以拿到正确结果。
+
+**影响范围**：Claude、OpenCode、Kimi 三个 Provider 的 Agent。
+
+**根因**：Agent 空闲期间，Provider CLI 可能自动创建新的本地会话文件。旧代码中，Completion Detector 的 session reader 被创建时绑定了旧的会话路径。当文件系统上出现新会话时，Claude 的 polling loop 会将读取偏移重置为 0，从而将新会话文件中的**全部历史消息**重新输出为"当前完成结果"。
+
+**修复状态**：**v7.2.1+ 已修复**。三个 Provider（Claude、OpenCode、Kimi）的 Execution Adapter 现已遵循 Codex 在 ISSUE-017 中确立的刷新模式——每轮 poll 前主动检查当前磁盘会话绑定是否与 reader 中缓存的一致，发现变化则重建 reader 并从文件末尾开始读取，避免将历史消息误判为新完成结果。
+
+**临时规避**（v7.2.0 及更早版本）：遇到此问题时，重新发起一次 ask（会创建新的 submission 和 reader，绑定到当前会话，跳过旧内容）。
+
+### Q17: Source dev 安装后 `ccb` 报 Python 版本冲突
 
 v7.0+ 源码安装使用 Python wrapper，会尝试检测并使用正确的 Python 解释器。如果系统同时存在多个 Python 版本（如 macOS 的 Xcode Python 3.9 和 Homebrew Python 3.12），可通过环境变量强制指定：
 

@@ -20,7 +20,10 @@ def poll_session_loop(reader, state: dict, timeout: float, block: bool, *, inclu
 
         if current_state.get('session_path') != session:
             current_state['session_path'] = session
-            current_state['offset'] = 0
+            try:
+                current_state['offset'] = session.stat().st_size
+            except OSError:
+                current_state['offset'] = 0
             current_state['carry'] = b''
             if include_subagents:
                 current_state['subagents'] = subagent_state_for_session(reader, session, start_from_end=False)

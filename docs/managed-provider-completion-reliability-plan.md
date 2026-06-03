@@ -537,6 +537,37 @@ Required:
 
 Claude-specific session-boundary logic may still provide stronger observed completion than Gemini, but must no longer rely on hook exactness alone.
 
+### 10.4 OpenCode And Kimi Session Binding (Added 2026-06-03)
+
+In addition to the timeout/closure concerns above, all three managed providers
+(Claude, OpenCode, Kimi) share a session-binding staleness defect that Codex
+already fixed in ISSUE-017.
+
+**Defect**: After long idle periods where the provider CLI creates a new local
+session, the execution adapter's reader continues to reference the old session
+binding. When the polling loop or reader detects the new session, it resets
+state (offset, session_updated, assistant_count) in ways that cause ALL
+historical messages to be re-read and emitted as "current" completions.
+
+**Fix Applied**: Each provider's `poll()` now calls
+`_refresh_reader_for_current_session_binding()` before reading, following the
+Codex pattern. When the on-disk session binding differs from the reader's
+cached binding, the reader is rebuilt and state is captured from end-of-file,
+preventing old messages from being mistaken for new results.
+
+**Files Changed**:
+
+- `lib/provider_backends/claude/execution.py` — added refresh function + wired into poll
+- `lib/provider_backends/claude/comm_runtime/polling_runtime/common.py` — offset fix
+- `lib/provider_backends/claude/execution_runtime/start.py` — workspace_path in runtime_state
+- `lib/provider_backends/opencode/execution.py` — added refresh function + wired into poll
+- `lib/provider_backends/opencode/execution_runtime/start.py` — workspace_path in runtime_state
+- `lib/provider_backends/opencode/runtime/reply_polling_runtime/loop.py` — session_entry pass-through
+- `lib/provider_backends/opencode/runtime/reply_polling_runtime/state.py` — session_updated fix
+- `lib/provider_backends/kimi/execution.py` — added refresh function + wired into poll + workspace_path
+
+This is tracked as ISSUE-020 in `docs/ccbd-manual-test-issue-log.md`.
+
 ## 11. Placement In Code
 
 ### 11.1 Completion Manifest Layer

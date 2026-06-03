@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from ccbd.api_models import JobRecord
@@ -37,6 +38,7 @@ class ClaudeProviderAdapter:
         )
 
     def poll(self, submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
+        submission = _refresh_reader_for_current_session_binding(submission)
         return _poll_submission(self, submission, now=now)
 
     def export_runtime_state(self, submission: ProviderSubmission) -> dict[str, object]:
@@ -94,6 +96,73 @@ def _load_session(work_dir: Path, *, agent_name: str):
     from .execution_runtime.start import load_session as _runtime_load_session
 
     return _runtime_load_session(load_project_session, work_dir, agent_name=agent_name)
+
+
+def _refresh_reader_for_current_session_binding(submission: ProviderSubmission) -> ProviderSubmission:
+    """Rebuild the reader if the on-disk Claude session binding has changed.
+
+    Called at the start of every poll() to prevent stale readers after
+    long idle periods where a new Claude session was created.
+    """
+    state = dict(submission.runtime_state)
+    if str(state.get('mode') or '').strip().lower() != 'active':
+        return submission
+    diagnostics = submission.diagnostics if isinstance(submission.diagnostics, dict) else {}
+    raw = state.get('workspace_path') or diagnostics.get('workspace_path')
+    if not raw:
+        return submission
+    try:
+        work_dir = Path(str(raw)).expanduser()
+    except Exception:
+        return submission
+    session = _load_session(work_dir, agent_name=submission.agent_name)
+    if session is None:
+        return submission
+    reader = state.get('reader')
+    if reader is None:
+        return submission
+    current = _current_session_path(reader)
+    stored = _reader_stored_session_path(reader)
+    if current is None:
+        return submission
+    if _normalized_path(current) == _normalized_path(stored):
+        return submission
+    new_reader = _reader_factory(session)
+    new_state = new_reader.capture_state()
+    updated_state = {
+        **state,
+        'reader': new_reader,
+        'state': new_state,
+        'session_path': _state_session_path(new_state),
+        'workspace_path': str(work_dir),
+        'anchor_seen': True,
+        'prompt_sent': True,
+    }
+    return replace(submission, runtime_state=updated_state)
+
+
+def _current_session_path(reader) -> Path | None:
+    fn = getattr(reader, 'current_session_path', None)
+    return fn() if callable(fn) else None
+
+
+def _reader_stored_session_path(reader) -> Path | None:
+    return getattr(reader, '_preferred_session', None)
+
+
+def _normalized_path(value) -> str:
+    if value is None:
+        return ''
+    try:
+        return str(Path(value).expanduser())
+    except Exception:
+        return str(value) or ''
+
+
+def _state_session_path(captured: dict) -> str:
+    from provider_execution.common import normalize_session_path
+
+    return normalize_session_path(captured.get("session_path"))
 
 
 def build_execution_adapter() -> ClaudeProviderAdapter:

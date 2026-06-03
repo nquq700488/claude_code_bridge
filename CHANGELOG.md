@@ -1,5 +1,16 @@
 ## Unreleased
 
+### Provider Session Binding Refresh (Claude, OpenCode, Kimi)
+
+- **Stale Result After Idle Fixed**: Claude, OpenCode, and Kimi execution adapters now call `_refresh_reader_for_current_session_binding()` at the start of every `poll()`, following the Codex pattern established in ISSUE-017. This prevents stale readers from returning old completion results after long idle periods where the provider CLI created a new local session.
+- **Claude `poll_session_loop` Offset Fix**: When the Claude polling loop detects a session change mid-poll, it now sets `offset = st_size` (end-of-file) instead of `0`, matching `capture_state()` behavior. This prevents ALL historical assistant messages from being re-processed as "new completions."
+- **OpenCode `reset_state_for_session` Fix**: Now accepts optional `session_entry` parameter and sets `session_updated` from the actual session entry instead of `-1`, preventing `should_scan_session` from re-triggering on already-seen messages.
+- **Kimi Reader Rebuild on Binding Change**: Kimi's poll now rebuilds the reader when session UUID or context path changes since start, providing defense-in-depth alongside the existing `_maybe_rotate_session`.
+
+### Watch/Pend Timeout Defaults Aligned
+
+- **Default Watch Timeout Unified**: `pend --watch` and `ask --wait` now share the same default timeout of **600 seconds (10 minutes)**, matching the `no_terminal_timeout_s` range used by provider reliability policies. Previously `pend --watch` defaulted to 10 seconds (far too short for AI agent replies) while `ask --wait` defaulted to 3600 seconds (excessively long). Both can still be overridden via `CCB_WATCH_TIMEOUT_S` or `--timeout`.
+
 ### Clean Script Hardening
 
 - **`.ccb/clean.sh` Auto-Stops Daemon Before Deletion**: The clean script now detects if the CCB daemon (keeper/ccbd) is still running and automatically stops it via `ccb kill` before removing runtime files. This prevents the "deleted files keep coming back" issue caused by the supervision loop recreating removed state. If `ccb` is not in PATH, a warning is printed instead.

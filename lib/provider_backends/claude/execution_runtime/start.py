@@ -172,6 +172,7 @@ def start_active_submission(
             "reply_delivery_require_ready": reply_delivery,
             "ready_wait_started_at": now,
             "ready_timeout_s": resolved_ready_timeout(),
+            "workspace_path": str(prepared.work_dir),
         },
     )
 

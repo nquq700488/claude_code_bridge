@@ -18,6 +18,7 @@ def resolve_active_session(
         state,
         session_id=session_id,
         current_session_id=current_session_id,
+        session_entry=session_entry,
         reset_state_for_session_fn=reset_state_for_session_fn,
     )
     return session_id, current_session_id, state
@@ -113,10 +114,11 @@ def advance_session_state(
     *,
     session_id: str | None,
     current_session_id: str | None,
+    session_entry: dict[str, Any] | None,
     reset_state_for_session_fn: Callable,
 ) -> tuple[str | None, dict[str, Any]]:
     if session_id and current_session_id and current_session_id != session_id:
-        return current_session_id, reset_state_for_session_fn(state, current_session_id)
+        return current_session_id, reset_state_for_session_fn(state, current_session_id, session_entry=session_entry)
     if not session_id:
         return current_session_id, state
     return session_id, state

@@ -15,10 +15,13 @@ def session_updated(payload: dict[str, Any]) -> int:
         return -1
 
 
-def reset_state_for_session(state: dict[str, Any], session_id: str) -> dict[str, Any]:
+def reset_state_for_session(state: dict[str, Any], session_id: str, *, session_entry: dict[str, Any] | None = None) -> dict[str, Any]:
     new_state = dict(state)
     new_state['session_id'] = session_id
-    new_state['session_updated'] = -1
+    if session_entry:
+        new_state['session_updated'] = session_updated(session_entry.get('payload') or {})
+    else:
+        new_state['session_updated'] = -1
     new_state['assistant_count'] = 0
     new_state['last_assistant_id'] = None
     new_state['last_assistant_parent_id'] = None

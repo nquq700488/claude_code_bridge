@@ -6,7 +6,7 @@ from .watch_fallback import load_persisted_terminal_watch_payload
 
 
 _DEFAULT_POLL_INTERVAL_S = 0.1
-_DEFAULT_TIMEOUT_S = 10.0
+_DEFAULT_TIMEOUT_S = 600.0
 
 
 @dataclass(frozen=True)
