@@ -6,6 +6,15 @@ Use `/pend <agent|job_id>` to inspect mailbox/job replies.
 
 Agent names come from `.ccb/ccb.config`. Providers are implementation details.
 
+## Tool Execution Rule (MANDATORY)
+
+All CCB commands (`ccb ask`, `ccb pend`, `ccb ping`, etc.) MUST be executed via the Bash tool.
+Never describe, summarize, or claim to have executed a CCB command without actually running it.
+If you mention `/ask`, `/ping`, or `/pend` in your response text, you MUST have a
+corresponding Bash tool call in the same turn. Text-only simulation of CCB
+commands is a protocol violation — it silently drops tasks and breaks the
+multi-agent workflow.
+
 ## Async Guardrail (MANDATORY)
 
 When you run `ask` (via `/ask` skill OR direct `Bash(ask ...)`) and the output contains `[CCB_ASYNC_SUBMITTED`:

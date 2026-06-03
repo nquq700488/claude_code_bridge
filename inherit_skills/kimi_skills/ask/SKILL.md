@@ -95,6 +95,7 @@ EOF
 
 ## Rules
 
+- ⚠️ **ANTI-HALLUCINATION**: You MUST use Bash to execute the command. Never claim "I've sent the request" or "I've asked the agent" without actually running the Bash command. If there is no Bash tool call in this turn, you did NOT execute the ask.
 - Execute exactly one snippet above, then stop, unless the user explicitly asked to wait.
 - If async output contains `[CCB_ASYNC_SUBMITTED ...]`, end the turn immediately. Do not inspect, summarize follow-up state, or poll for replies in the same turn.
 - When `--notify-sender` is used, the sender's inbox will receive a system notice when the job completes, fails, or is cancelled. The caller can check `ccb inbox <sender>` in a later turn to pick up the notification.

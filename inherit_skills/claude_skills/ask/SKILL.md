@@ -7,6 +7,8 @@ metadata:
 
 Use this only for `/ask <target> <message...>`.
 
+⚠️ **ANTI-HALLUCINATION**: You MUST invoke this skill via the Bash tool. Never say "I've sent the request" or "I've asked the reviewer" without actually running the command in a Bash tool call. Text-only simulation silently drops tasks.
+
 - `TARGET` = first token after `/ask`.
 - `MESSAGE` = exact raw remainder sent as the task body.
 - `ask` may append reply guidance unless the message already contains explicit output requirements.
