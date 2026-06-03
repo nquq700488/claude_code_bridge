@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.2.1 | 最后更新：2026-06-03
+> 版本：适用于 CCB v7.2.3 | 最后更新：2026-06-03
 
 ---
 

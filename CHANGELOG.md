@@ -71,8 +71,6 @@
 
 - **Silence Threshold Reduced**: `JOB_HEARTBEAT_SILENCE_START_AFTER_S` and `JOB_HEARTBEAT_REPEAT_INTERVAL_S` reduced from 600s to 120s for faster stale-job detection
 
-## Unreleased
-
 ## v7.2.3 (2026-06-03)
 
 ### Root Install Support Validation Hotfix
