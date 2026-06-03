@@ -514,7 +514,7 @@ CCB 会记录父子任务关系，子任务完成后自动将结果回传给父 
 
 ```bash
 # 发任务时附加通知标志
-ccb ask --notify-sender designer <<'EOF'
+ccb ask --notify-sender planner <<'EOF'
 请设计登录页面
 EOF
 
@@ -524,7 +524,7 @@ ccb inbox executor
 
 通知内容示例：
 ```
-CCB job job_abc for agent `designer` has finished with status: completed.
+CCB job job_abc for agent `planner` has finished with status: completed.
 Use `ccb trace job_abc` to view the full result.
 ```
 

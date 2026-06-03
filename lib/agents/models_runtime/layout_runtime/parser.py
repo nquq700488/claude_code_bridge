@@ -1,6 +1,6 @@
 # Layout config syntax:
 #
-#   agent_name:provider  =  agent leaf (e.g. "designer:codex")
+#   agent_name:provider  =  agent leaf (e.g. "planner:codex")
 #   agent_name:provider(N) =  agent leaf with weight N (default 1), e.g. "db:codex(2)"
 #   cmd                  =  command slot (spawns shell in the pane)
 #   A , B                =  vertical split: A on top, B on bottom

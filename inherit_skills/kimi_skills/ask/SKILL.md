@@ -120,7 +120,7 @@ EOF
 - `command ccb ask --wait "agent1" <<'EOF'`
   `1+1=?`
   `EOF`
-- `command ccb ask --notify-sender "designer" <<'EOF'`
+- `command ccb ask --notify-sender "planner" <<'EOF'`
   `请设计登录页面，完成后通知我`
   `EOF`
 

@@ -32,10 +32,11 @@ Abstract roles map to concrete AI providers. Skills reference roles, not provide
 
 | Role | Provider | Description |
 |------|----------|-------------|
-| `designer` | `claude` | Primary planner and architect — owns plans and designs |
-| `inspiration` | `gemini` | Creative brainstorming — provides ideas as reference only (unreliable, never blindly follow) |
-| `reviewer` | `codex` | Scored quality gate — evaluates plans/code using Rubrics |
+| `planner` | `codex` | Primary planner and architect — owns plans and designs |
+| `inspiration` | `opencode` | Flexible collaboration — skip divergent perspectives, fill alternatives, or execute per substituted role spec |
 | `executor` | `claude` | Code implementation — writes and modifies code |
+| `reviewer` | `codex` | Scored quality gate — evaluates plans/code using Rubrics |
+| `tester` | `kimi` | Test engineering — validates features, writes tests, ensures quality |
 
 To change a role assignment, edit the Provider column above.
 When a skill references a role (e.g. `reviewer`), resolve it to the configured agent that owns that role.
@@ -44,7 +45,7 @@ When a skill references a role (e.g. `reviewer`), resolve it to the configured a
 <!-- CODEX_REVIEW_START -->
 ## Peer Review Framework
 
-The `designer` MUST send to `reviewer` (via `/ask`) at two checkpoints:
+The `planner` MUST send to `reviewer` (via `/ask`) at two checkpoints:
 1. **Plan Review** — after finalizing a plan, BEFORE writing code. Tag: `[PLAN REVIEW REQUEST]`.
 2. **Code Review** — after completing code changes, BEFORE reporting done. Tag: `[CODE REVIEW REQUEST]`.
 
@@ -59,8 +60,8 @@ The `reviewer` scores using Rubrics defined in `AGENTS.md` and returns JSON.
 <!-- GEMINI_INSPIRATION_START -->
 ## Inspiration Consultation
 
-For creative tasks (UI/UX design, copywriting, naming, brainstorming), the `designer` SHOULD consult `inspiration` (via `/ask`) for reference ideas.
-The `inspiration` provider is often unreliable — never blindly follow. Exercise independent judgment and present suggestions to the user for decision.
+For creative tasks (UI/UX design, copywriting, naming, brainstorming), the `planner` SHOULD consult `inspiration` (via `/ask`) for reference ideas.
+The `inspiration` role is flexible: skip divergent perspectives when unnecessary, let the orchestrator fill alternatives, or execute on behalf of substituted roles per the collaboration spec. Exercise independent judgment and present suggestions to the user for decision.
 <!-- GEMINI_INSPIRATION_END -->
 
 <!-- CCB_CONFIG_END -->

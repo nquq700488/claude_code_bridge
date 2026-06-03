@@ -1,8 +1,8 @@
 ---
 name: all-plan
-description: Collaborative planning using abstract roles (designer + inspiration + reviewer).
+description: Collaborative planning using abstract roles (planner + inspiration + reviewer).
 metadata:
-  short-description: designer plans + inspiration brainstorms + reviewer scores
+  short-description: planner plans + inspiration brainstorms + reviewer scores
 ---
 
 # All Plan (Codex Version)
@@ -12,7 +12,7 @@ Collaborative planning using abstract roles defined in CLAUDE.md Role Assignment
 Highlights:
 - 5-Dimension requirement clarification (retained)
 - `inspiration` brainstorming for creative/aesthetic ideas
-- `designer` creates the full plan independently
+- `planner` creates the full plan independently
 - `reviewer` scores the plan using Rubric A (must pass >= 7.0)
 - Auto-correction loop (max 3 rounds)
 

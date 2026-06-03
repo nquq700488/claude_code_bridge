@@ -5,10 +5,11 @@ Abstract roles map to concrete AI providers. Skills reference roles, not provide
 
 | Role | Provider | Description |
 |------|----------|-------------|
-| `designer` | `claude` | Primary planner and architect — owns plans and designs |
-| `inspiration` | `gemini` | Creative brainstorming — provides ideas as reference only (unreliable, never blindly follow) |
-| `reviewer` | `codex` | Scored quality gate — evaluates plans/code using Rubrics |
+| `planner` | `codex` | Primary planner and architect — owns plans and designs |
+| `inspiration` | `opencode` | Flexible collaboration — skip divergent perspectives, fill alternatives, or execute per substituted role spec |
 | `executor` | `claude` | Code implementation — writes and modifies code |
+| `reviewer` | `codex` | Scored quality gate — evaluates plans/code using Rubrics |
+| `tester` | `kimi` | Test engineering — validates features, writes tests, ensures quality |
 
 To change a role assignment, edit the Provider column above.
 When a skill references a role (e.g. `reviewer`), resolve it to the provider listed here.
@@ -17,7 +18,7 @@ When a skill references a role (e.g. `reviewer`), resolve it to the provider lis
 <!-- REVIEW_RUBRICS_START -->
 ## Review Rubrics & Templates
 
-When you (Codex) receive a review request from the `designer`, use these rubrics to score.
+When you (Codex) receive a review request from the `planner`, use these rubrics to score.
 
 ### Rubric A: Plan Review (5 dimensions, each 1-10)
 
