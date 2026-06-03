@@ -38,15 +38,21 @@ def _ingest_update_items(dispatcher, current, update) -> CompletionTrackerView |
     if tracker is not None and tracker.current(update.job_id) is None:
         tracker.start(current, started_at=current.updated_at)
     tracked: CompletionTrackerView | None = None
+    last_timestamp: str | None = None
     for item in update.items:
         append_event(dispatcher, current, 'completion_item', item.to_record(), timestamp=item.timestamp)
         dispatcher._execution_service.acknowledge_item(update.job_id, event_seq=item.cursor.event_seq)
         if tracker is not None:
             tracked = tracker.ingest(update.job_id, item)
-            dispatcher._apply_tracker_view(current, tracked, updated_at=item.timestamp)
-    if tracked is None and tracker is not None:
+        last_timestamp = item.timestamp
+    # Emit completion_state_updated once per poll cycle (not per item)
+    # to avoid flooding events when providers stream many chunks.
+    if tracked is not None:
+        dispatcher._apply_tracker_view(current, tracked, updated_at=last_timestamp)
+        return tracked
+    if tracker is not None:
         return tracker.current(update.job_id)
-    return tracked
+    return None
 
 
 def _resolve_update_decision(dispatcher, update, tracked):
