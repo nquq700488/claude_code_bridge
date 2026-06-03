@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.2.1-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.2.3-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **English** | [中文](README_zh.md)
@@ -520,6 +520,26 @@ v7 highlights:
 - Hardened tmux, Ghostty, release helper, Codex trust, and provider session restore paths.
 
 <details open>
+<summary><b>v7.2.3</b> - Root Install Support Validation Hotfix</summary>
+
+- Keeps the root install confirmation behavior from v7.2.2: root installs require explicit confirmation, while uninstall remains ungated.
+- Preserves install identity metadata and `ccb doctor` runtime user/owner/root diagnostics.
+- Fixes WSL release validation by making install metadata tests explicitly simulate non-root identity where required.
+
+</details>
+
+<details>
+<summary><b>v7.2.2</b> - Root Install Confirmation Release</summary>
+
+- Adds an explicit root install confirmation gate: `install.sh install` refuses root by default, accepts interactive `yes`, and requires `CCB_ALLOW_ROOT_INSTALL=1` for non-interactive root installs.
+- Keeps uninstall cleanup outside the root confirmation gate, so root-owned installs can still be removed.
+- Records install identity metadata including root status, install user, and sudo user details.
+- Extends `ccb doctor` with runtime user, owner, root state, and a warning when root runs inside a non-root project.
+- Fixes the non-blocking build-info type hygiene issue by returning `dict[str, object]` from `read_build_info()`.
+
+</details>
+
+<details>
 <summary><b>v7.2.1</b> - Antigravity Runtime Follow-Up</summary>
 
 - Completes `agy` / Google Antigravity runtime and session plumbing with provider runtime specs, client specs, public provider-core exports, and `.agy-<agent>-session` naming.

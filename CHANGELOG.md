@@ -73,6 +73,23 @@
 
 ## Unreleased
 
+## v7.2.3 (2026-06-03)
+
+### Root Install Support Validation Hotfix
+
+- **Root Install Support Preserved**: keeps the v7.2.2 root install confirmation gate, install identity metadata, and `ccb doctor` runtime identity diagnostics intact.
+- **WSL Release Validation Fixed**: install metadata tests now explicitly simulate a non-root user when validating metadata quoting, so WSL runners that execute as root no longer fail the release matrix for environment-dependent reasons.
+
+## v7.2.2 (2026-06-03)
+
+### Root Install Confirmation Release
+
+- **Root Install Confirmation Added**: `install.sh install` now refuses root execution by default, requires interactive `yes` confirmation, and requires `CCB_ALLOW_ROOT_INSTALL=1` for non-interactive root installs.
+- **Uninstall Path Kept Ungated**: the root confirmation guard applies only to install operations and does not block uninstall cleanup.
+- **Install Identity Metadata Added**: install metadata now records root status, install user, and sudo user details so future diagnostics can explain how CCB was installed.
+- **Doctor Runtime Identity Diagnostics Added**: `ccb doctor` reports runtime user, owner, root state, and warns when root runs inside a non-root project.
+- **Build Info Type Hygiene Fixed**: `read_build_info()` now returns `dict[str, object]`, resolving the non-blocking type hygiene issue found during architecture review.
+
 ## v7.2.1 (2026-06-02)
 
 ### Antigravity Runtime Follow-Up

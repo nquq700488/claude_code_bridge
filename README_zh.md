@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.2.1-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.2.3-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)
@@ -513,6 +513,26 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
+<summary><b>v7.2.3</b> - Root Install Support Validation Hotfix</summary>
+
+- 保留 v7.2.2 的 root 安装确认行为：root 安装必须显式确认，卸载仍不受该门控影响。
+- 保留安装 identity metadata 和 `ccb doctor` runtime user / owner / root 诊断。
+- 修复 WSL 发布验证：安装 metadata 测试在需要时显式模拟非 root 身份，避免被 runner 实际 root 身份影响。
+
+</details>
+
+<details>
+<summary><b>v7.2.2</b> - Root Install Confirmation Release</summary>
+
+- 新增明确的 root 安装确认门：`install.sh install` 默认拒绝 root 执行，交互输入 `yes` 才允许，非交互 root 安装必须设置 `CCB_ALLOW_ROOT_INSTALL=1`。
+- root 确认门只作用于安装，不阻止卸载清理，因此 root-owned 安装仍可移除。
+- 安装 metadata 现在记录 root 状态、install user 和 sudo user 信息。
+- `ccb doctor` 增加 runtime user、owner、root 状态诊断，并在 root 运行于非 root 项目时给出 warning。
+- 修复架构审查提到的非阻断 build-info 类型卫生项：`read_build_info()` 现在返回 `dict[str, object]`。
+
+</details>
+
+<details>
 <summary><b>v7.2.1</b> - Antigravity Runtime Follow-Up</summary>
 
 - 补齐 `agy` / Google Antigravity 的 runtime 和 session 管线：provider runtime spec、client spec、provider-core 公共导出，以及 `.agy-<agent>-session` 命名。
