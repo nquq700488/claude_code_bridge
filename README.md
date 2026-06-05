@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.2.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.3.2-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **English** | [中文](README_zh.md)
@@ -262,7 +262,7 @@ The built-in default is a v2 `[windows]` config with `agent1`, `agent2`, `agent3
 | Sidebar behavior | `[ui.sidebar]` | Controls whether the sidebar appears in every window, plus width and Comms height. |
 | Tool windows | `[tool_windows.<name>]` | Add managed non-agent windows such as Neovim; they appear as one sidebar row and are not `ask` targets. |
 | Per-agent model/API | `[agents.<name>]` | Configure `model`, `key`, `url`, and related agent-local overrides. |
-| Role Pack binding | `ccb.archi:codex` | Bind a reusable role package through a window leaf; role assets are installed once and projected into the derived agent. |
+| Role Pack binding | `agentroles.archi:codex` | Bind a reusable role package through a window leaf; role assets are installed once and projected into the derived agent. |
 | Role description | `[agents.<name>] description = "..."` | Give an agent a short responsibility note; longer workflow rules belong in memory. |
 
 After editing `.ccb/ccb.config` in a mounted project, run `ccb reload --dry-run` to preview the plan and `ccb reload` to apply it. The explicit reload path can dynamically add agents, add windows, add/remove managed tool windows, unload idle agents, and remove idle windows while keeping unrelated agents and panes running. It does not run as a background file watcher, and unsafe changes such as busy unloads, provider replacement, agent moves, tool command replacement, and arbitrary reshapes are rejected without killing existing panes.
@@ -276,25 +276,26 @@ responsibilities, memory, provider-specific skills, tool hooks, and dependency
 setup. This keeps project config short and makes specialized agents reusable
 instead of copying long role instructions into every project.
 
-The current built-in role is `ccb.archi`, an architecture reviewer role backed
-by Architec. More specialized roles will be added over time. Install or refresh
-bundled roles when prompted during `install.sh install` or `ccb update`; you
-can also refresh manually:
+The current catalog role is `agentroles.archi`, an architecture reviewer role
+from `agent-roles-spec` backed by Architec. More specialized roles will be
+added over time. Install or refresh catalog roles when prompted during
+`install.sh install`; `ccb update` refreshes already installed roles and reports
+new catalog roles. You can also refresh manually:
 
 ```bash
-ccb roles update ccb.archi
+ccb roles update agentroles.archi
 ```
 
 To use the role in a project, add it as a window leaf:
 
 ```bash
-ccb roles add ccb.archi:codex
+ccb roles add agentroles.archi:codex
 ccb reload
 ```
 
-This writes the compact form `ccb.archi:codex`. At runtime CCB resolves it to
-the project-local agent `archi`, then projects the role memory and skills into
-that agent's managed provider home.
+This writes the compact form `agentroles.archi:codex`. At runtime CCB resolves
+it to the project-local agent `archi`, then projects the role memory and skills
+into that agent's managed provider home.
 
 <details>
 <summary><b>Config format examples: single window, multi-window, per-agent model/API</b></summary>
@@ -520,6 +521,113 @@ v7 highlights:
 - Hardened tmux, Ghostty, release helper, Codex trust, and provider session restore paths.
 
 <details open>
+<summary><b>v7.3.2</b> - First-Install Role Pack Provisioning Hotfix</summary>
+
+- Fixes a blank-environment first install bug where `install.sh` tried to update `agentroles.archi` before it was installed, leaving Role Pack provisioning incomplete.
+- Keeps the existing install refresh path: `ccb roles update agentroles.archi` is still attempted first, then falls back to `ccb roles install agentroles.archi` when the role is missing.
+- Aligns optional Role Pack skip messaging with the install path.
+- Supersedes v7.3.1 as the recommended stable release for new installs; v7.3.1 is published but has the blank first-install Role Pack provisioning bug.
+
+</details>
+
+<details>
+<summary><b>v7.3.1</b> - Agent Roles, Artifact Ask, And Shared Workspace Release</summary>
+
+- Adds daemon-managed ask artifact transport with `--artifact-request`, `--artifact-reply`, and `--artifact-io`, including callback-compatible artifact replies for long outputs.
+- Finalizes the Agent Roles store path around the external `agent-roles` manager and `.roles/installed`, while preserving `ccb.archi` compatibility for `agentroles.archi`.
+- Adds shared workspace controls with `workspace_path` and `workspace_group`, plus `provider_command_template` for wrapping the CCB-built provider command without breaking resume handling.
+- Fixes Claude startup under root, OpenCode `ccb clear` submit timing after restored sessions, and managed Neovim activation so the original runtime path is preserved.
+- Refreshes inherited `ask` and `ccb-config` skills for submit-only ask rules, artifact modes, windows-first config, shared workspaces, and provider command templates.
+- Stabilizes WSL/root release tests by making non-root Claude command assertions independent from the runner UID.
+
+</details>
+
+<details>
+<summary><b>v7.3.0</b> - Superseded Prerelease</summary>
+
+- Superseded by v7.3.1 after the remote WSL Tests workflow exposed root-sensitive Claude command assertions. The v7.3.0 GitHub release was kept as a prerelease and did not upload official release artifacts.
+
+</details>
+
+<details>
+<summary><b>v7.2.12</b> - Agent Roles Store Migration Release</summary>
+
+- Uses the external `agent-roles` package manager by default for Role Pack install, update, and sync.
+- Writes Role Pack payloads into the spec-owned `.roles/installed` store.
+- Copies existing legacy installed role snapshots into `.roles/installed` without deleting the old store; runtime lookup reads the spec-owned store only after migration.
+- Routes `ccb roles update --path ...` through the Agent Roles manager so path updates also write `.roles/installed`.
+- Supersedes v7.2.11, which was an incomplete opt-in preview release and should not be used as the recommended release.
+
+</details>
+
+<details>
+<summary><b>v7.2.11</b> - Superseded Agent Roles Opt-In Preview</summary>
+
+- Superseded by v7.2.12 after the release direction changed from an opt-in `CCB_AGENT_ROLES_MANAGER=1` preview to a default-on Agent Roles manager migration.
+
+</details>
+
+<details>
+<summary><b>v7.2.10</b> - Role Pack Post-Update Hotfix</summary>
+
+- Fixes managed `ccb update` so optional Role Pack and Neovim provisioning runs through the newly installed `ccb __post-update` entrypoint instead of the old updater process.
+- Repairs legacy installed `ccb.archi` role metadata under canonical `agentroles.archi` and falls back to the current catalog source when old source paths are gone.
+- Preserves optional post-update provisioning as warnings, while `CCB_INSTALL_ROLES=1`, `CCB_INSTALL_NEOVIM=1`, or `CCB_POST_UPDATE_REQUIRED=1` still fail the parent update when required provisioning fails.
+- Keeps new config guidance on `agentroles.archi`; `ccb.archi` remains a legacy input alias only.
+
+</details>
+
+<details>
+<summary><b>v7.2.9</b> - Agent Roles Catalog Release</summary>
+
+- Moves the production architecture role out of the CCB source tree and consumes `agentroles.archi` from `agent-roles-spec`.
+- Adds catalog-backed role list/install/update/sync/add/doctor behavior with installed-role metadata, project locks, digest pinning, and explicit re-add updates.
+- Projects role memory, CCB adapter memory, provider skills, and Architec adapter hooks into managed provider homes.
+- Keeps `ccb.archi` as a compatibility alias while writing canonical `agentroles.archi` bindings and locks.
+- Fixes the source runtime guard so `ccb --project <allowed-test-dir> ...` smoke commands launched from the source checkout pass the release gate.
+- Passes generated soak, fastpath, and storage cleanup smoke roots through `CCB_SOURCE_ALLOWED_ROOTS`.
+- Passes the WSL mounted startup smoke project under `/mnt/c/Temp` through `CCB_SOURCE_ALLOWED_ROOTS`.
+- Hardens the Claude restart provider blackbox test to wait for the running partial reply before asserting it.
+- Hardens Role Pack CI fixtures so full GitHub Actions tests do not require a sibling `agent-roles-spec` checkout.
+
+</details>
+
+<details>
+<summary><b>v7.2.8</b> - Superseded Role Fixture Hotfix</summary>
+
+- Superseded by v7.2.9 after the release gate found that full GitHub Actions runners did not have the sibling `agent-roles-spec` checkout expected by Role Pack tests.
+
+</details>
+
+<details>
+<summary><b>v7.2.7</b> - Superseded WSL Mounted Smoke Hotfix</summary>
+
+- Superseded by v7.2.8 after the release gate found a provider blackbox timing race in the Claude restart partial-reply assertion.
+
+</details>
+
+<details>
+<summary><b>v7.2.6</b> - Superseded Official Smoke Root Hotfix</summary>
+
+- Superseded by v7.2.7 after the release gate found that the WSL mounted startup smoke in the main Tests workflow also needed its generated `/mnt/c/Temp` project in `CCB_SOURCE_ALLOWED_ROOTS`.
+
+</details>
+
+<details>
+<summary><b>v7.2.5</b> - Superseded Source Runtime Guard Hotfix</summary>
+
+- Superseded by v7.2.6 after the release gate found that official soak, fastpath, and storage cleanup smoke checks needed explicit generated test roots in `CCB_SOURCE_ALLOWED_ROOTS`.
+
+</details>
+
+<details>
+<summary><b>v7.2.4</b> - Superseded Agent Roles Catalog Release</summary>
+
+- Superseded by v7.2.5 after the release gate found that source checkout `--project` commands were rejected from the source cwd during CCBD real platform smoke checks.
+
+</details>
+
+<details>
 <summary><b>v7.2.3</b> - Root Install Support Validation Hotfix</summary>
 
 - Keeps the root install confirmation behavior from v7.2.2: root installs require explicit confirmation, while uninstall remains ungated.

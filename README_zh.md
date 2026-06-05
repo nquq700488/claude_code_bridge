@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.2.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.3.2-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)
@@ -257,7 +257,7 @@ CCB 配置有三层，优先级从低到高：
 | sidebar 行为 | `[ui.sidebar]` | 控制 sidebar 是否每个 window 都显示、宽度和 Comms 高度。 |
 | 工具 window | `[tool_windows.<name>]` | 添加 Neovim 这类非 agent 托管 window；sidebar 只显示一行，不是 `ask` 目标。 |
 | 单 agent 模型/API | `[agents.<name>]` | 可为不同 agent 配 `model`、`key`、`url` 等。 |
-| Role Pack 绑定 | `ccb.archi:codex` | 通过 window leaf 绑定可复用角色包；role 资产统一安装，再投影到解析出的 agent。 |
+| Role Pack 绑定 | `agentroles.archi:codex` | 通过 window leaf 绑定可复用角色包；role 资产统一安装，再投影到解析出的 agent。 |
 | 角色说明 | `[agents.<name>] description = "..."` | 给 agent 一个简短职责说明；更长的工作流规则建议写到 memory。 |
 
 在已启动的项目里修改 `.ccb/ccb.config` 后，先运行 `ccb reload --dry-run` 预览计划，再运行 `ccb reload` 应用。显式 reload 可以动态新增 agent、新增 window、新增/删除托管工具 window、卸载 idle agent、删除 idle window，同时保持无关 agent 和 pane 继续运行。它不是后台文件监听；busy agent 卸载、provider 替换、agent 移动、工具命令替换和任意布局重排会被拒绝，不会 kill 现有 pane。
@@ -270,22 +270,23 @@ Role Pack 用来定义可复用的 agent 角色。一个 role 可以包含稳定
 记忆、provider-specific skills、工具 hooks 和依赖准备逻辑。这样项目配置会更短，
 专门角色也能跨项目复用，不需要在每个项目里复制一大段角色说明。
 
-目前内置 role 只有 `ccb.archi`，用于架构审查，并由 Architec 支撑；后续会
-陆续引入更多专业角色。在 `install.sh install` 或 `ccb update` 时确认安装/刷新
-bundled roles 即可；也可以手动刷新：
+目前 catalog role 里已有 `agentroles.archi`，用于架构审查，来自
+`agent-roles-spec`，并由 Architec 支撑；后续会陆续引入更多专业角色。
+在 `install.sh install` 时确认安装/刷新 catalog roles；`ccb update` 会刷新
+已安装 role，并报告新 catalog role。也可以手动刷新：
 
 ```bash
-ccb roles update ccb.archi
+ccb roles update agentroles.archi
 ```
 
 在项目里使用这个 role 时，把它作为 window leaf 加进去：
 
 ```bash
-ccb roles add ccb.archi:codex
+ccb roles add agentroles.archi:codex
 ccb reload
 ```
 
-这会写入紧凑形式 `ccb.archi:codex`。运行时 CCB 会把它解析成项目本地
+这会写入紧凑形式 `agentroles.archi:codex`。运行时 CCB 会把它解析成项目本地
 agent `archi`，并把 role memory 和 skills 投影到该 agent 的 managed
 provider home。
 
@@ -513,6 +514,113 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
+<summary><b>v7.3.2</b> - 首次安装 Role Pack provisioning 修复</summary>
+
+- 修复完全空白环境首次安装时的 Role Pack provisioning 问题：`install.sh` 在 `agentroles.archi` 尚未安装时先执行 update，可能导致 provisioning 未完成。
+- 保留已有安装的刷新路径：仍先执行 `ccb roles update agentroles.archi`，当返回 role not installed / run roles install / run agent-roles install 时 fallback 到 `ccb roles install agentroles.archi`。
+- 将可选 Role Pack provisioning 的 skip 提示从 update 对齐为 install。
+- v7.3.1 仍是已发布版本，但存在空白环境首次安装 Role Pack provisioning bug；新安装和稳定推荐版本请使用 v7.3.2。
+
+</details>
+
+<details>
+<summary><b>v7.3.1</b> - Agent Roles、Artifact Ask 和共享 Workspace Release</summary>
+
+- 新增 daemon 管理的 ask artifact 传输：`--artifact-request`、`--artifact-reply` 和 `--artifact-io`，长输出可通过 callback 继续传递 artifact 路径。
+- Agent Roles store 路径稳定到外部 `agent-roles` manager 和 `.roles/installed`，同时保留 `ccb.archi` 到 `agentroles.archi` 的兼容输入。
+- 新增 `workspace_path`、`workspace_group` 共享 workspace 控制，以及 `provider_command_template`，可包裹 CCB 构造好的 provider 启动命令且不破坏 resume。
+- 修复 root 下 Claude 启动、OpenCode 恢复旧会话后 `ccb clear` submit 时序、managed Neovim 原始 runtime 路径保留。
+- 刷新继承的 `ask` 和 `ccb-config` skills，覆盖 submit-only ask 规则、artifact 模式、windows-first 配置、共享 workspace 和 provider command template。
+- 稳定 WSL/root 发布测试，让非 root Claude 命令断言不再受 runner UID 影响。
+
+</details>
+
+<details>
+<summary><b>v7.3.0</b> - Superseded Prerelease</summary>
+
+- 已由 v7.3.1 supersede；远端 WSL Tests workflow 暴露了 root-sensitive Claude 命令断言。v7.3.0 GitHub release 保留为 prerelease，未上传正式 release artifacts。
+
+</details>
+
+<details>
+<summary><b>v7.2.12</b> - Agent Roles Store Migration Release</summary>
+
+- 默认使用外部 `agent-roles` package manager 执行 Role Pack install、update 和 sync。
+- Role Pack payload 默认写入 spec-owned `.roles/installed` store。
+- 自动将已有 legacy installed role snapshot 复制到 `.roles/installed`，不删除旧 store；迁移后 runtime lookup 只读取 spec-owned store。
+- `ccb roles update --path ...` 也会通过 Agent Roles manager，path update 不再写 legacy CCB store。
+- Supersede v7.2.11；v7.2.11 是未完成的 opt-in preview 发布，不应作为推荐版本使用。
+
+</details>
+
+<details>
+<summary><b>v7.2.11</b> - Superseded Agent Roles Opt-In Preview</summary>
+
+- 已被 v7.2.12 supersede，因为发布方向从 opt-in `CCB_AGENT_ROLES_MANAGER=1` preview 改为 default-on Agent Roles manager migration。
+
+</details>
+
+<details>
+<summary><b>v7.2.10</b> - Role Pack Post-Update Hotfix</summary>
+
+- 修复 managed `ccb update`：可选 Role Pack 和 Neovim provisioning 现在会交给新安装的 `ccb __post-update` entrypoint 执行，不再由旧 updater 进程继续跑。
+- 将 legacy installed `ccb.archi` metadata 修复到 canonical `agentroles.archi`，旧 `source_path` 已不存在时会回退到当前 catalog source。
+- 可选 post-update provisioning 失败仍只作为 warning；但设置 `CCB_INSTALL_ROLES=1`、`CCB_INSTALL_NEOVIM=1` 或 `CCB_POST_UPDATE_REQUIRED=1` 时，required provisioning 失败会让父 update 失败。
+- 新配置说明统一使用 `agentroles.archi`；`ccb.archi` 仅保留为 legacy input alias。
+
+</details>
+
+<details>
+<summary><b>v7.2.9</b> - Agent Roles Catalog Release</summary>
+
+- 将生产架构角色从 CCB 源码树移出，改为从 `agent-roles-spec` 消费 `agentroles.archi`。
+- 增加 catalog 驱动的 role list/install/update/sync/add/doctor 流程，并覆盖 installed-role metadata、project lock、digest pinning 和显式 re-add 更新。
+- 将 role memory、CCB adapter memory、provider skills 和 Architec adapter hooks 投影到 managed provider home。
+- 保留 `ccb.archi` 兼容输入别名，但写入 canonical `agentroles.archi` binding 和 lock。
+- 修复 source runtime guard：从源码 checkout cwd 发起的 `ccb --project <allowed-test-dir> ...` smoke 命令现在会按目标项目校验，可通过发布 gate。
+- 将生成的 soak、fastpath 和 storage cleanup smoke 目录显式传入 `CCB_SOURCE_ALLOWED_ROOTS`。
+- 将 WSL mounted startup smoke 在 `/mnt/c/Temp` 下生成的项目显式传入 `CCB_SOURCE_ALLOWED_ROOTS`。
+- 加固 Claude restart provider blackbox 测试：等待 running partial reply 反映出来后再断言。
+- 加固 Role Pack CI fixture，使完整 GitHub Actions 测试不再依赖 sibling `agent-roles-spec` checkout。
+
+</details>
+
+<details>
+<summary><b>v7.2.8</b> - Superseded Role Fixture Hotfix</summary>
+
+- v7.2.8 已由 v7.2.9 取代；发布 gate 发现完整 GitHub Actions runner 没有 Role Pack 测试预期的 sibling `agent-roles-spec` checkout。
+
+</details>
+
+<details>
+<summary><b>v7.2.7</b> - Superseded WSL Mounted Smoke Hotfix</summary>
+
+- v7.2.7 已由 v7.2.8 取代；发布 gate 发现 Claude restart partial-reply 断言存在 provider blackbox timing race。
+
+</details>
+
+<details>
+<summary><b>v7.2.6</b> - Superseded Official Smoke Root Hotfix</summary>
+
+- v7.2.6 已由 v7.2.7 取代；发布 gate 发现 main Tests workflow 里的 WSL mounted startup smoke 也需要把 `/mnt/c/Temp` 下生成的项目传入 `CCB_SOURCE_ALLOWED_ROOTS`。
+
+</details>
+
+<details>
+<summary><b>v7.2.5</b> - Superseded Source Runtime Guard Hotfix</summary>
+
+- v7.2.5 已由 v7.2.6 取代；发布 gate 发现官方 soak、fastpath 和 storage cleanup smoke 需要把生成的测试根显式传入 `CCB_SOURCE_ALLOWED_ROOTS`。
+
+</details>
+
+<details>
+<summary><b>v7.2.4</b> - Superseded Agent Roles Catalog Release</summary>
+
+- v7.2.4 已由 v7.2.5 取代；发布 gate 发现源码 checkout cwd 发起的 `--project` 命令会在 CCBD real platform smoke 中被 source runtime guard 拒绝。
+
+</details>
+
+<details>
 <summary><b>v7.2.3</b> - Root Install Support Validation Hotfix</summary>
 
 - 保留 v7.2.2 的 root 安装确认行为：root 安装必须显式确认，卸载仍不受该门控影响。

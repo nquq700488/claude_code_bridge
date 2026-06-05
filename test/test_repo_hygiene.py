@@ -157,12 +157,49 @@ def test_ccb_config_skill_uses_current_config_authority() -> None:
         assert "result.source_kind" in skill_text
         assert "Explicit windows topology uses `version = 2`, `[windows]`" in skill_text
         assert "treat it as a migration task" in skill_text
-        assert "Migration to `[windows]` is opt-in" in skill_text
+        assert "Migration to `[windows]` is the default recommendation" in skill_text
+        assert "workspace_group" in skill_text
+        assert "provider_command_template" in skill_text
         assert "Do not write `.ccb_config/ccb.config`" in reference_text
         assert "## Explicit Windows Topology" in reference_text
         assert "## Migrating Old Configs To Windows" in reference_text
         assert "Old compact and hybrid configs are still valid single-window configs" in reference_text
         assert "cmd` is not supported inside `[windows]` topology" in reference_text
+        assert "workspace_path" in reference_text
+        assert "workspace_group" in reference_text
+        assert "provider_command_template" in reference_text
+
+
+def test_ccb_config_role_pack_docs_use_agentroles_archi_with_legacy_alias_only() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    allowed_legacy_context = ("legacy", "migration", "not `ccb.archi`", "do not write `ccb.archi`", "rewrite")
+    forbidden_new_usage = (
+        "ccb roles install ccb.archi",
+        "ccb roles doctor ccb.archi",
+        "ccb roles add ccb.archi",
+        'role = "ccb.archi"',
+        "ccb.archi:codex",
+    )
+    for provider_root in ("claude_skills", "codex_skills"):
+        paths = (
+            repo_root / "inherit_skills" / provider_root / "ccb-config" / "SKILL.md",
+            repo_root / "inherit_skills" / provider_root / "ccb-config" / "references" / "ccb-config.md",
+        )
+        for path in paths:
+            text = path.read_text(encoding="utf-8")
+
+            assert "agentroles.archi:codex" in text
+            assert 'role = "agentroles.archi"' in text
+            assert "ccb roles install agentroles.archi" in text
+            assert "ccb roles doctor agentroles.archi" in text
+            assert "ccb roles add agentroles.archi:codex" in text
+            assert "ccb ask archi" in text
+            for forbidden in forbidden_new_usage:
+                assert forbidden not in text
+            for line in text.splitlines():
+                if "ccb.archi" in line:
+                    lowered = line.lower()
+                    assert any(context in lowered for context in allowed_legacy_context), line
 
 
 def test_ccb_config_memory_patterns_describe_callback_routing() -> None:

@@ -1,5 +1,169 @@
 ## Unreleased
 
+# Changelog
+
+## v7.3.2 (2026-06-05)
+
+### First-Install Role Pack Provisioning Hotfix
+
+- **Blank Install Role Pack Provisioning Fixed**: release and source installs
+  in a completely blank environment now recover when the initial
+  `ccb roles update agentroles.archi` reports that the role is not installed.
+  The installer falls back to `ccb roles install agentroles.archi`, allowing
+  the first install to provision `.roles/installed` and the `ccb-archi`
+  wrapper automatically.
+- **Existing Install Refresh Preserved**: existing installations still use the
+  update path first, so already-installed Role Packs continue to refresh in
+  place without forcing a reinstall.
+- **Install Prompt Copy Aligned**: optional Role Pack provisioning skip text now
+  refers to install rather than update, matching the blank-install path.
+- **v7.3.1 Superseded For First Installs**: v7.3.1 remains a published release
+  but has a known first-install Role Pack provisioning bug in blank
+  environments. Use v7.3.2 as the recommended stable release.
+
+## v7.3.1 (2026-06-05)
+
+### Agent Roles, Artifact Ask, And Shared Workspace Release
+
+- **Agent Roles Store Flow Simplified**: CCB now uses the external Agent Roles
+  manager as the only Role Pack writer and reads installed roles only from
+  `.roles/installed`. The old CCB-owned writer and
+  `CCB_AGENT_ROLES_MANAGER` rollback switch were removed.
+- **Legacy Role Store Is Migration-Only**: existing `$XDG_DATA_HOME/ccb/roles`
+  snapshots are copied into `.roles/installed` at management boundaries, but
+  runtime lookup no longer falls back to the legacy store.
+- **Role Add Aligned With Agent Roles**: `ccb roles add` now auto-installs
+  missing system-source roles through `agent-roles --path`, preserving
+  `ccb.archi` compatibility while writing canonical `agentroles.archi`
+  bindings and locks.
+- **Ask Artifact Transport Added**: `ask` and `ccb ask` now support
+  `--artifact-request`, `--artifact-reply`, and `--artifact-io` so large or
+  explicitly artifact-backed request/reply bodies can be stored as CCB text
+  artifacts while the visible message carries the file path, byte count, and
+  digest.
+- **Callback Artifact Replies Preserved**: daemon-managed artifact replies work
+  with callback continuations, letting child agents return long evidence through
+  artifact paths without requiring agent-authored sentinel files.
+- **OpenCode Clear Timing Fixed**: `ccb clear` adds an OpenCode-only submit
+  delay after restoring old sessions, fixing cases where `/clear` appeared in
+  the pane but was not submitted automatically.
+- **Managed Neovim Runtime Path Preserved**: managed Neovim activation now
+  links or wraps the extracted original binary instead of copying the bare
+  executable, so Neovim can still resolve its relative `../lib/nvim/runtime`
+  tree and LazyVim health checks pass.
+- **Claude Root Startup Fixed**: managed Claude startup under root now includes
+  the required sandbox environment and permission bypass flags
+  (`IS_SANDBOX=1` and `--dangerously-skip-permissions`) while keeping the root
+  install confirmation safeguards from v7.2.2/v7.2.3.
+- **Shared Workspace Controls Added**: `.ccb/ccb.config` supports
+  `workspace_path` for explicitly pointing an agent at an external worktree and
+  `workspace_group` for sharing an internal grouped worktree across multiple
+  agents.
+- **Provider Command Templates Added**: agent config supports
+  `provider_command_template`, where `{command}` expands to CCB's normal
+  provider startup command after resume/session logic has been applied. This
+  allows wrappers such as environment assignments or extra flags before/after
+  the provider command without replacing the resume flow.
+- **Config Skill Updated**: inherited `ccb-config` skills now default to a
+  windows-first topology discussion, proactively clarify key choices, and cover
+  Agent Roles, shared workspaces, and provider command templates.
+- **Ask Skill Guidance Tightened**: inherited `ask` skills now make submit-only
+  behavior, callback-only nested ask, artifact modes, and diagnostics-only
+  `ask get`/`pend`/`watch`/`ping` commands explicit.
+- **Source Development Isolation Preserved**: project memory and release
+  guidance keep source checkout changes isolated from the system-installed CCB;
+  development runtime testing should use `ccb_test` from external test projects
+  such as `test_ccb2`.
+- **Test Gates Stabilized**: Role Pack tests now use a fake Agent Roles CLI that
+  does not require `tomllib`, `tomli`, or `toml` in the subprocess interpreter,
+  and inherited ask skill template checks remain stable across line wrapping.
+- **WSL Root Test Assertions Stabilized**: Claude command tests that verify
+  ordinary non-root command tails now force the mocked root detector to false,
+  keeping remote WSL/root runners from appending root compatibility flags to
+  non-root expectations.
+- **v7.2.x Hotfixes Included**: this release also carries the v7.2.x fixes for
+  Antigravity runtime follow-up, source checkout guards, WSL mounted-drive smoke
+  roots, provider blackbox wait timing, Role Pack CI fixtures, post-update role
+  migration, and release artifact dispatch.
+
+## v7.3.0 (2026-06-05)
+
+### Superseded Prerelease
+
+- Superseded by v7.3.1 after the remote WSL Tests workflow exposed root-sensitive
+  Claude command assertions. The GitHub release was kept as a prerelease and did
+  not upload official Linux/macOS release artifacts.
+
+## v7.2.12 (2026-06-04)
+
+### Agent Roles Store Migration Release
+
+- **Agent Roles Manager Default Enabled**: Role Pack install, update, and sync now use the external `agent-roles` package manager and write role payloads into the spec-owned `.roles/installed` store by default.
+- **Legacy Store Migration Added**: existing `$XDG_DATA_HOME/ccb/roles` installed snapshots are copied into `.roles/installed` at Role Pack management boundaries without deleting the old store, preserving existing project lock digest resolution.
+- **Path Update Aligned**: `ccb roles update --path ...` now also routes through the Agent Roles manager and writes `.roles/installed` instead of the legacy CCB store.
+- **Sync Validation Hardened**: malformed `agent-roles sync --json` role rows now fail closed, while `ccb roles sync --with-tools` composes manager-owned payload sync with CCB-owned tool hook execution.
+- **Role Config Guidance Updated**: inherited `ccb-config` skill docs now describe `.roles/installed` as the default package store while keeping `.ccb/ccb.config` limited to canonical role ids.
+
+## v7.2.11 (2026-06-04)
+
+### Superseded Agent Roles Opt-In Preview
+
+- Superseded by v7.2.12 after the release direction changed from an opt-in `CCB_AGENT_ROLES_MANAGER=1` preview to a default-on Agent Roles manager migration. Do not use v7.2.11 as the recommended release.
+
+## v7.2.10 (2026-06-04)
+
+### Role Pack Post-Update Hotfix
+
+- **Post-Update Handoff Fixed**: `ccb update` now installs the new release, smoke-checks the installed entrypoint, and delegates Role Pack plus Neovim provisioning to the newly installed `ccb __post-update` command instead of continuing with the old updater process.
+- **Legacy Role Store Repair Added**: installed `ccb.archi` metadata is repaired under canonical `agentroles.archi`, and stale removed source paths fall back to the current catalog role source.
+- **Forced Provisioning Failure Propagates**: `CCB_INSTALL_ROLES=1`, `CCB_INSTALL_NEOVIM=1`, and `CCB_POST_UPDATE_REQUIRED=1` now make post-update subprocess failures fail the parent update, while optional post-update provisioning remains a warning after the core update succeeds.
+- **Role Config Guidance Aligned**: inherited `ccb-config` skill docs now generate `agentroles.archi` bindings and mention `ccb.archi` only as a legacy migration alias.
+
+## v7.2.9 (2026-06-04)
+
+### Agent Roles Catalog Release
+
+- **Agent Roles Catalog Added**: CCB now consumes `agentroles.archi` from the external `agent-roles-spec` catalog instead of shipping production role content inside the CCB source tree.
+- **Catalog Role Lifecycle Hardened**: `ccb roles list/install/update/sync/add/doctor` now works with catalog roles, installed-role metadata, project locks, digest pinning, and explicit re-add semantics.
+- **Runtime Projection Preserved**: role memory, adapter memory, provider skills, and CCB adapter tool hooks project into managed Codex/Claude homes for `agentroles.archi`.
+- **Update Flow Improved**: `install.sh install` and `ccb update` handle catalog role refreshes, report newly available roles, and keep non-interactive follow-up commands explicit.
+- **Compatibility Alias Kept**: legacy `ccb.archi` inputs resolve to `agentroles.archi` while project config and locks use the canonical catalog role id.
+- **Source Runtime Guard Fixed**: source checkout commands that pass `--project` now validate the target project against allowed test roots, restoring CCBD communication smoke checks launched from the source checkout.
+- **Official Smoke Roots Fixed**: real-platform soak, fastpath, and storage cleanup smoke checks now pass their generated test roots through `CCB_SOURCE_ALLOWED_ROOTS`.
+- **WSL Mounted Startup Smoke Fixed**: the main Tests workflow now passes the generated `/mnt/c/Temp` startup-smoke project through `CCB_SOURCE_ALLOWED_ROOTS`.
+- **Provider Blackbox Wait Hardened**: the Claude restart blackbox test now waits for the running partial reply to be reflected before asserting it.
+- **Role Pack CI Fixture Hardened**: Role Pack tests now use an isolated `agentroles.archi` preview fixture instead of requiring a sibling `agent-roles-spec` checkout in CI.
+
+## v7.2.8 (2026-06-04)
+
+### Superseded Role Fixture Hotfix
+
+- Superseded by v7.2.9 after the release gate found that full GitHub Actions runners did not have the sibling `agent-roles-spec` checkout expected by Role Pack tests.
+
+## v7.2.7 (2026-06-04)
+
+### Superseded WSL Mounted Smoke Hotfix
+
+- Superseded by v7.2.8 after the release gate found a provider blackbox timing race in the Claude restart partial-reply assertion.
+
+## v7.2.6 (2026-06-04)
+
+### Superseded Official Smoke Root Hotfix
+
+- Superseded by v7.2.7 after the release gate found that the WSL mounted startup smoke in the main Tests workflow also needed its generated `/mnt/c/Temp` project in `CCB_SOURCE_ALLOWED_ROOTS`.
+
+## v7.2.5 (2026-06-04)
+
+### Superseded Source Runtime Guard Hotfix
+
+- Superseded by v7.2.6 after the release gate found that official soak, fastpath, and storage cleanup smoke checks needed explicit generated test roots in `CCB_SOURCE_ALLOWED_ROOTS`.
+
+## v7.2.4 (2026-06-04)
+
+### Superseded Agent Roles Catalog Release
+
+- Superseded by v7.2.5 after the release gate found that source checkout `--project` commands were rejected from the source cwd during CCBD real platform smoke checks.
+
 ### Provider Session Binding Refresh (Claude, OpenCode, Kimi)
 
 - **Stale Result After Idle Fixed**: Claude, OpenCode, and Kimi execution adapters now call `_refresh_reader_for_current_session_binding()` at the start of every `poll()`, following the Codex pattern established in ISSUE-017. This prevents stale readers from returning old completion results after long idle periods where the provider CLI created a new local session.

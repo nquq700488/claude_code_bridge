@@ -58,7 +58,7 @@ def test_submit_ask_resolves_unique_role_id_alias(monkeypatch: pytest.MonkeyPatc
     captured: dict[str, object] = {}
 
     class _Spec:
-        role = 'ccb.archi'
+        role = 'agentroles.archi'
 
     class _FakeClient:
         def submit(self, envelope) -> dict:
@@ -85,10 +85,50 @@ def test_submit_ask_resolves_unique_role_id_alias(monkeypatch: pytest.MonkeyPatc
 
     summary = ask_service.submit_ask(
         context,
-        ParsedAskCommand(project=None, target='ccb.archi', sender=None, message='review'),
+        ParsedAskCommand(project=None, target='agentroles.archi', sender=None, message='review'),
     )
 
     assert captured == {'to_agent': 'archi', 'delivery_scope': DeliveryScope.SINGLE}
+    assert summary.jobs[0]['agent_name'] == 'archi'
+
+
+def test_submit_ask_resolves_legacy_role_id_alias(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-legacy-role-alias'
+    project_root.mkdir()
+    context = _build_context(project_root)
+    captured: dict[str, object] = {}
+
+    class _Spec:
+        role = 'agentroles.archi'
+
+    class _FakeClient:
+        def submit(self, envelope) -> dict:
+            captured['to_agent'] = envelope.to_agent
+            return {
+                'job_id': 'job_1',
+                'agent_name': 'archi',
+                'target_name': 'archi',
+                'status': 'accepted',
+            }
+
+    monkeypatch.setattr(
+        ask_service,
+        'load_project_config',
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': object(), 'archi': _Spec()})),
+    )
+    monkeypatch.setattr(ask_service, 'resolve_ask_sender', lambda context, sender: 'agent1')
+    monkeypatch.setattr(
+        ask_service,
+        'invoke_mounted_daemon',
+        lambda context, allow_restart_stale, request_fn: request_fn(_FakeClient()),
+    )
+
+    summary = ask_service.submit_ask(
+        context,
+        ParsedAskCommand(project=None, target='ccb.archi', sender=None, message='review'),
+    )
+
+    assert captured == {'to_agent': 'archi'}
     assert summary.jobs[0]['agent_name'] == 'archi'
 
 
@@ -103,10 +143,10 @@ def test_submit_ask_role_id_alias_requires_binding(monkeypatch: pytest.MonkeyPat
         lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': object()})),
     )
 
-    with pytest.raises(ValueError, match='role ccb.archi is not bound to any configured agent'):
+    with pytest.raises(ValueError, match='role agentroles.archi is not bound to any configured agent'):
         ask_service.submit_ask(
             context,
-            ParsedAskCommand(project=None, target='ccb.archi', sender=None, message='review'),
+            ParsedAskCommand(project=None, target='agentroles.archi', sender=None, message='review'),
         )
 
 
@@ -116,7 +156,7 @@ def test_submit_ask_role_id_alias_rejects_multiple_bindings(monkeypatch: pytest.
     context = _build_context(project_root)
 
     class _Spec:
-        role = 'ccb.archi'
+        role = 'agentroles.archi'
 
     monkeypatch.setattr(
         ask_service,
@@ -126,10 +166,10 @@ def test_submit_ask_role_id_alias_rejects_multiple_bindings(monkeypatch: pytest.
         ),
     )
 
-    with pytest.raises(ValueError, match='role ccb.archi is bound to multiple agents: archi, archi_review'):
+    with pytest.raises(ValueError, match='role agentroles.archi is bound to multiple agents: archi, archi_review'):
         ask_service.submit_ask(
             context,
-            ParsedAskCommand(project=None, target='ccb.archi', sender=None, message='review'),
+            ParsedAskCommand(project=None, target='agentroles.archi', sender=None, message='review'),
         )
 
 
@@ -238,6 +278,51 @@ def test_submit_ask_maps_callback_route_options(monkeypatch: pytest.MonkeyPatch,
     assert captured['route_options'] == {'mode': 'callback'}
 
 
+def test_submit_ask_maps_artifact_route_options(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-artifact-routes'
+    project_root.mkdir()
+    context = _build_context(project_root)
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        def submit(self, envelope) -> dict:
+            captured['route_options'] = envelope.route_options
+            return {
+                'job_id': 'job_1',
+                'agent_name': 'agent2',
+                'target_name': 'agent2',
+                'status': 'accepted',
+            }
+
+    monkeypatch.setattr(
+        ask_service,
+        'load_project_config',
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
+    )
+    monkeypatch.setattr(ask_service, 'resolve_ask_sender', lambda context, sender: 'agent1')
+    monkeypatch.setattr(
+        ask_service,
+        'invoke_mounted_daemon',
+        lambda context, allow_restart_stale, request_fn: request_fn(_FakeClient()),
+    )
+
+    summary = ask_service.submit_ask(
+        context,
+        ParsedAskCommand(
+            project=None,
+            target='agent2',
+            sender=None,
+            message='collect evidence',
+            callback=True,
+            artifact_request=True,
+            artifact_reply=True,
+        ),
+    )
+
+    assert summary.jobs[0]['job_id'] == 'job_1'
+    assert captured['route_options'] == {'mode': 'callback', 'artifact_request': True, 'artifact_reply': True}
+
+
 def test_submit_ask_spills_large_body_before_daemon_submit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-ask-large-body'
     project_root.mkdir()
@@ -284,6 +369,60 @@ def test_submit_ask_spills_large_body_before_daemon_submit(monkeypatch: pytest.M
     artifact_text = artifact_path.read_text(encoding='utf-8')
     assert artifact_text.startswith('alpha-')
     assert 'omega' in artifact_text
+    assert 'CCB reply guidance:' in artifact_text
+
+
+def test_submit_ask_forces_small_body_artifact(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-forced-body-artifact'
+    project_root.mkdir()
+    context = _build_context(project_root)
+    captured: dict[str, object] = {}
+
+    class _FakeClient:
+        def submit(self, envelope) -> dict:
+            captured['body'] = envelope.body
+            captured['body_artifact'] = envelope.body_artifact
+            return {
+                'job_id': 'job_1',
+                'agent_name': 'agent2',
+                'target_name': 'agent2',
+                'status': 'accepted',
+            }
+
+    monkeypatch.setattr(
+        ask_service,
+        'load_project_config',
+        lambda project_root: SimpleNamespace(config=SimpleNamespace(agents={'agent1': {}, 'agent2': {}})),
+    )
+    monkeypatch.setattr(ask_service, 'resolve_ask_sender', lambda context, sender: 'agent1')
+    monkeypatch.setattr(
+        ask_service,
+        'invoke_mounted_daemon',
+        lambda context, allow_restart_stale, request_fn: request_fn(_FakeClient()),
+    )
+
+    summary = ask_service.submit_ask(
+        context,
+        ParsedAskCommand(
+            project=None,
+            target='agent2',
+            sender=None,
+            message='short task',
+            artifact_request=True,
+        ),
+    )
+
+    assert summary.jobs[0]['job_id'] == 'job_1'
+    body = str(captured['body'])
+    artifact = captured['body_artifact']
+    assert 'stored as an artifact by --artifact-request' in body
+    assert 'Preview:' not in body
+    assert 'short task' not in body
+    assert isinstance(artifact, dict)
+    artifact_path = Path(str(artifact['path']))
+    assert artifact_path.exists()
+    artifact_text = artifact_path.read_text(encoding='utf-8')
+    assert artifact_text.startswith('short task')
     assert 'CCB reply guidance:' in artifact_text
 
 

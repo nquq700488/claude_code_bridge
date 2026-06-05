@@ -8,9 +8,11 @@ Plan the first public GitHub release of `agent-roles` as a host-neutral
 RolePack specification project.
 
 This plan is intentionally separate from CCB's internal
-[`rolepack-system`](../rolepack-system/README.md) plan. CCB may later consume
-the specification through an adapter, but this plan does not move CCB role
-store, projection, reload, ask, or sidebar behavior into the new repository.
+[`rolepack-system`](../rolepack-system/README.md) plan. `agent-roles-spec`
+owns the RolePack specification, role catalog content, and long-term `.roles`
+package management. CCB consumes that package-management contract through an
+adapter, while CCB project config, project locks, projection, reload, ask, and
+sidebar behavior remain CCB-owned runtime concerns.
 
 ## File Map
 
@@ -29,6 +31,9 @@ store, projection, reload, ask, or sidebar behavior into the new repository.
 - [topics/rolepack-content-boundary.md](topics/rolepack-content-boundary.md):
   what a role can carry, including skills, memory, tools, plugin content, and
   forbidden runtime state.
+- [topics/package-manager-and-roles-store.md](topics/package-manager-and-roles-store.md):
+  future `agent-roles` package manager, `.roles` store, and host client
+  integration boundary.
 - [decisions/001-spec-first-project.md](decisions/001-spec-first-project.md):
   Agent Roles starts as a specification project; CLI and runtime work follows.
 - [decisions/002-rolepack-contains-plugin-content.md](decisions/002-rolepack-contains-plugin-content.md):
@@ -44,6 +49,10 @@ In scope:
 - A RolePack package layout and metadata convention.
 - A v0.1 spec preview release with templates, reference roles, validation
   expectations, and contribution rules.
+- A role catalog that CCB can discover and install from without vendoring role
+  packages into the CCB source tree.
+- A future `agent-roles` package-management contract for `.roles` sync, list,
+  install, update, doctor, digest, provenance, and alias migration.
 - Host adapter contracts for Claude Code, Codex, CCB, Hive, and future hosts.
 - Conformance and harness planning for later releases.
 

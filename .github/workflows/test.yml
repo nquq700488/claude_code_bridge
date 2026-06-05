@@ -250,6 +250,7 @@ jobs:
 
           repo="$(pwd)"
           project="/mnt/c/Temp/ccb-wsl-mnt-smoke-${{ github.run_id }}-${{ github.run_attempt }}"
+          export CCB_SOURCE_ALLOWED_ROOTS="$project"
           rm -rf "$project"
           mkdir -p "$project/.ccb"
           printf 'demo:fake\n' > "$project/.ccb/ccb.config"

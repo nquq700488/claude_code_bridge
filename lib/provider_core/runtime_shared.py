@@ -26,6 +26,8 @@ _PROVIDER_DEFAULT_EXECUTABLES = {
     'agy': 'agy',
 }
 
+PROVIDER_COMMAND_PLACEHOLDER = '{command}'
+
 
 def provider_start_parts(provider: str) -> list[str]:
     normalized = str(provider or '').strip().lower()
@@ -42,6 +44,15 @@ def provider_start_parts(provider: str) -> list[str]:
     return [default]
 
 
+def apply_provider_command_template(command: str, template: str | None) -> str:
+    normalized_template = str(template or '').strip()
+    if not normalized_template:
+        return command
+    if normalized_template.count(PROVIDER_COMMAND_PLACEHOLDER) != 1:
+        raise ValueError(f'provider_command_template must contain exactly one {PROVIDER_COMMAND_PLACEHOLDER}')
+    return normalized_template.replace(PROVIDER_COMMAND_PLACEHOLDER, str(command or '').strip())
+
+
 def provider_executable(provider: str) -> str:
     parts = provider_start_parts(provider)
     return str(parts[0] or provider)
@@ -54,4 +65,10 @@ def pane_title_marker(*, project_id: str, agent_name: str) -> str:
     return f'CCB-{agent_name}'
 
 
-__all__ = ['pane_title_marker', 'provider_executable', 'provider_start_parts']
+__all__ = [
+    'PROVIDER_COMMAND_PLACEHOLDER',
+    'apply_provider_command_template',
+    'pane_title_marker',
+    'provider_executable',
+    'provider_start_parts',
+]
