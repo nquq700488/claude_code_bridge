@@ -36,7 +36,7 @@
 - **Sidebar 面板高度可配置（v7.1.1+）**：Tree/Agent、Comms、Tips 三个面板的高度支持自定义（百分比或行数）
 - **Dynamic Reload（v7.1.0+）**：编辑 `ccb.config` 后无需重启整个项目，通过 `ccb reload` 动态应用支持的配置变更
 - **多窗口拓扑（v7.0+）**：一个项目可配置多个 tmux 窗口，每个窗口有独立的 Agent 布局和 Sidebar
-- Agent 间异步通信（邮箱系统）
+- Agent 间通信（支持同步等待和异步发送）
 - 按项目配置 Agent 团队和 tmux 分屏布局
 - 每个 Agent 独立配置 API key、模型、端点
 - 可选 git worktree 隔离
@@ -236,8 +236,8 @@ cd claude_code_bridge
 | `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
 | `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
 | `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒） |
-| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` / `ask --wait` 默认超时（秒，v7.2.1+） |
-| `CCB_WAIT_POLL_INTERVAL_S` | `0.1` | `ask --wait` 轮询间隔（秒） |
+| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` 默认超时（秒，v7.2.1+） |
+| `CCB_WAIT_POLL_INTERVAL_S` | `0.1` | `pend --watch` 轮询间隔（秒） |
 | `CCB_KEYCHAIN_SERVICE_OVERRIDE` | 空 | macOS Keychain 服务名覆盖（v7.0.4+） |
 | `CODEX_CLAUDE_COMMAND_DIR` | 自动检测 | 自定义 Claude commands 目录 |
 
@@ -512,7 +512,7 @@ CCB 会记录父子任务关系，子任务完成后自动将结果回传给父 
 
 #### Notify Sender（v7.0.9+）
 
-当 Skill 或 Agent 向其他 Agent 发送异步任务后，需要**在任务完成时收到通知**（无论成功、失败或取消），使用 `--notify-sender`：
+当向其他 Agent 发送任务后，除了默认的同步等待回复外，还可以通过 `--notify-sender` 要求**在任务完成时向 sender inbox 发送一条通知**（无论成功、失败或取消）：
 
 ```bash
 # 发任务时附加通知标志
@@ -1058,7 +1058,8 @@ cp -r useful_tools/claude_skills/plan-tree ~/.claude/skills/
   → reviewer Agent 检测到新消息（通过 stop hook）
   → reviewer 处理任务
   → 处理完成后，ccbd 将结果放入回复队列
-  → 原始调用方通过 /pend reviewer 获取结果
+  → /ask skill 自动通过 pend --watch <job_id> 阻塞等待回复
+  → 调用方在同一回合看到 reviewer 的回复
 ```
 
 ### Provider 隔离
@@ -1121,15 +1122,15 @@ ccb update             # 更新到最新版
 ccb reinstall          # 重新安装
 
 # Agent 间通信（在 Agent 内部使用）
-/ask <agent> <message>            # 向指定 Agent 委派任务（异步）
+/ask <agent> <message>            # 向指定 Agent 委派任务（默认同步等待回复）
+ccb ask --silence <agent>         # 静默提交（不等待回复，v6.2.x+）
 ccb ask --callback <agent>        # 带回调的 ask（链式委派，v6.2.x+）
 ccb ask --notify-sender <agent>   # 任务完成后通知 sender（v7.0.9+）
-ccb ask --silence <agent>         # 静默 ask（不等待结果，v6.2.x+）
 /ping <agent|ccbd>                # 检查 Agent 或控制平面健康
 /pend <agent|job_id>              # 查看 Agent 回复
 
-# 等待与观察（v6.2.x+，原 `ask --wait` 已移除）
-ccb watch <agent>              # 实时流式查看 Agent 回复
+# 等待与观察
+ccb pend --watch <agent|job_id>   # 阻塞等待并流式查看回复
 ccb wait-any <agent>...        # 等待任意一个 Agent 回复
 ccb wait-all <agent>...        # 等待所有指定 Agent 回复
 ccb wait-quorum <N> <agent>... # 等待 N 个 Agent 回复（法定多数）

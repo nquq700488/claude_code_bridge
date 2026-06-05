@@ -23,8 +23,8 @@
 └─────────────┴─────────────┴─────────────┘
 ```
 
-- 通过 `ccb ask <agent> <message>` 向指定 agent 发送任务（提交后立即返回 job ID）。
-- 查看回复：`ccb pend <agent>` 或 `ccb pend --watch <agent>`。
+- 通过 `/ask` skill 或 `ccb ask <agent> <message>` 向指定 agent 发送任务。默认**同步等待回复**（`ask` → 解析 job_id → `pend --watch <job_id>`），`--silence` 跳过等待。
+- 手动查看回复：`ccb pend <agent>` 或 `ccb pend --watch <agent>`。
 - **时区注意**：CCB 日志时间戳均为 **UTC**。向用户报告时，必须换算为 **北京时间（UTC+8）**。
 
 ## 指令执行规范（强制）
