@@ -25,6 +25,7 @@
 
 - 通过 `ccb ask <agent> <message>` 向指定 agent 发送任务（提交后立即返回 job ID）。
 - 查看回复：`ccb pend <agent>` 或 `ccb pend --watch <agent>`。
+- **时区注意**：CCB 日志时间戳均为 **UTC**。向用户报告时，必须换算为 **北京时间（UTC+8）**。
 
 ## 指令执行规范（强制）
 
@@ -46,6 +47,7 @@ git log --oneline HEAD..upstream/main
 ```
 
 如果有新提交：
+
 - 执行 `git merge upstream/main` 合并更新
 - 解决所有冲突
 - 确保合并后的代码能正常工作
