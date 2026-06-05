@@ -30,6 +30,8 @@
 核心能力：
 - 一键启停多个 AI CLI Agent
 - **原生 Agent Sidebar（v7.0+）**：每个 tmux 窗口左侧实时显示所有 Agent 状态，支持点击切换焦点
+- **Agent Roles Store（v7.3.0+）**：外部 Agent Roles manager 作为角色唯一写入通道，支持空白环境自动回退安装
+- **Artifact Transport（v7.3.0+）**：大消息自动/手动溢写到 text artifact，防止超 context 限制
 - **Provider Activity 追踪（v7.0.11+）**：通过 provider-native hook 产物精确识别 Agent 的 active / pending / idle / failed 状态，Sidebar 状态显示更准确
 - **Sidebar 面板高度可配置（v7.1.1+）**：Tree/Agent、Comms、Tips 三个面板的高度支持自定义（百分比或行数）
 - **Dynamic Reload（v7.1.0+）**：编辑 `ccb.config` 后无需重启整个项目，通过 `ccb reload` 动态应用支持的配置变更
@@ -533,9 +535,36 @@ Use `ccb trace job_abc` to view the full result.
 - `--notify-sender`：仅在任务完成时向 sender inbox 发送一条系统 notice，**不创建 continuation job，不依赖 provider watch 机制**，适合所有 provider（包括 Kimi）
 - 两者可以独立使用，也可以组合使用
 
-#### Role Packs（v7.2.0+）
+#### Artifact Transport（v7.3.0+）
 
-Role Pack 是可复用的 Agent 角色模板，包含稳定的身份、职责、记忆、provider-specific skills 和依赖准备逻辑。使用 Role Pack 可以让项目配置更短，角色在项目间复用。
+当消息体超过 4 KiB 时，CCB 会自动将请求/回复存入 text artifact 文件，防止超过 provider 的上下文限制。也可以通过显式标志强制启用：
+
+```bash
+# 强制将请求正文存入 artifact（无论大小）
+ccb ask --artifact-request agent2 <<'EOF'
+这个需求文档非常长...
+EOF
+
+# 强制目标 Agent 的回复也存入 artifact
+ccb ask --artifact-reply agent2 帮我收集所有日志
+
+# 等价于同时启用 --artifact-request 和 --artifact-reply
+ccb ask --artifact-io agent2 处理大型数据集
+
+# 可与其它标志组合使用
+ccb ask --callback --artifact-reply agent2 collect long evidence
+```
+
+| 标志 | 作用 |
+|------|------|
+| `--artifact-request` | 强制将请求正文存储为 CCB text artifact |
+| `--artifact-reply` | 强制目标 Agent 的最终回复存储为 text artifact |
+| `--artifact-io` | 同时启用 `--artifact-request` 和 `--artifact-reply` |
+| （不指定） | 请求 > 4 KiB 时自动溢出为 artifact（默认行为） |
+
+#### Role Packs → Agent Roles Store（v7.3.0+）
+
+从 v7.3.0 开始，Role Pack 机制升级为 **Agent Roles Store**，使用外部 Agent Roles manager 作为唯一的 Role 写入通道，已安装的 Role 仅从 Roles Store 读取。安装流程也更健壮：优先 `ccb roles update` 增量刷新，首次安装（空白环境）时自动回退到 `ccb roles install` 完成初始化。
 
 目前内置 `ccb.archi` 角色（架构审查，由 Architec 支撑），后续会陆续引入更多专业角色。
 
