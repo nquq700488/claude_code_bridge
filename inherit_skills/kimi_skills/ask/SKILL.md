@@ -1,131 +1,71 @@
 ---
 name: ask
-description: Submit a request via `ccb ask` to a named CCB agent. Default async; on async receipt end the turn immediately. Use wait only when the user explicitly asks for the reply in the same turn.
+description: Send a request to a CCB agent and wait for the reply synchronously.
 metadata:
-  short-description: Ask agent
+  short-description: Ask agent (sync)
 ---
 
-# Ask Target
+Use this when the user asks you to delegate with CCB, or when project memory
+says to use CCB `ask` for collaboration.
 
-Send the user's request to another CCB agent via the canonical `ccb ask` command.
+## Quick Reference
 
-## CCB Context
+| Mode | Flag | Behavior |
+|------|------|----------|
+| **Default (sync)** | _(none)_ | Submit → wait for reply → report result |
+| **Silence** | `--silence` | Submit → **do not wait** (no reply needed) |
+| **Callback** | `--callback` | Submit → stop immediately (CCB delivers continuation) |
+| **Artifact** | `--artifact-*` | Request/reply via text artifact files |
 
-- `ccb` is the project control plane. This skill assumes the current working directory is inside a CCB-managed project with a `.ccb/ccb.config`.
-- `ccb ask` uses the current CCB workspace to infer sender identity. Do not manually reimplement sender resolution in the skill.
-- If the current cwd is an agent workspace such as `.ccb/workspaces/agent1`, sender is inferred as `agent1`.
-- If the current cwd is not an agent workspace, sender falls back to `user`.
-- `ccb ask all` is broadcast. When sender is an agent, broadcast excludes that sender agent itself. When sender is `user`, broadcast goes to all alive agents.
-- Bare `ask` is only a compatibility alias for `ccb ask`.
-- `--silence` only hides successful completion body in the caller mailbox. Failed, incomplete, or cancelled outcomes still return their normal reply body.
+## Default: Synchronous Wait
 
-## Usage
+⚠️ **ANTI-HALLUCINATION**: You MUST invoke this skill via the Bash tool. Never say "I've sent the request" without actually running the command.
 
-The skill signature is exactly:
-
-```text
-/ask <target> <message...>
-```
-
-Parse arguments exactly once:
-
-- `TARGET` = the first whitespace-delimited token after `/ask`
-- `MESSAGE` = the exact raw remainder after `TARGET`
-
-Everything after `TARGET` belongs to `MESSAGE` and must be forwarded verbatim to the target agent.
-Do not parse `from`, `--wait`, `--async`, `--silence`, quotes, or any later token as extra skill syntax.
-Sender is inferred by `ccb ask` itself from the current CCB workspace.
-
-If the user provides only a target and no remaining message, stop and report a brief usage error.
-
-The message MUST be provided via stdin (heredoc or pipe), not as CLI arguments, to avoid shell globbing issues.
-
-## Execution (MANDATORY)
-
-Default async submit:
-
+1. Submit the task and capture the output:
 ```bash
-command ccb ask "$TARGET" <<'EOF'
+ccb ask "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-This returns only an acceptance receipt in the current turn.
-The reply is not echoed into the same command stdout.
-To fetch the same-turn reply, use the explicit wait form below.
-Successful async submit also prints a protocol marker like:
+2. Extract `job_id` from the output (format: `job_<hex>`).
 
-```text
-[CCB_ASYNC_SUBMITTED ...]
+3. Block until the reply arrives, then report it:
+```bash
+ccb pend --watch "$JOB_ID" --timeout 600
 ```
 
-That marker means the async handoff is complete for this turn.
+4. Present the reply to the user. If the reply is empty or `[CCB_ASYNC_SUBMITTED]`, tell the user the target agent has not responded yet.
 
-Silent-on-success submit, only if the user explicitly asks for silent success mail:
+**DO NOT** skip step 3 — the user expects to see the reply in the same turn.
+
+## --silence: No Reply Needed
+
+Use when the user explicitly says they don't need a reply, or when the task is fire-and-forget (e.g. "run this in the background", "just trigger it", "I don't need the result").
 
 ```bash
-command ccb ask --silence "$TARGET" <<'EOF'
+ccb ask --silence "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-Notify-sender on completion: when the caller needs to be notified (via inbox) once the target agent finishes, regardless of success or failure:
+After submit, report the job_id only. Do NOT wait. Do NOT run `pend --watch`.
+
+## --callback: CCB Continuation
+
+Use ONLY when this exact turn is an active CCB task and the child result is
+required before you can finish that parent task.
 
 ```bash
-command ccb ask --notify-sender "$TARGET" <<'EOF'
+ccb ask --callback "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-Only if the user explicitly asks to wait for the reply in the same turn:
+After callback submit, **stop immediately**. CCB will deliver the child result as a continuation task. Do NOT wait, do NOT run `pend --watch`.
 
-```bash
-command ccb ask --wait "$TARGET" <<'EOF'
-$MESSAGE
-EOF
-```
+If CCB says `ask --callback requires an active parent job`, the mode choice was wrong — resubmit with default (no flag).
 
-Only if the user explicitly asks for both waiting and silent-on-success behavior:
+## Message Format
 
-```bash
-command ccb ask --wait --silence "$TARGET" <<'EOF'
-$MESSAGE
-EOF
-```
-
-## Rules
-
-- ⚠️ **ANTI-HALLUCINATION**: You MUST use Bash to execute the command. Never claim "I've sent the request" or "I've asked the agent" without actually running the Bash command. If there is no Bash tool call in this turn, you did NOT execute the ask.
-- Execute exactly one snippet above, then stop, unless the user explicitly asked to wait.
-- If async output contains `[CCB_ASYNC_SUBMITTED ...]`, end the turn immediately. Do not inspect, summarize follow-up state, or poll for replies in the same turn.
-- When `--notify-sender` is used, the sender's inbox will receive a system notice when the job completes, fails, or is cancelled. The caller can check `ccb inbox <sender>` in a later turn to pick up the notification.
-- Do not add extra filler like "processing...". The command output is the result.
-- Do not run `pend`, `ping`, retries, or other follow-up commands unless the user explicitly asks.
-- Do not rewrite target names. `cmd` is reserved as the control pane name and must not be used as an agent target or mailbox target.
-- Do not reinterpret any part of `MESSAGE` as sender override syntax. This skill does not accept a sender argument.
-- Use canonical `ccb ask`. Do not use bare `ask` here unless the user is explicitly testing alias compatibility.
-- Keep stdin/heredoc form; do not pass the raw message as CLI arguments.
-- Forward `MESSAGE` verbatim. Do not summarize, translate, or paraphrase it before sending.
-- If the user asks for broadcast, use `TARGET=all`. Do not try to expand the agent list yourself.
-
-## Examples
-
-- `/ask agent1 1+1=?`
-- `/ask agent2 Summarize this diff`
-- `/ask all 请同步检查当前方案`
-- `/ask agent1 联网查询一下 superpowers 是什么开源项目`
-- `command ccb ask --silence "agent3" <<'EOF'`
-  `做完后只回完成通知，不要回正文`
-  `EOF`
-- `command ccb ask --wait "agent1" <<'EOF'`
-  `1+1=?`
-  `EOF`
-- `command ccb ask --notify-sender "planner" <<'EOF'`
-  `请设计登录页面，完成后通知我`
-  `EOF`
-
-## Notes
-
-- If submit fails, report the command failure output and stop. Only diagnose in a later turn if the user asks.
-- Successful `--silence` replies look like `CCB_COMPLETE ... result=hidden`.
-- Successful async submit is complete as soon as `[CCB_ASYNC_SUBMITTED ...]` appears.
+Always send `MESSAGE` through the `<<'EOF' ... EOF` heredoc. No other form is allowed. Do NOT manually append output-policy text; `ask` injects reply guidance automatically.

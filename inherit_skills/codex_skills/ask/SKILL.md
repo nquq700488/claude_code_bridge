@@ -1,65 +1,47 @@
 ---
 name: ask
-description: Send a request to a CCB agent with `ask`.
+description: Send a request to a CCB agent and wait for the reply synchronously.
 metadata:
-  short-description: Ask agent
+  short-description: Ask agent (sync)
 ---
 
-Use this skill when the user asks you to delegate with CCB, or when project
-memory says to use CCB `ask` for collaboration.
+Use this when the user asks you to delegate with CCB, or when project memory
+says to use CCB `ask` for collaboration.
 
-## Choose The Mode First
+## Quick Reference
 
-- Normal user turn, direct chat request, release handoff, review handoff, or any
-  context that is not a CCB-delivered active parent job: use plain `ask`.
-- Do not probe `--callback`. If you are unsure whether there is an active parent
-  job, there is not one; use plain `ask`.
-- Use `--callback` only when this exact turn is an active CCB task and the child
-  result is required before you can finish that parent task. After callback
-  submit, stop; CCB will deliver the child result as a continuation.
-- If CCB says `ask --callback requires an active parent job`, the mode choice was
-  wrong. For a user-requested delegation, submit once with plain `ask` and stop.
-- Use `--silence` only for independent work where success does not need a reply
-  body. Failures, blockers, or required next actions should still surface.
-- Use `--compact` when the caller wants distilled findings, status, risks,
-  blockers, or next actions.
-- Use `--artifact-request` when the task body is large or must be passed by file.
-  CCB stores the request in a text artifact and sends the target only a file
-  reference.
-- Use `--artifact-reply` when the caller or callback continuation should receive
-  the target result as a text artifact path, even if the target replies inline.
-- Use `--artifact-io` when both the request and reply should be artifact-backed.
-- `--artifact-*` modes are CCB/daemon managed; they do not require the target
-  agent to manually write a reply file.
+| Mode | Flag | Behavior |
+|------|------|----------|
+| **Default (sync)** | _(none)_ | Submit → wait for reply → report result |
+| **Silence** | `--silence` | Submit → **do not wait** (no reply needed) |
+| **Callback** | `--callback` | Submit → stop immediately (CCB delivers continuation) |
+| **Artifact** | `--artifact-*` | Request/reply via text artifact files |
 
-## Command Rules
+## Default: Synchronous Wait
 
-⚠️ **ANTI-HALLUCINATION**: You MUST invoke this skill via the Bash tool. Never say "I've sent the request" or "I've asked the reviewer" without actually running the command in a Bash tool call. Text-only simulation silently drops tasks.
+⚠️ **ANTI-HALLUCINATION**: You MUST invoke this skill via the Bash tool. Never say "I've sent the request" without actually running the command.
 
-- `TARGET` = first token; `MESSAGE` = raw remainder sent as the task body.
-- `TARGET=all` broadcasts.
-- Plain `ask` injects concise-reply guidance while still delivering the full
-  reply body.
-- `ask` may append reply guidance unless the message already contains explicit
-  output requirements.
-- Plain nested `ask` from an active CCB task is rejected; choose `--callback` for
-  needed dependency results or `--silence` for independent no-result-needed work.
-- Do not manually append output-policy text; `ask` injects reply guidance.
-- `ask get`, `pend`, `watch`, and `ping` are diagnostics-only commands for explicit debugging requests, not normal ask workflow tools.
-- For callback work with a large child result, combine `--callback` with
-  `--artifact-reply`.
-
+1. Submit the task and capture the output:
 ```bash
 command ask "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
+2. Extract `job_id` from the output (format: `job_<hex>`).
+
+3. Block until the reply arrives, then report it:
 ```bash
-command ask --compact "$TARGET" <<'EOF'
-$MESSAGE
-EOF
+command pend --watch "$JOB_ID" --timeout 600
 ```
+
+4. Present the reply to the user. If the reply is empty or `[CCB_ASYNC_SUBMITTED]`, tell the user the target agent has not responded yet.
+
+**DO NOT** skip step 3 — the user expects to see the reply in the same turn.
+
+## --silence: No Reply Needed
+
+Use when the user explicitly says they don't need a reply, or when the task is fire-and-forget (e.g. "run this in the background", "just trigger it", "I don't need the result").
 
 ```bash
 command ask --silence "$TARGET" <<'EOF'
@@ -67,23 +49,23 @@ $MESSAGE
 EOF
 ```
 
+After submit, report the job_id only. Do NOT wait. Do NOT run `pend --watch`.
+
+## --callback: CCB Continuation
+
+Use ONLY when this exact turn is an active CCB task and the child result is
+required before you can finish that parent task.
+
 ```bash
 command ask --callback "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-```bash
-command ask --artifact-io "$TARGET" <<'EOF'
-$MESSAGE
-EOF
-```
+After callback submit, **stop immediately**. CCB will deliver the child result as a continuation task. Do NOT wait, do NOT run `pend --watch`.
 
-```bash
-command ask --callback --artifact-reply "$TARGET" <<'EOF'
-$MESSAGE
-EOF
-```
+If CCB says `ask --callback requires an active parent job`, the mode choice was wrong — resubmit with default (no flag).
 
-After submit, return the command output and stop. Do not wait for a reply, do not run `ask get` / `pend` / `ping` / `watch`, and do not poll. For
-`--callback`, report only that delegation was submitted; the final result belongs in the later continuation task.
+## Message Format
+
+Always send `MESSAGE` through the `<<'EOF' ... EOF` heredoc. No other form is allowed. Do NOT manually append output-policy text; `ask` injects reply guidance automatically.
