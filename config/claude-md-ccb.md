@@ -15,15 +15,19 @@ corresponding Bash tool call in the same turn. Text-only simulation of CCB
 commands is a protocol violation — it silently drops tasks and breaks the
 multi-agent workflow.
 
-## Async Guardrail (MANDATORY)
+## CCB Sync Workflow (MANDATORY)
 
-When you run `ask` (via `/ask` skill OR direct `Bash(ask ...)`) and the output contains `[CCB_ASYNC_SUBMITTED`:
-1. Reply with exactly one line: `<Provider> processing...` (use actual provider name, e.g. `Codex processing...`)
-2. **END YOUR TURN IMMEDIATELY** — do not call any more tools
-3. Do NOT poll, sleep, call `pend`, check logs, or add follow-up text
-4. Wait for the user or completion hook to deliver results in a later turn
+When you invoke `/ask` or `ccb ask`, you MUST:
 
-This rule applies unconditionally. Violating it causes duplicate requests and wasted resources.
+1. Capture the output; it will contain `[CCB_ASYNC_SUBMITTED job=<job_id>]`.
+2. Extract the `job_id` (format: `job_<hex>`).
+3. Block until the reply arrives:
+```bash
+ccb pend --watch --timeout 600 <job_id>
+```
+4. Present the reply to the user. If the reply is empty or the target agent has not responded yet, tell the user.
+
+**DO NOT** skip step 2-3 — the user expects to see the reply in the same turn.
 
 <!-- CCB_ROLES_START -->
 ## Role Assignment
