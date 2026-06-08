@@ -32,10 +32,13 @@ non_goals = ["business implementation", "release publishing"]
 - Codex skills: `archi-diff`, `archi-full`, `archi-advice`, `archi-goal`.
 - Claude skills: same semantic set in Claude skill format.
 - Tools:
-  - install Architec in a CCB-owned venv where possible
-  - expose a stable wrapper such as `ccb-archi`
-  - doctor checks `archi`, `hippocampus`, `llmgateway`, and project readiness
-  - update refreshes the installed Architec package
+  - install or update Archi through the global npm package
+    `@seemseam/archi`
+  - do not split Hippo or llmgateway into CCB-managed pip, venv, git, or
+    editable installs
+  - doctor checks the main `archi` CLI; bundled `hippo`/`llmgateway` fields
+    report npm package bundle availability without trying to install them
+    separately
 
 ## CCB Binding
 
@@ -71,9 +74,9 @@ role details or diagnostics, but not as the main agent row label.
 `ccb roles doctor agentroles.archi` should report:
 
 - installed role version and digest
-- Architec wrapper path
-- Architec import or CLI readiness
-- `llmgateway` config presence without secret output
+- `archi` CLI readiness
+- bundled Hippo and llmgateway npm package bundle availability
+- remediation pointing to `npm install -g @seemseam/archi` when missing
 - skill projection status for each bound provider
 - memory projection hash
 - actionable remediation for missing dependencies
@@ -90,9 +93,10 @@ Implemented in the first code slice, with migration needed:
 - role memory inclusion in generated provider memory
 - Codex and Claude role skill projection into managed provider homes
 - `ccb roles list/show/install/update/sync/add/doctor`
-- Architec tool lifecycle execution in a CCB-owned venv
-- `doctor` checks for the managed wrapper and `llmgateway` config without
-  printing secrets
+- Archi tool lifecycle execution through global npm package
+  `@seemseam/archi`
+- `doctor` checks the `archi` command and reports bundled Hippo/llmgateway
+  package availability without printing secrets or attempting split installs
 - shorthand config validation with sidebar display as `archi`
 - real `test_ccb2` validation for install/update/sync/add, projection,
   startup, reload, and runtime doctor

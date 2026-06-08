@@ -33,11 +33,18 @@ def test_install_script_provisions_role_packs_softly() -> None:
 
     assert 'provision_role_packs' in text
     assert 'CCB_INSTALL_ROLES=0' in text
+    assert 'check_role_pack_dependencies required' in text
     assert 'Install catalog Role Packs and dependencies now?' in text
     assert 'non-interactive install' in text
     assert 'roles update agentroles.archi' in text
     assert 'Role Pack not installed yet; installing agentroles.archi.' in text
     assert 'roles install agentroles.archi' in text
+    assert 'Missing dependency for Role Pack provisioning: git' in text
+    assert 'Missing dependency for Role Pack provisioning: npm' in text
+    assert 'nodejs npm' in text
+    assert 'set CCB_INSTALL_ROLES=0' in text
+    assert 'python_supports_role_tool_venv' not in text
+    assert 'print_python_venv_install_hint' not in text
 
 
 def test_sidebar_bin_wrapper_is_source_install_fallback() -> None:

@@ -9,6 +9,7 @@ class LayoutLeaf:
     provider: str | None = None
     workspace_mode: str | None = None
     weight: int = 1
+    percent: int | None = None
 
 
 @dataclass(frozen=True)
@@ -58,14 +59,19 @@ class LayoutNode:
     def render(self) -> str:
         if self.kind == 'leaf':
             assert self.leaf is not None
-            suffix = ''
-            if self.leaf.weight != 1:
-                suffix = f'({self.leaf.weight})'
+            parts = []
             if self.leaf.provider:
                 if str(self.leaf.workspace_mode or '').strip() == 'worktree':
-                    return f'{self.leaf.name}:{self.leaf.provider}(worktree){suffix}'
-                return f'{self.leaf.name}:{self.leaf.provider}{suffix}'
-            return f'{self.leaf.name}{suffix}'
+                    parts.append(f'{self.leaf.name}:{self.leaf.provider}(worktree)')
+                else:
+                    parts.append(f'{self.leaf.name}:{self.leaf.provider}')
+            else:
+                parts.append(self.leaf.name)
+            if self.leaf.weight != 1:
+                parts.append(f'({self.leaf.weight})')
+            if self.leaf.percent is not None:
+                parts.append(f'@{self.leaf.percent}')
+            return ''.join(parts)
         assert self.left is not None
         assert self.right is not None
         sep = ';' if self.kind == 'horizontal' else ','

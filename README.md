@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.3.2-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.3.6-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **English** | [中文](README_zh.md)
@@ -521,6 +521,50 @@ v7 highlights:
 - Hardened tmux, Ghostty, release helper, Codex trust, and provider session restore paths.
 
 <details open>
+<summary><b>v7.3.6</b> - Provider Memory Ownership Cleanup</summary>
+
+- Adds provider memory ownership policy: Claude, Codex, and OpenCode managed contexts no longer duplicate provider-native project memory inside the CCB generated bundle; Gemini keeps the previous behavior pending audit.
+- Filters legacy CCB install marker blocks and old collaboration sections only from provider user memory, without rewriting user-owned memory files.
+- Updates the default `.ccb/ccb_memory.md` template to v5 and removes the duplicate Ask Communication block already supplied by managed CCB memory.
+- Adds seed-aware shared memory migration, upgrading only unedited old generated templates while preserving edited project memory.
+- Stops Claude route-mode installs from writing `~/.claude/rules/ccb-config.md`; install/uninstall now remove only CCB-marked legacy external config and preserve unmarked user files.
+- Keeps source runtime startup import-safe by avoiding the tmux UI version detection cycle under `ccb_test`.
+
+</details>
+
+<details>
+<summary><b>v7.3.5</b> - Tmux Border Hook Hotfix</summary>
+
+- Fixes tmux `after-select-pane` hooks that could persist temporary release paths like `/tmp/ccb-v...-release.../config/ccb-border.sh` and later report `returned 127` when clicking panes.
+- Makes border hooks use `run-shell -b` with an executable guard, so stale script paths do not spam tmux errors.
+- Refreshes active tmux UI hooks after `ccb update` on a best-effort basis, so users upgrading from v7.3.4 automatically rewrite bad hooks without failing Role Pack provisioning.
+- v7.3.4 is withdrawn/prerelease; use v7.3.5 or newer as the stable upgrade target.
+
+</details>
+
+<details>
+<summary><b>v7.3.4</b> - Withdrawn Prerelease</summary>
+
+- Simplifies `agentroles.archi` tooling around the global `@seemseam/archi` npm package; CCB no longer manages separate Hippo, llmgateway, pip, venv, git, or editable Archi dependencies.
+- Aligns `ccb roles install/update/doctor agentroles.archi` with the npm-provided `archi` CLI and bundled Hippo/llmgateway capabilities.
+- Updates `bin/ccb-arch` to forward to `archi`, with a clear `npm install -g @seemseam/archi` hint when the CLI is missing.
+- Fixes sidebar focus/refresh handling so selecting agents from the sidebar no longer restarts panes unnecessarily.
+- Withdrawn because tmux border hooks could persist temporary release paths and later report `ccb-border.sh ... returned 127`; use v7.3.5 or newer.
+- Adds the guarded `ccb_test` source entrypoint for isolated source-checkout validation without affecting installed CCB.
+- Disables OpenCode autoupdate for managed panes through `opencode.json` and `OPENCODE_DISABLE_AUTOUPDATE=true`.
+- Refreshes inherited `ccb-config` skills for config-only use, language-following behavior, YAML description quoting, clearer menu grouping, and sidebar pane restart guidance.
+- Adds the config-designer UI plan tree and includes the main-branch `@percent` layout token plus Antigravity lifecycle cleanup updates.
+
+</details>
+
+<details>
+<summary><b>v7.3.3</b> - Withdrawn Draft</summary>
+
+- Withdrawn before stable rollout because it carried a sidebar focus/refresh regression. It is not the recommended release and should not be used for upgrades; use v7.3.5 or newer.
+
+</details>
+
+<details>
 <summary><b>v7.3.2</b> - First-Install Role Pack Provisioning Hotfix</summary>
 
 - Fixes a blank-environment first install bug where `install.sh` tried to update `agentroles.archi` before it was installed, leaving Role Pack provisioning incomplete.

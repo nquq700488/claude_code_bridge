@@ -2,6 +2,7 @@
 #
 #   agent_name:provider  =  agent leaf (e.g. "planner:codex")
 #   agent_name:provider(N) =  agent leaf with weight N (default 1), e.g. "db:codex(2)"
+#   agent_name:provider@N =  agent leaf with exact percent N (v7.3.3+), e.g. "main:codex@50"
 #   cmd                  =  command slot (spawns shell in the pane)
 #   A , B                =  vertical split: A on top, B on bottom
 #   A ; B                =  horizontal split: A on left, B on right
@@ -14,6 +15,7 @@
 #   Each split divides space by weight sum.
 #   right_size = round(right_weight_sum / total_weight_sum * 100%)
 #   Leaves with higher weight get proportionally more space.
+#   @N percent (when specified) takes precedence over weight calculation.
 #
 #   Rows align when sibling subtrees have equal weight sums.
 #   For grid-like layouts, use parentheses to nest horizontal splits inside
@@ -21,6 +23,7 @@
 #
 #     (a; b), (c; d; e)  →  top row 2 cols, bottom row 3 cols
 #     (a; b(2)), (c; d)  →  top left 33%, top right 67%; bottom equal
+#     (a; b@60), (c; d)  →  top left 40%, top right 60%; bottom equal
 #
 #   Without parentheses, left-association controls the grouping:
 #
@@ -37,7 +40,8 @@ _LEAF_TOKEN_RE = re.compile(
     r'(?:\s*:\s*(?P<provider>[A-Za-z0-9_-]+)'
     r'(?:\s*\(\s*(?P<workspace_mode>worktree)\s*\))?'
     r')?'
-    r'(?:\s*\(\s*(?P<weight>[1-9][0-9]*)\s*\))?$'
+    r'(?:\s*\(\s*(?P<weight>[1-9][0-9]*)\s*\))?'
+    r'(?:\s*@\s*(?P<percent>\d+))?$'
 )
 
 
@@ -91,10 +95,12 @@ class _LayoutParser:
         match = _LEAF_TOKEN_RE.fullmatch(token)
         if match is None:
             raise LayoutParseError(
-                f"invalid layout token {token!r}; expected 'cmd', 'agent', 'agent:provider', or 'agent:provider(worktree)'"
+                f"invalid layout token {token!r}; expected 'cmd', 'agent', 'agent:provider', 'agent:provider(worktree)', or any of those forms with '(N)' weight or '@N' percent"
             )
         weight_str = match.group('weight')
         weight = int(weight_str) if weight_str else 1
+        pct_str = match.group('percent')
+        pct = int(pct_str) if pct_str is not None else None
         return LayoutNode(
             kind='leaf',
             leaf=LayoutLeaf(
@@ -102,6 +108,7 @@ class _LayoutParser:
                 provider=(match.group('provider') or None),
                 workspace_mode=(match.group('workspace_mode') or None),
                 weight=weight,
+                percent=pct,
             ),
         )
 

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,6 +34,11 @@ from .sources import (
     installed_role_metadata,
     migrate_legacy_installed_roles,
 )
+
+
+ARCHITEC_ROLE_ID = 'agentroles.archi'
+ARCHITEC_TOOL_ID = 'architec'
+ARCHITEC_NPM_PACKAGE = '@seemseam/archi'
 
 
 class RolePackError(RoleManifestError):
@@ -227,6 +233,15 @@ def run_role_tool_hooks(
             continue
         command = str(spec.get(action) or '').strip()
         required = bool(spec.get('required', False))
+        if _is_architec_tool_hook(role, tool_id):
+            result = _run_architec_tool_hook(action=action, required=required)
+            results.append(result)
+            if fail_required and result.get('status') == 'failed' and required:
+                raise RolePackError(
+                    f'role tool {tool_id} {action} failed with exit code {result.get("returncode")}: '
+                    f'{result.get("stderr") or result.get("stdout") or "no output"}'
+                )
+            continue
         if not command:
             results.append(
                 {
@@ -246,6 +261,190 @@ def run_role_tool_hooks(
                 f'{result.get("stderr") or result.get("stdout") or "no output"}'
             )
     return tuple(results)
+
+
+def _is_architec_tool_hook(role: RolePack, tool_id: str) -> bool:
+    return role.id == ARCHITEC_ROLE_ID and str(tool_id or '').strip().lower() == ARCHITEC_TOOL_ID
+
+
+def _run_architec_tool_hook(*, action: str, required: bool) -> dict[str, object]:
+    if action in {'install', 'update'}:
+        return _run_architec_npm_install(action=action, required=required)
+    if action == 'doctor':
+        return _run_architec_doctor(action=action, required=required)
+    return {
+        'tool_id': ARCHITEC_TOOL_ID,
+        'action': action,
+        'status': 'skipped',
+        'required': required,
+        'reason': f'no built-in {action} hook declared',
+    }
+
+
+def _run_architec_npm_install(*, action: str, required: bool) -> dict[str, object]:
+    npm_bin = _architec_npm_bin()
+    package = _architec_npm_package()
+    display_command = f'npm install -g {package}'
+    command = ['npm', 'install', '-g', package]
+    if not npm_bin:
+        return {
+            'tool_id': ARCHITEC_TOOL_ID,
+            'action': action,
+            'status': 'failed',
+            'required': required,
+            'returncode': 127,
+            'stdout': _architec_status_text(
+                architec_status='missing',
+                action=action,
+                package=package,
+                install_command=display_command,
+                reason='npm is not available on PATH',
+            ),
+            'stderr': f'npm is not available; install Node.js/npm, then run `{display_command}`',
+        }
+    command[0] = npm_bin
+    try:
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=float(os.environ.get('CCB_ARCHITEC_NPM_TIMEOUT_S') or os.environ.get('CCB_ROLE_TOOL_TIMEOUT_S') or '900'),
+            check=False,
+        )
+    except Exception as exc:
+        return {
+            'tool_id': ARCHITEC_TOOL_ID,
+            'action': action,
+            'status': 'failed',
+            'required': required,
+            'returncode': 1,
+            'stdout': _architec_status_text(
+                architec_status='failed',
+                action=action,
+                package=package,
+                npm_bin=npm_bin,
+                install_command=display_command,
+                reason=f'{type(exc).__name__}: {exc}',
+            ),
+            'stderr': f'{type(exc).__name__}: {exc}',
+        }
+    status = 'ok' if completed.returncode == 0 else 'failed'
+    return {
+        'tool_id': ARCHITEC_TOOL_ID,
+        'action': action,
+        'status': status,
+        'required': required,
+        'returncode': completed.returncode,
+        'stdout': _architec_status_text(
+            architec_status=status,
+            action=action,
+            package=package,
+            npm_bin=npm_bin,
+            install_command=display_command,
+            stdout=_one_line(completed.stdout),
+        ),
+        'stderr': completed.stderr.strip(),
+    }
+
+
+def _run_architec_doctor(*, action: str, required: bool) -> dict[str, object]:
+    package = _architec_npm_package()
+    archi = shutil.which('archi')
+    archi_probe = _probe_archi_cli(archi)
+    archi_probe_status = str(archi_probe.get('status') or 'missing')
+    if not archi or archi_probe_status == 'failed':
+        architec_status = 'missing' if not archi else 'failed'
+        returncode = 1
+        status = 'failed'
+    else:
+        architec_status = 'ok'
+        returncode = 0
+        status = 'ok'
+    bundle_status = 'available' if architec_status == 'ok' else 'unknown'
+    stdout = _architec_status_text(
+        architec_status=architec_status,
+        action=action,
+        package=package,
+        install_command=f'npm install -g {package}',
+        archi_binary=archi or '',
+        bundled_hippo=bundle_status,
+        bundled_llmgateway=bundle_status,
+        archi_probe=archi_probe_status,
+        bundle_check='npm package bundle provides Hippo and llmgateway capabilities',
+        reason=_architec_doctor_reason(
+            architec_status,
+            package=package,
+        ),
+    )
+    return {
+        'tool_id': ARCHITEC_TOOL_ID,
+        'action': action,
+        'status': status,
+        'required': required,
+        'returncode': returncode,
+        'stdout': stdout,
+        'stderr': '',
+    }
+
+
+def _architec_npm_bin() -> str | None:
+    configured = str(os.environ.get('CCB_ARCHITEC_NPM_BIN') or os.environ.get('NPM_BIN') or '').strip()
+    if configured:
+        return configured
+    return shutil.which('npm')
+
+
+def _architec_npm_package() -> str:
+    return (
+        str(os.environ.get('CCB_ARCHI_NPM_PACKAGE') or os.environ.get('CCB_ARCHITEC_NPM_PACKAGE') or ARCHITEC_NPM_PACKAGE)
+        .strip()
+        or ARCHITEC_NPM_PACKAGE
+    )
+
+
+def _probe_archi_cli(path: str | None) -> dict[str, object]:
+    if not path:
+        return {'status': 'missing'}
+    for flag in ('--help', '--version'):
+        try:
+            completed = subprocess.run(
+                [path, flag],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+                check=False,
+            )
+        except Exception:
+            continue
+        if completed.returncode == 0:
+            return {'status': 'ok'}
+    return {'status': 'failed'}
+
+
+def _architec_doctor_reason(
+    status: str,
+    *,
+    package: str,
+) -> str:
+    if status == 'ok':
+        return f'{package} CLI bundle is available'
+    return f'install or update {package}'
+
+
+def _architec_status_text(**fields: object) -> str:
+    lines = []
+    for key, value in fields.items():
+        if value is None:
+            continue
+        text = str(value)
+        lines.append(f'{key}: {text}')
+    return '\n'.join(lines)
+
+
+def _one_line(text: str) -> str:
+    return ' | '.join(line.strip() for line in str(text or '').splitlines() if line.strip())
 
 
 def _run_role_tool_command(

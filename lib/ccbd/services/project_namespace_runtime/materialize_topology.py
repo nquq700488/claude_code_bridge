@@ -382,6 +382,16 @@ def _materialize_tool_window(
     )
 
 
+def _get_specified_percent(node: Any) -> int | None:
+    if node.kind == 'leaf':
+        assert node.leaf is not None
+        return node.leaf.percent
+    for leaf in node.iter_leaves():
+        if getattr(leaf, 'percent', None) is not None:
+            return leaf.percent
+    return None
+
+
 def _materialize_layout(
     controller,
     context,
@@ -401,6 +411,14 @@ def _materialize_layout(
     total = max(1, node.weight_sum)
     right_count = max(1, node.right.weight_sum)
     percent = max(1, min(99, round((right_count * 100) / total)))
+
+    right_pct = _get_specified_percent(node.right)
+    left_pct = _get_specified_percent(node.left)
+    if right_pct is not None:
+        percent = max(1, min(99, right_pct))
+    elif left_pct is not None:
+        percent = max(1, min(99, 100 - left_pct))
+
     direction = 'right' if node.kind == 'horizontal' else 'bottom'
     new_pane_id = split_pane(
         context.backend,

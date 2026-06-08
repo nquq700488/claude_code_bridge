@@ -21,9 +21,9 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "7.3.2"
+VERSION = "7.3.6"
 GIT_COMMIT = "release"
-GIT_DATE = "2026-06-05"
+GIT_DATE = "2026-06-07"
 
 
 def _is_source_checkout(root: Path) -> bool:
@@ -109,10 +109,11 @@ def _source_runtime_allowed(root: Path, cwd: Path, argv: list[str]) -> tuple[boo
     return (
         False,
         "Refusing to run the CCB source checkout outside an allowed test project.\n"
-        "Use the installed release `ccb` for normal projects, or run source code from an allowed test root.\n"
+        "Use the installed release `ccb` for normal project/work-environment commands.\n"
+        "Use `ccb_test` from an external test project for source-change validation.\n"
         f"Current directory: {cwd}\n"
         f"Allowed source roots: {rendered}\n"
-        "Override for an intentional one-off run with CCB_SOURCE_RUNTIME_OK=1.",
+        "Override only for explicit diagnostics with CCB_SOURCE_RUNTIME_OK=1.",
     )
 
 

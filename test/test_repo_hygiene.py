@@ -151,7 +151,8 @@ def test_ccb_config_skill_uses_current_config_authority() -> None:
         ).read_text(encoding="utf-8")
 
         assert "CCB config precedence is built-in default < user config" in skill_text
-        assert "Only write `~/.ccb/ccb.config`" in skill_text
+        assert "The normal output is a valid `.ccb/ccb.config`" in skill_text
+        assert "only when explicitly requested, a user-level `~/.ccb/ccb.config`" in skill_text
         assert "Never write `.ccb_config/ccb.config`" in skill_text
         assert "Never run `ccb`, `ccb -s`, `ccb kill`" in skill_text
         assert "result.source_kind" in skill_text
@@ -202,7 +203,7 @@ def test_ccb_config_role_pack_docs_use_agentroles_archi_with_legacy_alias_only()
                     assert any(context in lowered for context in allowed_legacy_context), line
 
 
-def test_ccb_config_memory_patterns_describe_callback_routing() -> None:
+def test_ccb_config_skill_is_config_only_without_workflow_memory_patterns() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     for provider_root in ("claude_skills", "codex_skills"):
         skill_text = (
@@ -212,18 +213,58 @@ def test_ccb_config_memory_patterns_describe_callback_routing() -> None:
             / "ccb-config"
             / "SKILL.md"
         ).read_text(encoding="utf-8")
-        memory_text = (
+        reference_text = (
+            repo_root
+            / "inherit_skills"
+            / provider_root
+            / "ccb-config"
+            / "references"
+            / "ccb-config.md"
+        ).read_text(encoding="utf-8")
+        removed_memory_patterns = (
             repo_root
             / "inherit_skills"
             / provider_root
             / "ccb-config"
             / "references"
             / "memory-patterns.md"
-        ).read_text(encoding="utf-8")
+        )
 
-        assert "separate root work packages" in skill_text
-        assert "main -> worker -> reviewer" in skill_text
-        assert "main -> worker1 -> reviewer" in memory_text
-        assert "main -> worker2 -> reviewer" in memory_text
-        assert "Do not create multiple callback dependencies from one active task" in memory_text
-        assert "do not route through `main` only to relay work" in memory_text
+        assert not removed_memory_patterns.exists()
+        assert "This skill is not a workflow-memory designer" in skill_text
+        assert "Do not edit `.ccb/ccb_memory.md`" in skill_text
+        assert "workflow memory can be set separately" in skill_text
+        assert "workflow memory files" in reference_text
+        assert "Do not edit memory files for ordinary config design" in reference_text
+        assert "callback dependencies" not in skill_text
+        assert "main -> worker" not in skill_text
+
+
+def test_source_checkout_runtime_discipline_is_enforced_by_entrypoints() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    source_entrypoint = (repo_root / "ccb").read_text(encoding="utf-8")
+    test_entrypoint = (repo_root / "ccb_test").read_text(encoding="utf-8")
+
+    for text in (source_entrypoint, test_entrypoint):
+        assert "source checkout" in text or "source-change validation" in text
+        assert "ccb_test" in text
+        assert "test_ccb2" in text
+    assert "/home/bfly/yunwei/test_ccb2" in test_entrypoint
+
+
+def test_inherited_runtime_skills_distinguish_source_validation_from_work_environment() -> None:
+    repo_root = Path(__file__).resolve().parents[1]
+    for provider_root in ("claude_skills", "codex_skills"):
+        for skill_name in ("ccb-config", "ccb-clear"):
+            skill_text = (
+                repo_root
+                / "inherit_skills"
+                / provider_root
+                / skill_name
+                / "SKILL.md"
+            ).read_text(encoding="utf-8")
+
+            assert "source checkout" in skill_text
+            assert "source validation" in skill_text
+            assert "ccb_test" in skill_text
+            assert "/home/bfly/yunwei/test_ccb2" in skill_text

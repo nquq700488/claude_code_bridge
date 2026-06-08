@@ -2217,12 +2217,14 @@ def test_opencode_workspace_preparation_writes_memory_config(tmp_path: Path, mon
     bundle_path = project_root / '.ccb' / 'runtime' / 'memory' / 'builder.md'
     config = json.loads(config_path.read_text(encoding='utf-8'))
     assert f'OPENCODE_CONFIG={shlex.quote(str(config_path))}' in cmd
+    assert 'OPENCODE_DISABLE_AUTOUPDATE=true' in cmd
     assert cmd.endswith('opencode --continue')
     assert config['provider'] == 'anthropic'
+    assert config['autoupdate'] is False
     assert config['instructions'] == ['AGENTS.md', '.ccb/runtime/memory/builder.md']
     bundle_text = bundle_path.read_text(encoding='utf-8')
     assert 'shared ask memory' in bundle_text
-    assert 'project opencode memory' in bundle_text
+    assert 'project opencode memory' not in bundle_text
 
 
 def test_opencode_workspace_preparation_records_memory_projection_once(tmp_path: Path, monkeypatch) -> None:

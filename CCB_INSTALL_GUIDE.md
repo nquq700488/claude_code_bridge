@@ -329,12 +329,19 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 - `,` — 上下堆叠（vertical split）
 - `(worktree)` — 该 Agent 使用独立 git worktree 隔离
 - `(N)` — 该 pane 的权重比例（默认 1），数字越大占空间越多
+- `@N` — 该 pane 的绝对百分比（v7.3.3+），如 `@50` 表示占 50%。`@N` 优先级高于 `(N)` 权重
 
-比例规则：分割按权重总和分配空间，`right_size = round(right_weight_sum / total_weight_sum × 100%)`。叶子权重相同则等高/等宽；权重不同则按比例分配。
+比例规则：分割按权重总和分配空间，`right_size = round(right_weight_sum / total_weight_sum × 100%)`。叶子权重相同则等高/等宽；权重不同则按比例分配。任一 pane 指定 `@N` 百分比时，百分比直接生效并覆盖权重计算。
 
 ```text
 # 权重示例：b 占 2 份，a 占 1 份 → b 宽度是 a 的两倍
 (a; b(2)), (c; d)  →  顶行左 33%，右 67%；底行等分
+
+# 百分比示例（v7.3.3+）：b 直接占 60%
+(a; b@60), (c; d)  →  顶行左 40%（自动计算），右 60%；底行等分
+
+# @N 优先于 (N)：指定 @30 时，括号权重被忽略
+(a@30; b(2))  →  a 占 30%，b 占 70%
 
 # 无括号时左结合
 a, b; c, d, e       →  左列 a+b，右列 c+d+e（三行等高）
@@ -495,6 +502,9 @@ cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx, agent5:agy
 
 # 按权重非对称布局：主面板更宽
 cmd; main:codex(3), reviewer:claude; qa:gemini
+
+# 按百分比精确分割（v7.3.3+）：主面板固定 70%
+cmd; main:codex@70, reviewer:claude; qa:gemini
 ```
 
 #### Chained Ask / Callback Routing（v6.2.x）

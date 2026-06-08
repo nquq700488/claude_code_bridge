@@ -367,6 +367,20 @@ require_command() {
   fi
 }
 
+env_value_is_true() {
+  case "${1:-}" in
+    1|true|TRUE|True|yes|YES|Yes|on|ON|On) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+env_value_is_false() {
+  case "${1:-}" in
+    0|false|FALSE|False|no|NO|No|off|OFF|Off) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 PYTHON_BIN="${CCB_PYTHON_BIN:-}"
 PYTHON_CANDIDATE_COMMANDS=(
   python3
@@ -425,6 +439,99 @@ require_python_version() {
     exit 1
   fi
   echo "OK: Python $version ($PYTHON_BIN)"
+}
+
+print_git_install_hint() {
+  local platform
+  platform="$(detect_platform)"
+  case "$platform" in
+    macos)
+      if command -v brew >/dev/null 2>&1; then
+        echo "   macOS: brew install git"
+      else
+        echo "   macOS: install Xcode Command Line Tools with 'xcode-select --install', or install Homebrew then run 'brew install git'"
+      fi
+      ;;
+    linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "   Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y git"
+      elif command -v dnf >/dev/null 2>&1; then
+        echo "   Fedora/CentOS/RHEL: sudo dnf install -y git"
+      elif command -v yum >/dev/null 2>&1; then
+        echo "   CentOS/RHEL: sudo yum install -y git"
+      elif command -v pacman >/dev/null 2>&1; then
+        echo "   Arch/Manjaro: sudo pacman -S git"
+      elif command -v apk >/dev/null 2>&1; then
+        echo "   Alpine: sudo apk add git"
+      elif command -v zypper >/dev/null 2>&1; then
+        echo "   openSUSE: sudo zypper install -y git"
+      else
+        echo "   Linux: install git with your distro's package manager"
+      fi
+      ;;
+    *)
+      echo "   Install git and ensure it is on PATH"
+      ;;
+  esac
+}
+
+print_npm_install_hint() {
+  local platform
+  platform="$(detect_platform)"
+  case "$platform" in
+    macos)
+      if command -v brew >/dev/null 2>&1; then
+        echo "   macOS: brew install node"
+      else
+        echo "   macOS: install Node.js/npm from https://nodejs.org/ or with Homebrew"
+      fi
+      ;;
+    linux)
+      if command -v apt-get >/dev/null 2>&1; then
+        echo "   Debian/Ubuntu: sudo apt-get update && sudo apt-get install -y nodejs npm"
+      elif command -v dnf >/dev/null 2>&1; then
+        echo "   Fedora/CentOS/RHEL: sudo dnf install -y nodejs npm"
+      elif command -v yum >/dev/null 2>&1; then
+        echo "   CentOS/RHEL: sudo yum install -y nodejs npm"
+      elif command -v pacman >/dev/null 2>&1; then
+        echo "   Arch/Manjaro: sudo pacman -S nodejs npm"
+      elif command -v apk >/dev/null 2>&1; then
+        echo "   Alpine: sudo apk add nodejs npm"
+      elif command -v zypper >/dev/null 2>&1; then
+        echo "   openSUSE: sudo zypper install -y nodejs npm"
+      else
+        echo "   Linux: install Node.js/npm with your distro's package manager"
+      fi
+      ;;
+    *)
+      echo "   Install Node.js/npm and ensure npm is on PATH"
+      ;;
+  esac
+}
+
+check_role_pack_dependencies() {
+  local mode="${1:-warn}"
+  local label="WARN"
+  if [[ "$mode" == "required" ]]; then
+    label="ERROR"
+  fi
+  local missing=0
+  if ! command -v git >/dev/null 2>&1; then
+    echo "$label: Missing dependency for Role Pack provisioning: git"
+    print_git_install_hint
+    missing=1
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "$label: Missing dependency for Role Pack provisioning: npm"
+    print_npm_install_hint
+    missing=1
+  fi
+  if [[ "$missing" -eq 0 ]]; then
+    return 0
+  fi
+  echo "   Install the missing dependencies above, then re-run ./install.sh install."
+  echo "   To install CCB without Role Pack provisioning now, set CCB_INSTALL_ROLES=0."
+  return 1
 }
 
 selected_python_executable() {
@@ -2182,7 +2289,37 @@ install_droid_delegation() {
 
 CCB_START_MARKER="<!-- CCB_CONFIG_START -->"
 CCB_END_MARKER="<!-- CCB_CONFIG_END -->"
+CCB_ROLES_START_MARKER="<!-- CCB_ROLES_START -->"
+CCB_ROLES_END_MARKER="<!-- CCB_ROLES_END -->"
+CCB_RUBRICS_START_MARKER="<!-- REVIEW_RUBRICS_START -->"
+CCB_RUBRICS_END_MARKER="<!-- REVIEW_RUBRICS_END -->"
 LEGACY_RULE_MARKER="## Codex 协作规则"
+
+file_has_ccb_memory_marker() {
+  local file_path="$1"
+
+  grep -q "$CCB_START_MARKER" "$file_path" 2>/dev/null || \
+    grep -q "$CCB_ROLES_START_MARKER" "$file_path" 2>/dev/null || \
+    grep -q "$CCB_RUBRICS_START_MARKER" "$file_path" 2>/dev/null || \
+    grep -q "<!-- CODEX_REVIEW_START -->" "$file_path" 2>/dev/null || \
+    grep -q "<!-- GEMINI_INSPIRATION_START -->" "$file_path" 2>/dev/null
+}
+
+remove_ccb_owned_memory_file() {
+  local file_path="$1"
+  local label="$2"
+
+  if [[ ! -f "$file_path" ]]; then
+    return 0
+  fi
+
+  if file_has_ccb_memory_marker "$file_path"; then
+    rm -f "$file_path"
+    echo "Removed CCB-owned $label: $file_path"
+  else
+    echo "Preserved non-CCB $label: $file_path"
+  fi
+}
 
 remove_codex_mcp() {
   local claude_config="$HOME/.claude.json"
@@ -2289,9 +2426,8 @@ install_claude_md_config() {
 
   # In route mode, write full config to external file
   if [[ "$md_mode" == "route" ]]; then
-    mkdir -p "$HOME/.claude/rules"
-    cp "$full_template" "$external_config"
-    echo "Wrote full CCB config to $external_config"
+    remove_ccb_owned_memory_file "$external_config" "external CCB config" || true
+    echo "Route mode no longer writes $external_config; using compact CLAUDE.md guidance only."
   fi
 
   local ccb_content
@@ -2344,11 +2480,6 @@ with open(sys.argv[1], 'w', encoding='utf-8') as f:
 
   echo "Updated AI collaboration rules in $claude_md (mode: $md_mode)"
 }
-
-CCB_ROLES_START_MARKER="<!-- CCB_ROLES_START -->"
-CCB_ROLES_END_MARKER="<!-- CCB_ROLES_END -->"
-CCB_RUBRICS_START_MARKER="<!-- REVIEW_RUBRICS_START -->"
-CCB_RUBRICS_END_MARKER="<!-- REVIEW_RUBRICS_END -->"
 
 install_agents_md_config() {
   if install_uses_live_source; then
@@ -2788,6 +2919,9 @@ install_requirements() {
   check_wsl_compatibility
   confirm_backend_env_wsl
   require_python_version
+  if env_value_is_true "${CCB_INSTALL_ROLES:-ask}"; then
+    check_role_pack_dependencies required
+  fi
   if use_managed_venv; then
     echo "INFO: Python package dependencies will be installed inside the managed Python venv"
   else
@@ -2892,11 +3026,14 @@ install_all() {
 
 provision_role_packs() {
   local requested="${CCB_INSTALL_ROLES:-ask}"
-  if [[ "$requested" == "0" || "$requested" == "false" || "$requested" == "off" || "$requested" == "no" ]]; then
+  if env_value_is_false "$requested"; then
     echo "INFO: Role Pack provisioning skipped by CCB_INSTALL_ROLES=0"
     return 0
   fi
-  if [[ "$requested" != "1" && "$requested" != "true" && "$requested" != "on" && "$requested" != "yes" ]]; then
+  local required=0
+  if env_value_is_true "$requested"; then
+    required=1
+  else
     if [[ ! -t 0 || ! -t 1 ]]; then
       echo "INFO: Role Pack provisioning skipped in non-interactive install."
       echo "      Run 'ccb roles install agentroles.archi' later to install roles and dependencies."
@@ -2913,6 +3050,13 @@ provision_role_packs() {
         ;;
       *) ;;
     esac
+  fi
+  local dependency_mode="warn"
+  if [[ "$required" == "1" ]]; then
+    dependency_mode="required"
+  fi
+  if ! check_role_pack_dependencies "$dependency_mode"; then
+    [[ "$required" == "1" ]] && return 1 || return 0
   fi
   local ccb_entry
   if install_uses_live_source; then
@@ -2942,7 +3086,7 @@ provision_role_packs() {
   echo "WARN: Role Pack provisioning failed"
   sed 's/^/   /' "$log_file" 2>/dev/null || true
   rm -f "$log_file"
-  return 0
+  [[ "$required" == "1" ]] && return 1 || return 0
 }
 
 provision_neovim_tool() {
@@ -2998,11 +3142,7 @@ provision_neovim_tool() {
 uninstall_claude_md_config() {
   local claude_md="$HOME/.claude/CLAUDE.md"
 
-  if [[ ! -f "$claude_md" ]]; then
-    return
-  fi
-
-  if grep -q "$CCB_START_MARKER" "$claude_md" 2>/dev/null; then
+  if [[ -f "$claude_md" ]] && grep -q "$CCB_START_MARKER" "$claude_md" 2>/dev/null; then
     echo "Removing CCB config block from CLAUDE.md..."
     if pick_any_python_bin; then
       "$PYTHON_BIN" -c "
@@ -3020,7 +3160,7 @@ with open('$claude_md', 'w', encoding='utf-8') as f:
     else
       echo "WARN: python required to clean CLAUDE.md, please manually remove CCB_CONFIG block"
     fi
-  elif grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
+  elif [[ -f "$claude_md" ]] && grep -qE "$LEGACY_RULE_MARKER|## Codex Collaboration Rules|## Gemini|## OpenCode" "$claude_md" 2>/dev/null; then
     echo "Removing legacy collaboration rules from CLAUDE.md..."
     if pick_any_python_bin; then
       "$PYTHON_BIN" -c "
@@ -3050,10 +3190,7 @@ with open('$claude_md', 'w', encoding='utf-8') as f:
 
   # Clean up external config file if it exists (route mode)
   local external_config="$HOME/.claude/rules/ccb-config.md"
-  if [[ -f "$external_config" ]]; then
-    rm -f "$external_config"
-    echo "Removed external CCB config: $external_config"
-  fi
+  remove_ccb_owned_memory_file "$external_config" "external CCB config" || true
 }
 
 uninstall_settings_permissions() {

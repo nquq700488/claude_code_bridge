@@ -2,6 +2,100 @@
 
 # Changelog
 
+## v7.3.6 (2026-06-07)
+
+### Provider Memory Ownership Cleanup
+
+- **Provider Memory Ownership Policy Added**: Claude, Codex, and OpenCode
+  managed contexts now exclude provider-native project memory from the CCB
+  generated bundle, preventing duplicate project instructions when those
+  providers already load their own native memory files. Gemini keeps the
+  previous inclusion behavior pending a separate provider audit.
+- **Provider User Memory Filtered**: provider user memory is filtered only at
+  the provider-user-memory source layer, removing legacy CCB install marker
+  blocks and old collaboration sections without rewriting user-owned files.
+- **Shared Memory Template Simplified**: the default `.ccb/ccb_memory.md`
+  template is updated to v5 and no longer repeats the Ask Communication block
+  already supplied through CCB managed agent memory.
+- **Seed-Aware Shared Memory Migration Added**: CCB upgrades only old,
+  unedited generated shared-memory templates; edited project memory is
+  preserved and not overwritten.
+- **Claude Route-Mode Install Hardened**: route-mode installs no longer write
+  `~/.claude/rules/ccb-config.md`. Install/uninstall remove only CCB-marked
+  legacy external config files and preserve unmarked user files.
+- **Source Runtime Tmux UI Import Cycle Fixed**: tmux UI version detection no
+  longer imports management-runtime version helpers, keeping source-checkout
+  startup paths import-safe under `ccb_test`.
+
+## v7.3.5 (2026-06-07)
+
+### Tmux Border Hook Hotfix
+
+- **Release Path Hook Fixed**: `config/ccb-tmux-on.sh` now resolves stable
+  installed config scripts through `CODEX_INSTALL_PREFIX` or `PATH` before
+  falling back to the current release tree, preventing long-lived tmux hooks
+  from storing temporary `/tmp/ccb-v...-release.../config/ccb-border.sh`
+  paths.
+- **Border Hook Guarded**: Python runtime hook generation now writes
+  `after-select-pane` with `run-shell -b` plus a `[ -x script ] || exit 0`
+  guard, so stale script paths do not repeatedly report
+  `ccb-border.sh ... returned 127` while switching panes.
+- **Post-Update Tmux UI Refresh Added**: `ccb update` now best-effort refreshes
+  active tmux UI hooks with `set_tmux_ui_active(True)`, allowing users upgrading
+  from v7.3.4 to automatically rewrite bad hooks without turning UI refresh
+  failures into Role Pack provisioning failures.
+- **v7.3.4 Withdrawn**: v7.3.4 remains published only as a prerelease/withdrawn
+  build because it can persist temporary release paths into tmux hooks. Use
+  v7.3.5 or newer as the stable upgrade target.
+
+## v7.3.4 (2026-06-07)
+
+### Withdrawn Prerelease
+
+- v7.3.4 was withdrawn because its tmux border hook could persist temporary
+  release paths such as `/tmp/ccb-v...-release.../config/ccb-border.sh` into
+  long-lived sessions, causing pane clicks to report `returned 127` after the
+  temporary build directory disappeared. Use v7.3.5 or newer.
+- **Archi Role Tooling Simplified**: `agentroles.archi` now uses the global
+  `@seemseam/archi` npm package as the single Architec tool source. CCB no
+  longer tries to split Hippo, llmgateway, editable git checkouts, or managed
+  pip/venv installs into separate Archi dependencies.
+- **Archi Doctor Aligned With Bundled Capabilities**: `ccb roles install`,
+  `ccb roles update`, and `ccb roles doctor agentroles.archi` now report and
+  validate the npm package, the `archi` CLI, and its bundled Hippo/llmgateway
+  capabilities instead of CCB-managed Python tool internals.
+- **Legacy `ccb-arch` Forwarder Updated**: `bin/ccb-arch` forwards directly to
+  `archi` when available and otherwise prints the required
+  `npm install -g @seemseam/archi` command.
+- **Sidebar Focus Restart Fixed**: sidebar-driven focus changes no longer
+  restart agent panes unnecessarily, preserving live provider state while still
+  allowing explicit pane restarts for refresh workflows.
+- **Guarded Source Test Entrypoint Added**: `ccb_test` provides a guarded
+  source-checkout entrypoint for isolated development validation without
+  modifying or shadowing the installed CCB runtime.
+- **OpenCode Autoupdate Disabled In Managed Panes**: generated `opencode.json`
+  now sets `autoupdate = false`, and managed OpenCode launches include
+  `OPENCODE_DISABLE_AUTOUPDATE=true` so CCB-owned panes do not self-update
+  under the workspace runtime.
+- **Config Skill Refined**: inherited `ccb-config` skills now support
+  config-only operation, follow the user's language more consistently, fix YAML
+  description quoting, and group menu/config guidance more clearly.
+- **Sidebar Refresh Uses Pane Restart**: sidebar refresh guidance now prefers
+  restarting panes, keeping UI state changes explicit and recoverable.
+- **Config Designer Planning Added**: the plan tree now includes the local
+  config-designer UI roadmap, decisions, and open questions.
+- **Layout And Antigravity Updates Included**: this release carries the main
+  branch `@percent` layout split token support and Antigravity lifecycle/zombie
+  cleanup updates.
+
+## v7.3.3 (2026-06-06)
+
+### Withdrawn Draft
+
+- v7.3.3 was withdrawn before stable rollout because it carried a sidebar
+  focus/refresh regression. It is not the recommended release and should not be
+  used for upgrades; use v7.3.5 or newer.
+
 ## v7.3.2 (2026-06-05)
 
 ### First-Install Role Pack Provisioning Hotfix
