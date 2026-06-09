@@ -57,6 +57,13 @@ $MESSAGE
 EOF
 ```
 
-After the command returns, end the turn. Do not wait for a reply,
-do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
-For `--callback`, report only that delegation was submitted.
+## Execution
+
+For plain `ask` and `--compact`, submit and block until the reply arrives:
+
+1. Submit and capture the output (contains `job_<hex>`).
+2. Block: `command pend --watch "$JOB_ID" --timeout 600`
+3. Present the reply to the user.
+
+For `--silence`, submit and report job_id only. Do NOT wait.
+For `--callback`, submit and stop immediately; CCB delivers continuation.
