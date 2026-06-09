@@ -1,12 +1,9 @@
----
-name: ask
-description: Send a request to a CCB agent with `ask`.
-metadata:
-  short-description: Ask agent
----
+# Skill Update Draft
 
-Use this when the user asks you to delegate with CCB, or when project memory
-says to use CCB `ask` for collaboration.
+Date: 2026-06-08
+
+This draft is written in English so it can be copied into inherited skill
+templates without violating template checks that disallow Chinese text.
 
 ## Decision Card
 
@@ -48,20 +45,3 @@ Before every ask, decide:
 - `ask get`, `pend`, `watch`, and `ping` are diagnostics-only commands for
   explicit debugging requests, not normal ask workflow tools.
 - Do not manually append output-policy text; `ask` injects reply guidance.
-
-PowerShell equivalent of the heredoc form. Always pipe a single-quoted
-here-string (`@'...'@`) to `FilePath "ask"` on stdin; the heredoc form is the
-only allowed form.
-
-```powershell
-@'
-$MESSAGE
-'@ | & { Start-Process -NoNewWindow -FilePath "ask" -ArgumentList @("$TARGET") -RedirectStandardInput $input }
-```
-
-Add selected flags before `"$TARGET"` in `-ArgumentList`, for example
-`@("--callback", "--artifact-reply", "$TARGET")`.
-
-After the command returns, end the turn. Do not wait for a reply,
-do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
-For `--callback`, report only that delegation was submitted.

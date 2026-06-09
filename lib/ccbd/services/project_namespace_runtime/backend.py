@@ -72,6 +72,7 @@ def ensure_server_policy(backend, *, timeout_s: float | None = None) -> None:
         timeout_s=timeout_s,
     )
     _apply_optional_server_policy(backend, option='mouse', value='on', timeout_s=timeout_s)
+    _apply_optional_server_policy(backend, option='history-limit', value='50000', timeout_s=timeout_s)
     _apply_optional_server_policy(backend, option='set-clipboard', value='on', timeout_s=timeout_s)
     _apply_optional_server_policy(backend, option='focus-events', value='on', timeout_s=timeout_s)
     _apply_optional_server_policy(backend, option='escape-time', value='10', timeout_s=timeout_s)
@@ -213,7 +214,10 @@ def _resolved_session_size(terminal_size: tuple[int, int] | None) -> tuple[int, 
         height = int(terminal_size[1])
     except Exception:
         return default
-    if width <= 0 or height <= 0:
+    # 40x15 是四分屏可正常拆分的 sanity 下限：低于此宽高 tmux 无法materialize
+    # 两列四 pane 布局，且这类极小值通常来自尚未初始化/已 detached 的终端脏读，
+    # 一律回退到 default 而非硬塞，避免起出畸形 pane。
+    if width < 40 or height < 15:
         return default
     return width, height
 

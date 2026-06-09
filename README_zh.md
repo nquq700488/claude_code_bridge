@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.3.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.3.8-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)
@@ -412,6 +412,21 @@ $ccb-config 为一个 Python library 设计团队：main 负责任务拆分，�
 | 当前 agent 派发独立任务，成功结果不需要回来 | `ask --silence worker1` |
 | 调试队列、诊断状态 | `pend`、`watch`、`ping` 等只作为诊断工具使用 |
 
+agent 提交子任务时，先按结果意图选参数，再按依赖关系和内容保真补充参数：
+
+| 需求 | 推荐参数 |
+| :--- | :--- |
+| 发布或执行任务，成功结果不需要回来 | `--silence` |
+| 需要简短结果：状态、发现、风险、阻塞、下一步 | `--compact` |
+| 需要完整咨询、分析、报告、生成文档或结构化结论 | `--artifact-reply` |
+| 当前 active 父任务必须等子任务结果才能继续 | 追加 `--callback` |
+| 需要保留精确粘贴的日志、diff、JSON/YAML、表格或复制文本 | 追加 `--artifact-request` |
+| 输入和输出都需要保真 | `--artifact-io` |
+| 只是短问题或短交接，行内文本足够 | 普通 `ask` |
+
+`--callback` 和 `--silence` 管任务关系；artifact 参数管内容保真。自动长消息
+spill 只是兜底，所以只要精确输入或完整输出重要，就应该主动使用 artifact 参数。
+
 <details>
 <summary><b>Callback 为什么重要</b></summary>
 
@@ -514,6 +529,27 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
+<summary><b>v7.3.8</b> - AGY adapter 与项目 tmux history</summary>
+
+- 新增 Antigravity (`agy`) `pane_quiet` execution adapter，包含协议解析、命令分发、轮询和配套文档，可作为 CCB 托管 provider 运行。
+- CCB 托管项目 tmux session 默认保留 50000 行 scrollback history，并覆盖 project namespace 创建/复用和 detached runtime fallback 路径。
+- 在 authoritative project session 存在后，稳定重放 tmux mouse、vi key、clipboard、focus 和 history 策略。
+- Claude startup 会尽量以内联 JSON 传递 `--settings`，避免非 ASCII source path 在 provider 启动链路中失效。
+
+</details>
+
+<details>
+<summary><b>v7.3.7</b> - Ask 参数策略与 skill 指引</summary>
+
+- inherited Claude、Codex、Droid ask skills 改为先按结果意图选择参数：`--silence`、`--compact`、`--artifact-reply` 或普通 `ask`。
+- 依赖关系保持显式：只有 active 父任务必须等待子任务结果时才追加 `--callback`。
+- artifact transport 与任务关系分离：需要精确输入或输入/输出保真时才使用 `--artifact-request` 和 `--artifact-io`。
+- README / README_zh 的 Agent Collaboration 小节新增 ask 参数速查表。
+- 新增 ask-parameter-policy plan tree、决策记录、参数矩阵和验证记录。
+
+</details>
+
+<details>
 <summary><b>v7.3.6</b> - Provider memory ownership 清理</summary>
 
 - 新增 provider memory ownership policy：Claude、Codex、OpenCode 的托管上下文不再把 provider-native project memory 重复注入 CCB 生成 bundle；Gemini 暂时保留旧行为，等待单独审计。

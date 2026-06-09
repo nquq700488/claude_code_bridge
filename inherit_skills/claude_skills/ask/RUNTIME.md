@@ -1,12 +1,6 @@
----
-name: ask
-description: Send a request to a CCB agent with `ask`.
-metadata:
-  short-description: Ask agent
----
+# Async Ask
 
-Use this when the user asks you to delegate with CCB, or when project memory
-says to use CCB `ask` for collaboration.
+Use this only to submit a CCB ask request, then stop.
 
 ## Decision Card
 
@@ -49,19 +43,23 @@ Before every ask, decide:
   explicit debugging requests, not normal ask workflow tools.
 - Do not manually append output-policy text; `ask` injects reply guidance.
 
-PowerShell equivalent of the heredoc form. Always pipe a single-quoted
-here-string (`@'...'@`) to `FilePath "ask"` on stdin; the heredoc form is the
-only allowed form.
+Always send `MESSAGE` through the `<<'EOF' ... EOF` heredoc below. No other form
+is allowed. Use no flags or insert selected flags before `"$TARGET"`:
 
-```powershell
-@'
+```bash
+command ask "$TARGET" <<'EOF'
 $MESSAGE
-'@ | & { Start-Process -NoNewWindow -FilePath "ask" -ArgumentList @("$TARGET") -RedirectStandardInput $input }
+EOF
 ```
 
-Add selected flags before `"$TARGET"` in `-ArgumentList`, for example
-`@("--callback", "--artifact-reply", "$TARGET")`.
+```bash
+command ask --callback --artifact-reply "$TARGET" <<'EOF'
+$MESSAGE
+EOF
+```
 
-After the command returns, end the turn. Do not wait for a reply,
-do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
-For `--callback`, report only that delegation was submitted.
+- Sender is inferred from the current CCB workspace.
+- `TARGET=all` broadcasts.
+- After the command returns, immediately end the turn. Do not wait for a reply,
+  do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
+- For `--callback`, report only that delegation was submitted.

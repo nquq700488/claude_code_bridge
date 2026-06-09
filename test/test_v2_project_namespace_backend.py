@@ -123,6 +123,7 @@ def test_prepare_server_then_create_session_and_server_policy_retry_transient_tm
     assert backend.calls.count(('start-server',)) == 2
     assert backend.calls.count(('set-option', '-g', 'destroy-unattached', 'off')) == 2
     assert backend.calls.count(('set-option', '-g', 'mouse', 'on')) == 1
+    assert backend.calls.count(('set-option', '-g', 'history-limit', '50000')) == 1
     assert backend.calls.count(('set-option', '-g', 'set-clipboard', 'on')) == 1
     assert backend.calls.count(('set-option', '-g', 'focus-events', 'on')) == 1
     assert backend.calls.count(('set-option', '-g', 'escape-time', '10')) == 1
@@ -187,12 +188,14 @@ def test_prepare_server_does_not_require_server_policy_before_session_exists(mon
     assert backend.calls[0] == ('start-server',)
     assert ('set-option', '-g', 'destroy-unattached', 'off') not in backend.calls[:2]
     assert ('set-option', '-g', 'mouse', 'on') not in backend.calls[:2]
+    assert ('set-option', '-g', 'history-limit', '50000') not in backend.calls[:2]
     assert ('set-option', '-g', 'set-clipboard', 'on') not in backend.calls[:2]
     assert ('set-option', '-g', 'focus-events', 'on') not in backend.calls[:2]
     assert ('set-option', '-g', 'escape-time', '10') not in backend.calls[:2]
     expected_policy_calls = [
         ('set-option', '-g', 'destroy-unattached', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
+        ('set-option', '-g', 'history-limit', '50000'),
         ('set-option', '-g', 'set-clipboard', 'on'),
         ('set-option', '-g', 'focus-events', 'on'),
         ('set-option', '-g', 'escape-time', '10'),
@@ -375,6 +378,39 @@ def test_create_session_uses_terminal_size_hint_when_provided(monkeypatch, tmp_p
     ]
 
 
+def test_create_session_falls_back_to_default_size_when_terminal_size_too_small(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+
+    create_session(
+        backend,
+        session_name='ccb-proj',
+        project_root=tmp_path,
+        window_name='cmd',
+        terminal_size=(10, 5),
+    )
+
+    assert backend.calls == [
+        (
+            'new-session',
+            '-d',
+            '-x',
+            '160',
+            '-y',
+            '48',
+            '-s',
+            'ccb-proj',
+            '-n',
+            'cmd',
+            '-c',
+            str(tmp_path),
+            'sh',
+            '-lc',
+            'while :; do sleep 3600; done',
+        )
+    ]
+
+
 def test_create_session_accepts_fast_probe_timeout(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
     backend = _FlakyBackend()
@@ -396,9 +432,10 @@ def test_ensure_server_policy_accepts_fast_probe_timeout(monkeypatch) -> None:
 
     ensure_server_policy(backend, timeout_s=0.0)
 
-    assert backend.calls[:6] == [
+    assert backend.calls[:7] == [
         ('set-option', '-g', 'destroy-unattached', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
+        ('set-option', '-g', 'history-limit', '50000'),
         ('set-option', '-g', 'set-clipboard', 'on'),
         ('set-option', '-g', 'focus-events', 'on'),
         ('set-option', '-g', 'escape-time', '10'),

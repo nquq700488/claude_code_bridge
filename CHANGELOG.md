@@ -2,6 +2,48 @@
 
 # Changelog
 
+## v7.3.8 (2026-06-08)
+
+### AGY Adapter And Project Tmux History
+
+- **AGY Execution Adapter Added**: Antigravity (`agy`) now has a
+  `pane_quiet` execution adapter with protocol parsing, command dispatch,
+  polling, and supporting docs, so it can participate as a managed CCB
+  provider without relying on the older launcher path.
+- **Project Tmux History Preserved**: CCB-managed project tmux sessions now
+  apply a 50000-line scrollback history limit alongside the existing mouse and
+  vi key policies, including project namespace creation/reuse and detached
+  runtime fallback paths.
+- **Tmux Policy Contract Updated**: startup and layout contracts now state that
+  project-owned sessions reapply `history-limit 50000`, `mouse on`,
+  `mode-keys vi`, and related bindings after the authoritative session exists.
+- **Claude Settings Launch Hardened**: Claude startup now passes inline
+  `--settings` JSON when possible, preserving non-ASCII source paths that can
+  fail when only a settings file path is passed through the provider CLI.
+
+## v7.3.7 (2026-06-08)
+
+### Ask Parameter Policy And Skill Guidance
+
+- **Ask Skills Use Result Intent First**: inherited Claude, Codex, and Droid
+  ask skills now choose `--silence`, `--compact`, `--artifact-reply`, or plain
+  `ask` from the desired result shape first, then add `--callback` only for
+  active parent dependency chains and artifact request/io flags only when exact
+  content preservation is needed.
+- **Artifact Transport Guidance Tightened**: ask skill guidance now separates
+  task relationship flags from content-preservation flags, treats automatic
+  long-message spill as a fallback, and discourages conflicting combinations
+  such as `--silence --artifact-reply`.
+- **README Ask Quick Reference Added**: English and Chinese README Agent
+  Collaboration sections now include a compact ask-parameter selection table
+  for silence, compact, artifact reply/request/io, callback, and plain ask.
+- **Ask Parameter Policy Plan Added**: the plan tree now documents the ask
+  parameter matrix, callback/silence boundaries, artifact transport policy,
+  decisions, roadmap, and validation history.
+- **Skill Template Tests Expanded**: ask skill template tests now assert the
+  result-intent decision card, artifact policy, command shapes, diagnostics
+  guardrails, and no-Chinese drift across inherited templates.
+
 ## v7.3.6 (2026-06-07)
 
 ### Provider Memory Ownership Cleanup
