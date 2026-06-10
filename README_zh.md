@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.3.8-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.4.0-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)
@@ -158,7 +158,7 @@ tips_height = "35%"
 comms_limit = 3
 ```
 
-如果你不确定应该如何分组、要几个 worker、哪些 agent 用 worktree、哪些 agent 需要独立模型或 API，可以先让支持 skill 的 agent 使用 `ccb-config` 和你讨论并生成配置方案。
+如果你不确定应该如何分组、要几个 worker、哪些 agent 用 worktree、哪些 agent 需要独立模型或 API，可以先添加 `agentroles.ccb_self`，再让 `ccb_self` 使用它内置的 `ccb-config` 和你讨论并生成配置方案。
 
 验证配置：
 
@@ -262,7 +262,7 @@ CCB 配置有三层，优先级从低到高：
 
 在已启动的项目里修改 `.ccb/ccb.config` 后，先运行 `ccb reload --dry-run` 预览计划，再运行 `ccb reload` 应用。显式 reload 可以动态新增 agent、新增 window、新增/删除托管工具 window、卸载 idle agent、删除 idle window，同时保持无关 agent 和 pane 继续运行。它不是后台文件监听；busy agent 卸载、provider 替换、agent 移动、工具命令替换和任意布局重排会被拒绝，不会 kill 现有 pane。
 
-如果你想先讨论配置而不是手写，可以直接用 `ccb-config` skill 描述目标团队。它会先提出完整方案，确认后再修改 `.ccb/ccb.config`。
+如果你想先讨论配置而不是手写，可以添加 `agentroles.ccb_self`，再让 `ccb_self` 描述目标团队。它的内置 `ccb-config` skill 会先提出完整方案，确认后再修改 `.ccb/ccb.config`。
 
 ### Role Packs
 
@@ -270,16 +270,27 @@ Role Pack 用来定义可复用的 agent 角色。一个 role 可以包含稳定
 记忆、provider-specific skills、工具 hooks 和依赖准备逻辑。这样项目配置会更短，
 专门角色也能跨项目复用，不需要在每个项目里复制一大段角色说明。
 
-目前 catalog role 里已有 `agentroles.archi`，用于架构审查，来自
-`agent-roles-spec`，并由 Architec 支撑；后续会陆续引入更多专业角色。
-在 `install.sh install` 时确认安装/刷新 catalog roles；`ccb update` 会刷新
-已安装 role，并报告新 catalog role。也可以手动刷新：
+推荐默认 catalog roles 包括 `agentroles.ccb_self` 和
+`agentroles.archi`：前者是 CCB 自维护角色，后者用于架构审查，来自
+`agent-roles-spec`，并由 Architec 支撑。`install.sh install` 默认会尝试安装
+或刷新这些推荐角色；`ccb update` 在接受 Role Pack provisioning 时会刷新已安装
+role，并安装缺失的推荐角色。也可以手动刷新：
 
 ```bash
+ccb roles update agentroles.ccb_self
 ccb roles update agentroles.archi
 ```
 
-在项目里使用这个 role 时，把它作为 window leaf 加进去：
+强烈建议 CCB 项目添加 `ccb_self`，因为它负责 CCB 配置维护、运行诊断、受保护
+恢复、工作链修复和单 agent 重启辅助，同时不接管业务任务。需要该维护 agent
+的项目里，显式把它作为 window leaf 加进去：
+
+```bash
+ccb roles add agentroles.ccb_self:codex
+ccb reload
+```
+
+在项目里使用 `agentroles.archi` 时，把它作为 window leaf 加进去：
 
 ```bash
 ccb roles add agentroles.archi:codex
@@ -378,26 +389,30 @@ model = "sonnet"
 
 </details>
 
-## 使用 ccb-config skill 配置
+## 使用 ccb_self 配置 CCB
 
-如果你不想手写 `.ccb/ccb.config`，可以让支持 skill 的 agent 使用 `ccb-config` 帮你设计。推荐先用自然语言描述项目目标、并行程度、窗口分组、worktree 隔离、provider/model/API 偏好，让它和你讨论后提出完整配置方案。
+完整的 `ccb-config` skill 属于 `agentroles.ccb_self` 角色，不再作为所有 agent 都继承的公共 skill。CCB 默认会安装或刷新这个 Role Pack，但不会静默把 `ccb_self` 加进已有项目；需要维护助手的项目应显式绑定它。
+
+如果你不想手写 `.ccb/ccb.config`，可以添加 `ccb_self`，再用自然语言描述项目目标、并行程度、窗口分组、worktree 隔离、provider/model/API 偏好。`ccb_self` 会使用它内置的 `ccb-config` 和你讨论后提出完整配置方案。
 
 示例：
 
-```text
-$ccb-config 为一个 Python library 设计团队：main 负责任务拆分，三个 worker 使用 worktree 并行实现，一个 reviewer 做回归和风险审查。保留单窗口还是拆成 main/work/review 三个 window 由你建议。
+```bash
+ccb roles add agentroles.ccb_self:codex
+ccb reload
+ccb ask ccb_self "为一个 Python library 设计团队：main 负责任务拆分，三个 worker 使用 worktree 并行实现，一个 reviewer 做回归和风险审查。保留单窗口还是拆成 main/work/review 三个 window 由你建议。"
 ```
 
 <details>
 <summary><b>ccb-config 的写入流程和边界</b></summary>
 
 1. 你用自然语言描述项目和团队目标。
-2. `ccb-config` 读取当前配置权威层，判断是新建、修改还是迁移。
+2. `ccb_self` 内置的 `ccb-config` 读取当前配置权威层，判断是新建、修改还是迁移。
 3. 它先提出完整配置方案，不应直接改文件。
 4. 你确认后，它只修改 `.ccb/ccb.config`。
 5. 它运行配置校验，并在可动态应用时提醒你使用 `ccb reload --dry-run` / `ccb reload` 生效。
 
-默认情况下，`ccb-config` 不会修改 `.ccb/ccb_memory.md` 或 `.ccb/agents/<agent>/memory.md`。只有当你明确要求“设计工作流记忆”或“写入角色记忆”时，才应该修改这些 memory 文件。
+默认情况下，`ccb-config` 不会修改 `.ccb/ccb_memory.md` 或 `.ccb/agents/<agent>/memory.md`。只有当你明确要求 `ccb_self` “设计工作流记忆”或“写入角色记忆”时，才应该修改这些 memory 文件。
 
 </details>
 
@@ -492,7 +507,7 @@ ccb reinstall
 <details>
 <summary><b>想把旧 compact 配置迁移到多 window</b></summary>
 
-使用 `ccb-config` 描述你想要的窗口分组，例如 main/work/review。迁移时应保留旧 agent 名称、provider、worktree 标记、model/key/url 等字段，确认后再写入 `[windows]`。
+让 `ccb_self` 使用它内置的 `ccb-config`，描述你想要的窗口分组，例如 main/work/review。迁移时应保留旧 agent 名称、provider、worktree 标记、model/key/url 等字段，确认后再写入 `[windows]`。
 
 </details>
 
@@ -529,6 +544,16 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
+<summary><b>v7.4.0</b> - ccb_self 自维护角色</summary>
+
+- 新增 `agentroles.ccb_self` 自维护 Role Pack 路径，覆盖 CCB 配置所有权、运行诊断、受保护恢复、工作链修复和单 agent 重启辅助。
+- 完整 `ccb-config` 改为 `ccb_self` 私有内置 skill，不再作为全局继承 skill 发给所有 agent。
+- 安装/更新的 Role Pack provisioning 默认安装或刷新推荐默认角色，包括 `agentroles.ccb_self`。
+- 强烈推荐需要维护助手的 CCB 项目添加 `agentroles.ccb_self:codex`。
+
+</details>
+
+<details>
 <summary><b>v7.3.8</b> - AGY adapter 与项目 tmux history</summary>
 
 - 新增 Antigravity (`agy`) `pane_quiet` execution adapter，包含协议解析、命令分发、轮询和配套文档，可作为 CCB 托管 provider 运行。

@@ -148,7 +148,8 @@ cd claude_code_bridge
 
 6. **安装 Inherited Skills（v7.0+）**
    - 技能源文件从 `inherit_skills/` 目录复制到各 Provider 的 skills 目录
-   - Claude skills → `~/.claude/skills/`（ask, ccb-config, ccb-clear 等）
+   - Claude skills → `~/.claude/skills/`（ask, ccb-clear 等）
+   - `ccb-config` skill 已迁移至 `agentroles.ccb_self` Role Pack（v7.4.0+），不再通过 `inherit_skills/` 安装
    - Codex skills → `~/.codex/skills/`
    - Droid/Factory skills → `~/.factory/skills/`（若检测到 droid CLI）
    - Kimi skills → `~/.kimi/skills/`（若检测到 kimi CLI）
@@ -156,7 +157,7 @@ cd claude_code_bridge
 
 7. **注入 CCB 配置到 CLAUDE.md**
    - 在 `~/.claude/CLAUDE.md` 中写入 CCB 协作规则
-   - 包括角色分配表、Peer Review 框架、Async Guardrail
+   - 包括角色分配表、Peer Review 框架、CCB Sync Workflow
    - **v6.2.5+**：managed home 中的 `.claude/CLAUDE.md` 不再复制项目根目录的 `CLAUDE.md`，避免重复加载
 
 8. **配置权限**
@@ -457,16 +458,26 @@ Agent 配置字段：
 - 检查是否有未处理的边界条件
 ```
 
-#### `ccb_config` Skill（v6.2.1+）
+#### `ccb_config` Skill → `agentroles.ccb_self`（v7.4.0+）
 
-Claude 和 Codex 安装后会继承 `ccb_config` skill，支持通过自然语言设计或更新 Agent 团队：
+从 v7.4.0 开始，`ccb-config` skill 从 `inherit_skills/` 迁移至 **`agentroles.ccb_self`** Role Pack，作为 CCB 专属的自维护角色资产。安装 `agentroles.ccb_self` 后，绑定的 Agent 将自动获得 ccb-config 能力：
+
+```bash
+# 安装 ccb_self 角色（install.sh 和 ccb update 也会交互提示）
+ccb roles install agentroles.ccb_self
+
+# 在项目中使用：将 ccb_self 绑定到一个 Agent
+ccb roles add agentroles.ccb_self:codex
+```
+
+该 skill 支持通过自然语言设计或更新 Agent 团队：
 
 ```text
 $ccb_config Design a team for a Python library with one coordinator,
 two worktree implementation agents, and one reviewer.
 ```
 
-该 skill 会帮助选择 Agent 名称、Provider、布局语法，并验证 `.ccb/ccb.config` 是配置的唯一权威来源。
+此 skill 持续验证 `.ccb/ccb.config` 是配置的唯一权威来源。
 
 #### `provider_profile` 隔离配置
 
@@ -576,7 +587,12 @@ ccb ask --callback --artifact-reply agent2 collect long evidence
 
 从 v7.3.0 开始，Role Pack 机制升级为 **Agent Roles Store**，使用外部 Agent Roles manager 作为唯一的 Role 写入通道，已安装的 Role 仅从 Roles Store 读取。安装流程也更健壮：优先 `ccb roles update` 增量刷新，首次安装（空白环境）时自动回退到 `ccb roles install` 完成初始化。
 
-目前内置 `ccb.archi` 角色（架构审查，由 Architec 支撑），后续会陆续引入更多专业角色。
+目前内置两个推荐角色：
+
+| Role | 用途 |
+|------|------|
+| `agentroles.archi` | 架构审查，由 Architec npm 包支撑 |
+| `agentroles.ccb_self` | CCB 自维护角色，含 `ccb-config`、`ccb-self-diagnose`、`ccb-self-recover`、`ccb-self-chain` 等 skill |
 
 **安装/刷新 Role**：
 
@@ -1112,7 +1128,7 @@ ccb -n                 # 重建运行时（保留 ccb.config）
 ccb kill               # 停止项目运行时
 ccb kill -f            # 强制清理
 ccb restart            # 重启所有 Agent pane
-ccb restart <agent>    # 重启指定 Agent pane
+ccb restart <agent>... # 重启指定 Agent（可多个）
 ccb reload             # 动态应用支持的配置变更（v7.1.0+）
 ccb reload --dry-run   # 预览 reload 计划而不执行（v7.1.0+）
 
