@@ -45,6 +45,17 @@ tips_height = "30%"
 comms_limit = 5
 """
 
+MAINTENANCE_CONFIG_CHANGED = BASE_CONFIG + """
+[maintenance.heartbeat]
+enabled = true
+assessor = "ccb_self"
+interval_s = 900
+min_interval_s = 120
+unknown_streak_cap = 4
+escalation_policy = "ask_user"
+startup_ensure = true
+"""
+
 ADD_AGENT_CONFIG = BASE_CONFIG.replace(
     'agent1:codex, agent2:claude',
     'agent1:codex, (agent2:claude; agent3:codex)',
@@ -118,6 +129,41 @@ def test_additive_reload_apply_view_only_publishes_without_namespace_or_runtime_
     assert app.lifecycle_store.load().config_signature == app.config_identity['config_signature']
     assert result.diagnostics['graph_published'] is True
     assert result.diagnostics['config_watch_started'] is False
+    assert result.diagnostics['unload_or_replace_executed'] is False
+
+
+def test_additive_reload_apply_maintenance_change_publishes_without_namespace_or_runtime_mutation(
+    tmp_path: Path,
+) -> None:
+    app = _started_app(tmp_path / 'repo-maintenance-change', BASE_CONFIG)
+    old_graph = app.service_graph
+    new_config = _load_config(app.project_root, MAINTENANCE_CONFIG_CHANGED)
+    calls: list[str] = []
+
+    result = run_additive_reload_apply(
+        app,
+        new_config,
+        current_namespace=_namespace(app),
+        apply_namespace_patch_fn=_fail_with('maintenance-only change must skip namespace patch'),
+        run_runtime_mount_fn=lambda *_args, **_kwargs: (
+            calls.append('runtime') or AdditiveRuntimeMountResult(status='noop')
+        ),
+    )
+
+    assert result.status == 'published'
+    assert result.plan_class == 'maintenance_change'
+    assert result.namespace_patch['status'] == 'applied'
+    assert result.namespace_patch['diagnostics']['reason'] == 'maintenance_change'
+    assert result.runtime_mount['status'] == 'noop'
+    assert calls == ['runtime']
+    assert app.service_graph is not old_graph
+    assert app.service_graph.version == 2
+    assert app.config.maintenance_heartbeat.enabled is True
+    assert app.config.maintenance_heartbeat.interval_s == 900
+    assert app.config.maintenance_heartbeat.escalation_policy == 'ask_user'
+    assert app.mount_manager.load_state().config_signature == app.config_identity['config_signature']
+    assert app.lifecycle_store.load().config_signature == app.config_identity['config_signature']
+    assert result.diagnostics['graph_published'] is True
     assert result.diagnostics['unload_or_replace_executed'] is False
 
 
@@ -644,6 +690,33 @@ def test_project_reload_non_dry_run_view_only_publishes_and_refreshes_graph_view
     assert view['view']['namespace']['sidebar']['view']['comms_height'] == '10%'
     assert view['view']['namespace']['sidebar']['view']['tips_height'] == '30%'
     assert view['view']['namespace']['sidebar']['view']['comms_limit'] == 5
+
+
+def test_project_reload_non_dry_run_maintenance_change_publishes_policy(
+    tmp_path: Path,
+) -> None:
+    app = _started_app(tmp_path / 'repo-maintenance-handler', BASE_CONFIG)
+    old_signature = app.config_identity['config_signature']
+    assert app.config.maintenance_heartbeat.enabled is False
+    _project(app.project_root, MAINTENANCE_CONFIG_CHANGED)
+
+    payload = app.socket_server._handlers['project_reload_config']({'dry_run': False})
+
+    assert payload['status'] == 'published'
+    assert payload['dry_run'] is False
+    assert payload['plan_class'] == 'maintenance_change'
+    assert payload['old_config_signature'] == old_signature
+    assert payload['new_config_signature'] != old_signature
+    assert payload['operations'][0]['op'] == 'maintenance_change'
+    assert payload['namespace_patch']['diagnostics']['reason'] == 'maintenance_change'
+    assert payload['runtime_mount']['status'] == 'noop'
+    assert payload['diagnostics']['graph_published'] is True
+    assert app.service_graph.version == 2
+    assert app.config.maintenance_heartbeat.enabled is True
+    assert app.config.maintenance_heartbeat.interval_s == 900
+    assert app.config.maintenance_heartbeat.escalation_policy == 'ask_user'
+    assert app.mount_manager.load_state().config_signature == app.config_identity['config_signature']
+    assert app.lifecycle_store.load().config_signature == app.config_identity['config_signature']
 
 
 def test_project_reload_non_dry_run_add_agent_publishes_after_additive_stages(

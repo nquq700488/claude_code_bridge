@@ -80,6 +80,29 @@ Responsibilities:
   before acting;
 - hand the repaired chain back to the original target agent.
 
+### `ccb-comm-reply-recover`
+
+Communication reply recovery skill. Use when the user reports that a CCB reply
+did not arrive, an agent is stuck `busy`/`delivering`, work is queued behind an
+active job, an artifact is empty, a reply is `cancelled`/`incomplete`, or the
+mailbox/communication backend appears stuck.
+
+Responsibilities:
+
+- start from `ccb trace` lineage, then inspect queue and inbox head-of-line
+  state;
+- distinguish "not received because queued behind active work" from a missing
+  reply, bad artifact, callback stall, or provider-pane failure;
+- cross-check `ccb ps`, `ccb ping`, `ccb doctor logs`, and read-only tmux pane
+  evidence when control-plane health conflicts with provider behavior;
+- use `ccb cancel`, `ccb repair retry`, `ccb repair resubmit`, or
+  `ccb repair ack` only when trace evidence supports that repair and the user
+  intended maintenance;
+- hand off to `ccb-self-recover` for guarded restart only after lineage repair
+  proves the provider pane/process still needs replacement;
+- treat intentionally cancelled empty artifacts as expected maintenance output,
+  while still flagging unexpected zero-byte artifacts as bad replies.
+
 ### `ccb-config`
 
 Built-in CCB configuration skill inside the `agentroles.ccb_self` Role Pack.

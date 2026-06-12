@@ -129,10 +129,54 @@ Out of scope:
 - `.ccb/ccb.config` is the highest-priority forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When `.ccb/ccb.config` is absent, `~/.ccb/ccb.config` is the user-level forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When both files are absent, the built-in default config is the forward authority for the desired agent mount set and foreground layout.
+- The built-in default desired set includes `agent1`, `agent2`, `agent3`, and
+  `ccb_self`; `ccb_self` uses provider `codex` and role
+  `agentroles.ccb_self` so a blank project can route CCB config work to the
+  maintenance agent.
 - Effective config logical names are the only forward authority for project-namespace pane display names.
 - Until a future explicit `enabled` or `desired_state` field exists, all configured agents are desired agents.
 - `default_agents` and CLI `requested_agents` do not redefine long-lived backend ownership.
 - `requested_agents` may affect foreground behavior or warm-start order only.
+
+Maintenance heartbeat startup boundary:
+
+- Maintenance heartbeat is disabled by default and must be enabled manually in
+  effective config with `[maintenance.heartbeat] enabled = true`.
+- `[maintenance.heartbeat]` in effective config may request maintenance
+  heartbeat startup ensure when `enabled = true` and `startup_ensure = true`.
+- v1 startup ensure is optional and non-fatal: ordinary `ccb` startup must not
+  fail only because maintenance heartbeat schedule/status files are missing,
+  corrupt, or because a project-scoped maintenance runner cannot be arranged.
+- Startup ensure may arrange a CCB-owned project-scoped maintenance heartbeat
+  schedule consumer helper when heartbeat is enabled, `startup_ensure = true`,
+  and the configured assessor is present.
+- The schedule consumer helper is outside provider context and is not a ccbd or
+  keeper lifecycle authority. It may read effective config and
+  `.ccb/ccbd/maintenance-heartbeat/schedule.json`, record runner diagnostics
+  under `.ccb/ccbd/maintenance-heartbeat/runner.json`, and invoke the same
+  bounded one-shot due tick used by `ccb maintenance tick`.
+- The helper must not classify health, write heartbeat status directly, submit
+  assessor activations directly, repair providers, mutate agent runtime
+  authority, or mutate daemon lifecycle authority. Those actions remain owned
+  by the one-shot tick and existing CCB control-plane surfaces.
+- If the helper cannot be started, startup ensure may fall back to the same
+  bounded one-shot due tick used by `ccb maintenance tick`. The fallback must
+  respect persisted `schedule.json`; a future `next_run_at` exits as
+  `too_early` without status, schedule, or activation writes.
+- Startup ensure failures are reported in the start summary and heartbeat
+  diagnostics when possible, not raised as hard startup failures.
+- A startup-triggered helper or fallback tick may cause at most one silent ask
+  to the configured assessor through the mounted daemon dispatcher for
+  non-healthy evidence, then return to CCB control-plane scheduling.
+- Maintenance heartbeat status belongs under
+  `.ccb/ccbd/maintenance-heartbeat/` and must not be stored under
+  `.ccb/ccbd/heartbeats/<subject-kind>/`.
+- `ccb kill` and shutdown must not be blocked by maintenance heartbeat
+  schedule/status/runner residue. `ccb kill` must best-effort signal a live
+  maintenance schedule consumer helper, but a missing, stale, corrupt, or
+  unresponsive helper must not block the shutdown transaction. Heartbeat locks
+  must use their own stale-lock rules and must not reuse keeper, lease, or
+  startup locks as schedule authority.
 
 ### 5.4 Authority Hierarchy
 
@@ -612,6 +656,9 @@ That means:
 - provider execution state is slot-owned runtime residue once the latest job record is terminal or missing; startup/rebuild and late provider updates must clear those stale execution files so `doctor` does not report cancelled/completed work as active or recoverable execution authority
 - shutdown terminalization must not create fresh provider work while draining existing work; in particular, after-complete hooks such as automatic reply delivery must be suspended once project stop is requested
 - once shutdown intent is acquired, the backend must not run any further reconcile/heartbeat tick that could remount desired agents during the same shutdown transaction
+- once shutdown intent is acquired, the maintenance heartbeat schedule consumer
+  helper must exit or be best-effort signalled; it must not invoke a fresh
+  `ccb maintenance tick` during the same shutdown transaction
 - once shutdown intent is acquired, new mutating RPC requests such as `submit`, `start`, `restore`, `retry`, or `attach` must be rejected with a stable lifecycle-level stopping error; clients must not surface raw socket reset errors as the user-visible contract
 - shutdown-style RPC handlers that return an after-response finalizer must enqueue that finalizer even when writing the response fails; `stop_all` may destroy the tmux pane that issued `ccb kill`, and a disconnected client must not prevent backend unmount/finalization
 - local daemon shutdown helpers must not stop at `mark_unmounted()` plus socket close; they must run the same stop-all cleanup transaction first so provider-runtime pid files, namespace state, and configured-agent authority do not survive a backend-local shutdown

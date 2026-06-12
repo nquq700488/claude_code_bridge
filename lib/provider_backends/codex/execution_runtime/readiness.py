@@ -1,13 +1,32 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from dataclasses import dataclass
+
+
+_UNUSABLE_LINE_PATTERNS = (
+    re.compile(r'^(?:error:\s*)?(?:pane is dead|pane dead)\b[.!:;\-\s]*$', re.IGNORECASE),
+    re.compile(r'^(?:codex\s+)?shutting down(?:\.\.\.)?[.!:;\-\s]*$', re.IGNORECASE),
+)
+
+
+def looks_unusable(text: str) -> bool:
+    for line in str(text or '').splitlines():
+        candidate = line.strip()
+        if not candidate:
+            continue
+        if any(pattern.match(candidate) for pattern in _UNUSABLE_LINE_PATTERNS):
+            return True
+    return False
 
 
 def looks_ready(text: str) -> bool:
     normalized = str(text or '')
     lowered = normalized.lower()
+    if looks_unusable(normalized):
+        return False
     if 'openai codex' not in lowered:
         return False
     if 'model:' in lowered and 'loading' in lowered:
@@ -28,6 +47,9 @@ def wait_for_runtime_ready(backend: object, pane_id: str, *, timeout_s: float = 
             return
         if text.strip():
             state.saw_content = True
+        if looks_unusable(text):
+            time.sleep(0.2)
+            continue
         if stable_ready_seen(state, text):
             time.sleep(0.2)
             return
@@ -66,4 +88,4 @@ def stable_ready_seen(state: ReadinessState, text: str) -> bool:
     return time.time() - state.stable_since >= 0.5
 
 
-__all__ = ['looks_ready', 'wait_for_runtime_ready']
+__all__ = ['looks_ready', 'looks_unusable', 'wait_for_runtime_ready']

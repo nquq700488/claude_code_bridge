@@ -51,6 +51,7 @@ from .daemon_runtime.keeper import keeper_pid as _keeper_pid
 from .daemon_runtime.keeper import wait_for_keeper_exit as _wait_for_keeper_exit
 from .daemon_runtime.processes import lease_pid as _lease_pid
 from .daemon_runtime.processes import wait_for_pid_exit as _wait_for_pid_exit
+from .maintenance import stop_maintenance_heartbeat_runner
 from .tmux_cleanup_history import TmuxCleanupEvent, TmuxCleanupHistoryStore
 from .tmux_project_cleanup import ProjectTmuxCleanupSummary, cleanup_project_tmux_orphans_by_socket
 from .tmux_ui import set_tmux_ui_active
@@ -61,6 +62,10 @@ _STOP_ALL_TIMEOUT_S = 12.0
 
 
 def kill_project(context: CliContext, command: ParsedKillCommand):
+    try:
+        stop_maintenance_heartbeat_runner(context, reason='kill')
+    except Exception:
+        pass
     control_plane_pid_candidates = _collect_project_authority_pid_candidates(context.project.project_root)
     remote_summary = _request_remote_stop(context, force=command.force)
     preparation = _prepare_local_shutdown(

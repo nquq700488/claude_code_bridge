@@ -134,6 +134,37 @@ Flow:
 6. Resume through the original target agent unless the user intentionally
    retargets the work.
 
+## Communication Reply Stalled
+
+Symptoms:
+
+- the user says a CCB reply did not arrive;
+- an agent remains `busy`/`delivering` with later work queued behind it;
+- a reply is `cancelled` or `incomplete`;
+- an artifact-backed reply is empty or unreadable;
+- the mailbox looks stuck even though the provider pane appears alive.
+
+Flow:
+
+1. Use `ccb-comm-reply-recover` as the incident-level runbook.
+2. Reconstruct lineage with `ccb trace <id>` before making any repair.
+3. Inspect `ccb queue --detail <agent>` and
+   `ccb pend --inbox --detail <agent>` to find the active head-of-line event.
+4. If a queued job is blocked behind an active job, trace the active job. Do
+   not repair the queued job first.
+5. Cross-check runtime evidence with `ccb ps`, `ccb ping <agent>`, and
+   `ccb doctor logs <agent>`. Use tmux pane capture only as read-only evidence
+   from the socket and pane id reported by `ccb ps`.
+6. If the active job is stale or mismatched, cancel it first, then re-check
+   whether the queue advances.
+7. If the next job enters the provider pane and is making progress, do not
+   restart the agent.
+8. After a valid reply completes, cancel duplicate queued/running retries for
+   the same work.
+9. Hand off to `ccb-self-recover` for a guarded single-agent restart only when
+   chain repair has cleared active work and provider evidence still shows a
+   stale, dead, or unusable pane.
+
 ## Config Drift Or Reload Needed
 
 Symptoms:

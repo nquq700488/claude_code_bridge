@@ -35,8 +35,15 @@ def _ccb_bin() -> str | None:
     return shutil.which("ccb")
 
 
-def _run(ccb_bin: str, args: tuple[str, ...]) -> dict[str, Any]:
-    cmd = (ccb_bin, *args)
+def _project_args() -> tuple[str, ...]:
+    project_root = str(os.environ.get("CCB_ROLE_TOOL_PROJECT_ROOT") or os.environ.get("CCB_PROJECT_ROOT") or "").strip()
+    if not project_root:
+        return ()
+    return ("--project", project_root)
+
+
+def _run(ccb_bin: str, args: tuple[str, ...], *, project_args: tuple[str, ...] = ()) -> dict[str, Any]:
+    cmd = (ccb_bin, *project_args, *args)
     try:
         completed = subprocess.run(
             cmd,
@@ -91,7 +98,8 @@ def main() -> int:
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 2
 
-    evidence = [_run(ccb_bin, args) for args in COMMANDS]
+    project_args = _project_args()
+    evidence = [_run(ccb_bin, args, project_args=project_args) for args in COMMANDS]
     failed = [item for item in evidence if item["status"] != "ok"]
     status = "ok" if not failed else "warn"
     findings = [

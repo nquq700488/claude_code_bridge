@@ -12,6 +12,7 @@ from cli.models import (
     ParsedInboxCommand,
     ParsedKillCommand,
     ParsedLogsCommand,
+    ParsedMaintenanceCommand,
     ParsedPendCommand,
     ParsedPingCommand,
     ParsedPsCommand,
@@ -57,6 +58,15 @@ def parse_restart(tokens: list[str], *, project: str | None, error_type) -> Pars
     if tuple(item.lower() for item in agent_names) == ('all',):
         agent_names = ()
     return ParsedRestartCommand(project=project, agent_names=agent_names)
+
+
+def parse_maintenance(tokens: list[str], *, project: str | None, error_type) -> ParsedMaintenanceCommand:
+    if not tokens:
+        return ParsedMaintenanceCommand(project=project, action='status')
+    action = str(tokens[0] or '').strip().lower()
+    if action not in {'status', 'tick', 'schedule', 'runner', 'enable', 'disable'}:
+        raise error_type('maintenance supports: status, tick, schedule, runner, enable, disable')
+    return ParsedMaintenanceCommand(project=project, action=action, args=tuple(tokens[1:]))
 
 
 def parse_kill(tokens: list[str], *, project: str | None, error_type) -> ParsedKillCommand:
@@ -266,6 +276,7 @@ __all__ = [
     'parse_inbox',
     'parse_kill',
     'parse_logs',
+    'parse_maintenance',
     'parse_pend',
     'parse_ping',
     'parse_ps',

@@ -12,6 +12,7 @@ It is the authoritative design anchor for:
 - `.ccb/ccbd/start-policy.json`
 - `.ccb/ccbd/lifecycle.jsonl`
 - `.ccb/ccbd/heartbeats/<subject-kind>/*.json`
+- `.ccb/ccbd/maintenance-heartbeat/`
 - `.ccb/ccbd/reload-drain.json`
 - `.ccb/ccbd/artifacts/text/`
 - project-scoped backend log retention under `.ccb/ccbd/`
@@ -126,6 +127,11 @@ Paths:
 - `.ccb/ccbd/start-policy.json`
 - `.ccb/ccbd/lifecycle.jsonl`
 - `.ccb/ccbd/heartbeats/<subject-kind>/*.json`
+- `.ccb/ccbd/maintenance-heartbeat/schedule.json`
+- `.ccb/ccbd/maintenance-heartbeat/status.json`
+- `.ccb/ccbd/maintenance-heartbeat/runner.json`
+- `.ccb/ccbd/maintenance-heartbeat/lock.json`
+- `.ccb/ccbd/maintenance-heartbeat/activations.jsonl`
 - `.ccb/ccbd/reload-drain.json`
 
 Rules:
@@ -134,6 +140,40 @@ Rules:
 - `start-policy.json` records the persisted project recovery startup policy, including inherited `auto_permission` and forced recovery-restore semantics
 - `lifecycle.jsonl` records namespace creation/destruction and later runtime lifecycle events
 - `heartbeats/<subject-kind>/*.json` records non-lease heartbeat state for long-lived supervised subjects such as running jobs; these files are diagnostics/evidence, not backend ownership authority
+- `maintenance-heartbeat/` records CCB maintenance heartbeat schedule, status,
+  runner, lock, and activation evidence. It is a project-scoped maintenance
+  namespace, not daemon lease heartbeat authority and not subject/job heartbeat
+  evidence.
+  - `schedule.json` records the next maintenance heartbeat time and reason
+    when a heartbeat tick or later schedule command updates cadence.
+  - `status.json` records the latest maintenance heartbeat status summary from
+    `ccb maintenance tick`, including `last_tick_status`, `last_tick_at`,
+    `last_ok_at`, `unknown_streak`, `source_kind`, `recommended_action`,
+    `next_heartbeat_after_s`, `needs_user`, last activation fields, a bounded
+    `summary`, and bounded `evidence`.
+  - `runner.json` records best-effort schedule consumer diagnostics, including
+    `runner_id`, `pid`, `state`, `source`, `started_at`, `last_seen_at`,
+    `last_wake_at`, `last_tick_at`, `last_tick_status`,
+    `observed_next_run_at`, `sleep_until`, and `exit_reason`. It is diagnostic
+    state for the project-scoped helper and is not daemon lifecycle authority.
+  - `lock.json` records best-effort heartbeat operation lock metadata. The
+    lock is independent from keeper, lease, and daemon lifecycle locks.
+  - `activations.jsonl` records `ActivationIntent` dispatch outcomes such as
+    `submitted`, `suppressed`, `blocked`, or `failed`. These records are
+    diagnostics/audit evidence for CCB-originated silent asks and are not
+    mailbox, job, or daemon authority.
+  - malformed or missing files must be visible to `ccb maintenance status`
+    without crashing the read path.
+  - status readers may report `missing` or `corrupt`; they must not repair,
+    rewrite, or migrate these files as a side effect.
+  - `ccb maintenance tick` may write only `status.json`, `schedule.json`,
+    `lock.json`, and `activations.jsonl` in this namespace. The project-scoped
+    schedule consumer may write only `runner.json` and invoke the same one-shot
+    tick path when the schedule is due. When non-healthy evidence requires
+    semantic supervision, the tick may submit one silent ask to the configured
+    assessor through the mounted daemon dispatcher, then exit. Neither tick nor
+    runner may write provider state, run repairs, or mutate daemon lifecycle
+    authority.
 - `reload-drain.json` records bounded pending unload/replace drain state when
   explicit reload state machinery is invoked; it is not lifecycle, lease,
   runtime authority, or a config-watch trigger
@@ -146,14 +186,16 @@ Rules:
   config-watch trigger, and stale or mismatched records fail closed.
 - `artifacts/text/` stores oversized CCB agent-to-agent message and reply text. Request bodies, terminal replies, notices, and callback continuations larger than 4 KiB are written there as UTF-8 text artifacts; ledgers store only the short preview plus artifact path, byte count, and sha256 metadata. These artifacts are diagnostics/evidence and transport support, not scheduling authority.
 - running-job heartbeat observations stay in diagnostics/events and must not be emitted as caller-visible mailbox replies; after three consecutive no-progress observations, the terminal `heartbeat_timeout` reply is the caller-visible outcome
-- daemon lease heartbeat and subject heartbeat must remain separate concepts and separate files
+- daemon lease heartbeat, subject/job heartbeat, and maintenance heartbeat
+  schedule/status/activation state must remain separate concepts and separate
+  files
 - `doctor` and bundle export must include these records when present
 - `ping('ccbd')` and `doctor` should surface start-policy summary fields when available
 - `ping('ccbd')` and `doctor` must surface namespace summary fields such as epoch, tmux socket path, session name, and latest lifecycle event when available
 - `ping('ccbd')` and `doctor` must surface current socket placement diagnostics, including preferred/effective socket path, root kind, fallback reason, and filesystem hint when known
 - `ping('ccbd')` and `doctor` should surface lightweight control-plane metrics when available, including handler latency, heartbeat wall duration, heartbeat step duration, heartbeat runtime-store write count, project-view cache/response/build/tmux counts, process RSS/FD/thread counts, service-graph version/created-at/retained-count metadata, pending maintenance ticks, and reload timing fields when a reload feature exists; until old-graph in-flight retention is implemented, `service_graph_retained_count` means published graph count, not RCU-style old graph retention; these metrics are diagnostics only and must not add config watchers, tmux mutations, or heavy steady-state scans
 - `ccb reload --dry-run` / `project_reload_config(dry_run=true)` is a diagnostics-grade planning surface: it validates the current `.ccb/ccb.config`, returns old/new config signatures, plan class, no-mutation `safe_to_apply=false`, future classification safety, operations, optional drain intent suggestions for unload/replace, reasons, warnings, and errors, and updates reload timing fields without mutating tmux/runtime/lifecycle/service graph
-- `ccb reload` / `project_reload_config(dry_run=false)` is an explicit additive apply surface: `no_change` returns `status=noop` without graph publish, and only `view_only_change`, append-only `add_agent`, `add_window`, idle `remove_agent`, `add_tool_window`, and `remove_tool_window` may publish; non-additive `replace_agent`, `move_agent`, unsupported tool changes, and arbitrary `layout_change` must stop before graph publish and report structured diagnostics. Successful apply diagnostics must include stage, graph versions, publish flags, keeper handoff safety, and project-view cache invalidation state. Failure diagnostics must preserve stage-specific namespace/runtime residue while leaving the old published graph/config visible.
+- `ccb reload` / `project_reload_config(dry_run=false)` is an explicit additive apply surface: `no_change` returns `status=noop` without graph publish, and only `view_only_change`, `maintenance_change`, append-only `add_agent`, `add_window`, idle `remove_agent`, `add_tool_window`, and `remove_tool_window` may publish. `maintenance_change` publishes a new service graph/config signature without tmux namespace mutation, runtime mount/unload, or agent pane restart. Non-additive `replace_agent`, `move_agent`, unsupported tool changes, and arbitrary `layout_change` must stop before graph publish and report structured diagnostics. Successful apply diagnostics must include stage, graph versions, publish flags, keeper handoff safety, and project-view cache invalidation state. Failure diagnostics must preserve stage-specific namespace/runtime residue while leaving the old published graph/config visible.
 - heartbeat wall duration may include lifecycle wrapper work outside the named step map; project-view build duration is updated only on cache misses, while project-view response duration is updated on cache hits and misses
 - process RSS, virtual memory, FD count, and thread count are best-effort process metrics; platforms without Linux `/proc` support may report `None`
 - `doctor` must also surface preferred/effective socket path byte lengths and an equivalent isolated-config `tmux -f /dev/null -S <effective-socket> start-server` command when a project tmux socket path is known, so macOS and WSL socket pathname failures can be diagnosed from one report
@@ -220,6 +262,8 @@ The support bundle must include:
 - backend authority files such as lease, keeper, shutdown intent, and namespace state when present
 - backend recovery policy authority such as `start-policy.json` when present
 - persisted non-lease heartbeat state under `.ccb/ccbd/heartbeats/` when present
+- maintenance heartbeat schedule/status/runner/lock/activation files under
+  `.ccb/ccbd/maintenance-heartbeat/` when present
 - oversized CCB text artifacts under `.ccb/ccbd/artifacts/text/` when referenced by recent message/reply records
 - recent backend event streams such as supervision, namespace lifecycle, and cleanup history
 - backend stdout/stderr logs

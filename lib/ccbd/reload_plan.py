@@ -11,6 +11,7 @@ from ccbd.reload_patch import build_invalid_namespace_patch_plan, build_namespac
 _PLAN_PRIORITY = {
     'no_change': 0,
     'view_only_change': 10,
+    'maintenance_change': 20,
     'add_tool_window': 30,
     'add_agent': 40,
     'add_window': 50,
@@ -252,6 +253,7 @@ def _build_operations(current_config, new_config) -> list[dict[str, object]]:
 
     operations.extend(_topology_operations(current_config, new_config, old_windows=old_windows, new_windows=new_windows))
     operations.extend(_tool_window_operations(current_config, new_config, old_tools=old_tools, new_tools=new_tools))
+    operations.extend(_maintenance_operations(current_config, new_config))
     return operations
 
 
@@ -320,7 +322,7 @@ def _select_plan_class(operations: list[dict[str, object]]) -> str:
 
 
 def _future_safe_to_apply(plan_class: str, operations: list[dict[str, object]]) -> bool:
-    if plan_class in {'no_change', 'view_only_change'}:
+    if plan_class in {'no_change', 'view_only_change', 'maintenance_change'}:
         return True
     if plan_class in {'add_tool_window', 'remove_tool_window'}:
         unsafe_tool_ops = {'change_tool_window'}
@@ -391,6 +393,20 @@ def _tool_window_operations(
                 }
             )
     return operations
+
+
+def _maintenance_operations(current_config, new_config) -> list[dict[str, object]]:
+    old_record = _record_or_none(getattr(current_config, 'maintenance_heartbeat', None))
+    new_record = _record_or_none(getattr(new_config, 'maintenance_heartbeat', None))
+    if old_record == new_record:
+        return []
+    return [
+        {
+            'op': 'maintenance_change',
+            'fields': _changed_fields(old_record or {}, new_record or {}),
+            'reason': 'maintenance heartbeat policy changed',
+        }
+    ]
 
 
 def _plan_payload(

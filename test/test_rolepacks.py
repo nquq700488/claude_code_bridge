@@ -464,6 +464,12 @@ def _write_fake_tool_role(script_root: Path) -> None:
                 'assert helper.VALUE == "ok"',
                 'target = Path(os.environ["FAKE_ROLE_SENTINEL"])',
                 'target.write_text(os.environ["CCB_ROLE_TOOL_ACTION"], encoding="utf-8")',
+                'ccb_bin_target = os.environ.get("FAKE_ROLE_CCB_BIN_SENTINEL")',
+                'if ccb_bin_target:',
+                '    Path(ccb_bin_target).write_text(os.environ.get("CCB_BIN", ""), encoding="utf-8")',
+                'cwd_target = os.environ.get("FAKE_ROLE_CWD_SENTINEL")',
+                'if cwd_target:',
+                '    Path(cwd_target).write_text(str(Path.cwd()), encoding="utf-8")',
                 'print("hook_action: " + os.environ["CCB_ROLE_TOOL_ACTION"])',
             ]
         )
@@ -1673,6 +1679,73 @@ def test_roles_install_and_update_run_tool_hooks_by_default(tmp_path: Path, monk
     assert not tuple(Path(str(update_payload['path'])).rglob('*.pyc'))
 
 
+def test_roles_doctor_injects_current_ccb_bin_for_tool_hooks(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg-data'))
+    sentinel = tmp_path / 'sentinel.txt'
+    ccb_bin_sentinel = tmp_path / 'ccb-bin.txt'
+    monkeypatch.setenv('FAKE_ROLE_SENTINEL', str(sentinel))
+    monkeypatch.setenv('FAKE_ROLE_CCB_BIN_SENTINEL', str(ccb_bin_sentinel))
+    script_root = tmp_path / 'ccb-root'
+    script_root.mkdir()
+    (script_root / 'ccb').write_text('#!/usr/bin/env sh\nexit 0\n', encoding='utf-8')
+    _write_fake_tool_role(script_root)
+    monkeypatch.setenv('AGENT_ROLES_SPEC_HOME', str(script_root))
+    install_role('test.fake', script_root=script_root, with_tools=False)
+
+    payload = role_status('test.fake', script_root=script_root, include_tools=True)
+
+    assert payload['tools_status'] == 'ok'
+    assert sentinel.read_text(encoding='utf-8') == 'doctor'
+    assert ccb_bin_sentinel.read_text(encoding='utf-8') == str(script_root / 'ccb')
+
+
+def test_roles_doctor_runs_tool_hook_from_project_root(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg-data'))
+    sentinel = tmp_path / 'sentinel.txt'
+    cwd_sentinel = tmp_path / 'cwd.txt'
+    monkeypatch.setenv('FAKE_ROLE_SENTINEL', str(sentinel))
+    monkeypatch.setenv('FAKE_ROLE_CWD_SENTINEL', str(cwd_sentinel))
+    script_root = tmp_path / 'ccb-root'
+    project = tmp_path / 'project'
+    script_root.mkdir()
+    project.mkdir()
+    (project / '.ccb').mkdir()
+    (script_root / 'ccb').write_text('#!/usr/bin/env sh\nexit 0\n', encoding='utf-8')
+    _write_fake_tool_role(script_root)
+    monkeypatch.setenv('AGENT_ROLES_SPEC_HOME', str(script_root))
+    install_role('test.fake', script_root=script_root, with_tools=False)
+
+    code, out, err = _run_cli(['roles', 'doctor', 'test.fake'], cwd=project, script_root=script_root)
+
+    assert code == 0
+    assert err == ''
+    assert 'roles_status: ok' in out
+    assert sentinel.read_text(encoding='utf-8') == 'doctor'
+    assert cwd_sentinel.read_text(encoding='utf-8') == str(project)
+
+
+def test_roles_doctor_preserves_explicit_ccb_bin_override(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg-data'))
+    sentinel = tmp_path / 'sentinel.txt'
+    ccb_bin_sentinel = tmp_path / 'ccb-bin.txt'
+    override = tmp_path / 'override-ccb'
+    monkeypatch.setenv('FAKE_ROLE_SENTINEL', str(sentinel))
+    monkeypatch.setenv('FAKE_ROLE_CCB_BIN_SENTINEL', str(ccb_bin_sentinel))
+    monkeypatch.setenv('CCB_BIN', str(override))
+    script_root = tmp_path / 'ccb-root'
+    script_root.mkdir()
+    (script_root / 'ccb').write_text('#!/usr/bin/env sh\nexit 0\n', encoding='utf-8')
+    _write_fake_tool_role(script_root)
+    monkeypatch.setenv('AGENT_ROLES_SPEC_HOME', str(script_root))
+    install_role('test.fake', script_root=script_root, with_tools=False)
+
+    payload = role_status('test.fake', script_root=script_root, include_tools=True)
+
+    assert payload['tools_status'] == 'ok'
+    assert sentinel.read_text(encoding='utf-8') == 'doctor'
+    assert ccb_bin_sentinel.read_text(encoding='utf-8') == str(override)
+
+
 def test_roles_install_repairs_drifted_content_addressed_target(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg-data'))
     source = tmp_path / 'role-source'
@@ -1925,7 +1998,8 @@ def test_roles_add_uses_explicit_overlay_for_custom_agent_name(tmp_path: Path, m
     text = (project / '.ccb' / 'ccb.config').read_text(encoding='utf-8')
     assert 'main = "agent1:codex, archi-review:codex"' in text
     assert '[agents.archi-review]' in text
-    assert 'role = "agentroles.archi"' in text
+    assert '[agents.archi-review]\nrole = "agentroles.archi"' in text
+    assert '[agents.archi-review]\nrole = "agentroles.archi"\nprovider =' not in text
     loaded = load_project_config(project).config
     assert loaded.agents['archi-review'].role == 'agentroles.archi'
 

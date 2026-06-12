@@ -27,6 +27,8 @@ roles/ccb-self/
     ccb-self-diagnose/SKILL.md
     ccb-self-recover/SKILL.md
     ccb-self-chain/SKILL.md
+    ccb-comm-reply-recover/SKILL.md
+    ccb-pane-view-diagnose/SKILL.md
     ccb-config/SKILL.md
   references/
     runtime-authority.md
@@ -60,6 +62,8 @@ Responsibilities:
 
 - diagnose CCB runtime, tmux namespace, provider pane, config, storage, and
   message-chain health;
+- inspect real CCB-owned pane text through read-only capture when
+  self-supervision cannot classify progress from control-plane evidence alone;
 - recover from provider/API failures by switching to already configured or
   user-supplied provider/model/profile/env-var references;
 - perform bounded autonomous maintenance under a user maintenance objective;
@@ -134,6 +138,27 @@ Message/job lineage repair. It should:
 - choose retry, resubmit, or ack from lineage evidence;
 - hand off to recover only when process/context repair is truly needed.
 
+### `ccb-comm-reply-recover`
+
+Communication reply recovery. It should:
+
+- diagnose "reply not received" incidents from trace, queue, inbox, and pane
+  evidence;
+- identify head-of-line blockage and duplicate retries;
+- prefer cancelling stale active jobs before retrying or restarting;
+- use pane capture to decide whether a running job is genuinely progressing.
+
+### `ccb-pane-view-diagnose`
+
+Pane-view self-supervision. It should:
+
+- start from current CCB authority to resolve the target pane;
+- use `tmux capture-pane` style text capture, biased toward the bottom/current
+  prompt and recent scrollback;
+- compare short-interval captures to classify active work versus stuckness;
+- use screenshot fallback only when text is unavailable or insufficient;
+- keep pane text and screenshots as evidence, not authority.
+
 ### `ccb-config`
 
 CCB config ownership. It should:
@@ -205,13 +230,15 @@ V1 MCP should prioritize read-only evidence:
 - `ccb_tmux_pane_list`
 - `ccb_pane_capture_text`
 - `ccb_pane_activity_sample`
+- `ccb-pane-view-diagnose` should be able to consume these text artifacts as
+  the default self-supervision path.
 
 V1 mutation can remain CLI-driven through the role's normal shell commands if
 MCP mutation wrappers are not ready.
 
 ## MCP V2
 
-Add visual evidence and controlled mutations:
+Add screenshot fallback and controlled mutations:
 
 - `ccb_pane_screenshot`
 - `ccb_visual_inspect`
@@ -223,7 +250,8 @@ Add visual evidence and controlled mutations:
 - `ccb_restart_agent` after `ccb restart <agent>` exists.
 
 Screenshot artifacts must stay in CCB-owned project/runtime artifact storage
-and must only target CCB-owned panes/windows/tool windows.
+and must only target CCB-owned panes/windows/tool windows. They are fallback
+evidence when text capture cannot classify the state.
 
 ## Migration Work
 
@@ -258,3 +286,6 @@ V1 acceptance:
   proves the affected agents picked up the change or reports/executes guarded
   per-agent restart when the target is restartable and busy checks pass.
 - Pane evidence tools read only CCB-owned panes and do not mutate tmux state.
+- Pane-view self-supervision can classify a stuck-provider incident from
+  trace + bottom pane capture + activity sample, and uses screenshot only as
+  fallback when text evidence is insufficient.

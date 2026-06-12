@@ -102,23 +102,62 @@ def _next_message_state(*, active: list[AttemptRecord], attempts: list[AttemptRe
 
 
 def _reply_terminal_state(statuses: set[ReplyTerminalStatus]) -> MessageState:
-    mapping = {
-        frozenset({ReplyTerminalStatus.COMPLETED}): MessageState.COMPLETED,
-        frozenset({ReplyTerminalStatus.CANCELLED}): MessageState.CANCELLED,
-        frozenset({ReplyTerminalStatus.FAILED}): MessageState.FAILED,
-        frozenset({ReplyTerminalStatus.INCOMPLETE}): MessageState.INCOMPLETE,
-    }
-    return mapping.get(frozenset(statuses), MessageState.INCOMPLETE)
+    """Map a set of reply terminal statuses to the canonical message state.
+
+    When all replies share the same status the mapping is straightforward.
+    For mixed statuses (e.g. broadcast where some agents completed and others
+    were cancelled) the priority is: FAILED > INCOMPLETE > CANCELLED >
+    COMPLETED.  A message that has any COMPLETED reply mixed with only
+    CANCELLED replies is still COMPLETED overall.
+    """
+    if not statuses:
+        return MessageState.INCOMPLETE
+    # Homogeneous: fast-path for the common case
+    if len(statuses) == 1:
+        (single,) = statuses
+        return _SINGLE_REPLY_STATE.get(single, MessageState.INCOMPLETE)
+    # Heterogeneous: priority-based resolution
+    if ReplyTerminalStatus.FAILED in statuses:
+        return MessageState.FAILED
+    if ReplyTerminalStatus.INCOMPLETE in statuses:
+        return MessageState.INCOMPLETE
+    # Mixed COMPLETED + CANCELLED → completed
+    return MessageState.COMPLETED
+
+
+_SINGLE_REPLY_STATE: dict[ReplyTerminalStatus, MessageState] = {
+    ReplyTerminalStatus.COMPLETED: MessageState.COMPLETED,
+    ReplyTerminalStatus.CANCELLED: MessageState.CANCELLED,
+    ReplyTerminalStatus.FAILED: MessageState.FAILED,
+    ReplyTerminalStatus.INCOMPLETE: MessageState.INCOMPLETE,
+}
 
 
 def _attempt_terminal_state(statuses: set[AttemptState]) -> MessageState:
-    mapping = {
-        frozenset({AttemptState.COMPLETED}): MessageState.COMPLETED,
-        frozenset({AttemptState.CANCELLED}): MessageState.CANCELLED,
-        frozenset({AttemptState.FAILED}): MessageState.FAILED,
-        frozenset({AttemptState.INCOMPLETE}): MessageState.INCOMPLETE,
-    }
-    return mapping.get(frozenset(statuses), MessageState.INCOMPLETE)
+    """Map a set of attempt terminal states to the canonical message state.
+
+    Uses the same priority as _reply_terminal_state for heterogeneous sets.
+    """
+    if not statuses:
+        return MessageState.INCOMPLETE
+    if len(statuses) == 1:
+        (single,) = statuses
+        return _SINGLE_ATTEMPT_STATE.get(single, MessageState.INCOMPLETE)
+    # Heterogeneous: priority-based resolution
+    if AttemptState.FAILED in statuses:
+        return MessageState.FAILED
+    if AttemptState.INCOMPLETE in statuses:
+        return MessageState.INCOMPLETE
+    # Mixed COMPLETED + CANCELLED → completed
+    return MessageState.COMPLETED
+
+
+_SINGLE_ATTEMPT_STATE: dict[AttemptState, MessageState] = {
+    AttemptState.COMPLETED: MessageState.COMPLETED,
+    AttemptState.CANCELLED: MessageState.CANCELLED,
+    AttemptState.FAILED: MessageState.FAILED,
+    AttemptState.INCOMPLETE: MessageState.INCOMPLETE,
+}
 
 
 __all__ = [

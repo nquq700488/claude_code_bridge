@@ -24,6 +24,9 @@ It is the authoritative design anchor for:
 - `~/.ccb/ccb.config` is the user-level config file used only when project config is absent.
 - CCB must not auto-create, reconstruct, or rewrite `.ccb/ccb.config`; it is a user-authored project file.
 - When both `.ccb/ccb.config` and `~/.ccb/ccb.config` are absent, config loading must use the built-in default project config from code and report the source kind as `builtin_default`.
+- The built-in default project config must provide a usable maintenance route:
+  `agent1:codex`, `agent2:codex`, `agent3:claude`, and `ccb_self:codex`
+  in the main window, with `ccb_self` bound to `agentroles.ccb_self`.
 - User help text, validation output, diagnostics, and docs must report the active config source kind: `project_config`, `user_config`, or `builtin_default`.
 - `.ccb/config.yaml` is not part of the contract and must not be read or written by current code.
 
@@ -123,7 +126,8 @@ Contract:
   - `cmd_enabled`
   - agent `provider`
   - agent `workspace_mode`
-- The trailing TOML overlay may define only `agents.<name>...` tables.
+- The trailing TOML overlay may define only `agents.<name>...` tables and the
+  project-level `[maintenance.heartbeat]` table.
 - Hybrid overlays must not redefine compact-header-owned agent fields such as:
   - `provider`
   - `workspace_mode`
@@ -135,7 +139,63 @@ Contract:
   - expanding simple overlay cases into full-document TOML is not the preferred
     canonical output
 
-### 4.1.1 Explicit Windows Topology
+### 4.1.1 Maintenance Heartbeat Config
+
+Rich or hybrid `ccb.config` may define project-scoped maintenance heartbeat
+policy:
+
+```toml
+[maintenance.heartbeat]
+enabled = true
+assessor = "ccb_self"
+interval_s = 3600
+min_interval_s = 300
+unknown_streak_cap = 3
+escalation_policy = "report_only"
+startup_ensure = true
+```
+
+Contract:
+
+- `[maintenance.heartbeat]` is CCB runtime policy, not agent layout authority.
+- Maintenance heartbeat is opt-in. Startup must not start or ensure a
+  heartbeat runner unless the effective config explicitly sets
+  `maintenance.heartbeat.enabled = true`.
+- The table is optional. Defaults are:
+  - `enabled = false`
+  - `assessor = "ccb_self"`
+  - `interval_s = 3600`
+  - `min_interval_s = 300`
+  - `unknown_streak_cap = 3`
+  - `escalation_policy = "report_only"`
+  - `startup_ensure = true`
+- `enabled` and `startup_ensure` are booleans.
+- `assessor` is normalized with the configured-agent name grammar, but config
+  loading does not require that the assessor is currently configured. Missing
+  assessor state is surfaced by heartbeat status/diagnostics.
+- `interval_s`, `min_interval_s`, and `unknown_streak_cap` are positive
+  integers. `min_interval_s` must not exceed `interval_s`.
+- v1 accepted escalation policies are `report_only` and `ask_user`, but the
+  field is status-only in v1. Both values use the same bounded silent assessor
+  activation path; the selected value is exposed in status/diagnostics and can
+  be used by the assessor as advisory intent.
+- `ccb maintenance status` may read and report this policy.
+- `ccb maintenance tick` may use this policy to run a bounded one-shot
+  diagnosis, write maintenance heartbeat status/schedule/activation state when
+  enabled, and submit at most one silent ask to the configured assessor for
+  non-healthy evidence.
+- `ccb maintenance schedule --after <duration> [--reason <text>]` may write
+  only the CCB-owned next heartbeat schedule. Requested delays shorter than
+  `min_interval_s` are raised to `min_interval_s`.
+- `ccb maintenance enable` and `disable` must not edit `.ccb/ccb.config` until
+  config editing policy is defined before those commands mutate behavior.
+- `ccb reload --dry-run` must classify a pure `[maintenance.heartbeat]` diff as
+  `maintenance_change`, not `layout_change`.
+- `ccb reload` may publish a `maintenance_change` by refreshing the project
+  service graph and config signatures without tmux namespace mutation, runtime
+  mount/unload, or agent pane restart.
+
+### 4.1.2 Explicit Windows Topology
 
 Rich TOML may declare named project windows through `[windows]`:
 
@@ -185,7 +245,9 @@ Contract:
 - legacy compact and hybrid configs that do not declare `[windows]` remain
   single-window configs; they are mounted in the project workspace window and
   keep their existing `cmd` pane semantics
-- `[windows]` is the authority for layout, default agent traversal, per-window agent grouping, and the effective configured-agent set.
+- `[windows]` is the authority for layout, default agent traversal, per-window
+  agent grouping, provider selection, default workspace mode, and the effective
+  configured-agent set.
 - Each `[windows]` value uses the compact layout grammar, but `cmd` is not supported in windows topology.
 - Every agent leaf in `[windows]` must declare a provider.
 - Each configured agent is an agent leaf referenced by `[windows]` and must appear in exactly one window layout.
@@ -212,8 +274,22 @@ Contract:
 - `[ui.sidebar.view]` is optional and controls only the sidebar pane's internal presentation. It must not redefine managed windows, agents, pane ownership, provider runtime, or message/job authority.
 - `[ui.sidebar.view]` changes are UI-only: `agents_height`, `comms_height`, `tips_height`, `comms_limit`, `comms_compact`, `tips_enabled`, and `tips` are delivered through `project_view` and must not force namespace topology recreation. `agents_height` controls the top Tree/Agent panel, `comms_height` controls the Comms panel, and `tips_height` controls the Tips panel; all three accept a positive integer row count or a percentage string. The default split is `50%`, `15%`, and `35%`.
 - If a hot-loaded `[ui.sidebar.view]` parse fails, `project_view.namespace.sidebar.view_error` reports the config error and the sidebar displays a `config ✕` warning while retaining the daemon's last valid view config.
-- Agent leaves in `[windows]` provide default `provider` and default `workspace_mode` (`agent:provider` means `inplace`; `agent:provider(worktree)` means `git-worktree`). They may also include an `@N` split hint, for example `agent:provider@60` or `agent:provider(worktree)@40`.
-- `[agents.<name>]` tables are overlays for names referenced by `[windows]`. They may provide any agent-local override, including `workspace_mode`; if they repeat `provider`, it must match the provider declared in `[windows]`.
+- Agent leaves in `[windows]` provide canonical `provider` and default
+  `workspace_mode` (`agent:provider` means `inplace`;
+  `agent:provider(worktree)` means `git-worktree`). They may also include an
+  `@N` split hint, for example `agent:provider@60` or
+  `agent:provider(worktree)@40`.
+- `[agents.<name>]` tables are overlays for names referenced by `[windows]`.
+  Canonical user-authored overlays must not repeat topology-owned fields that
+  are already expressible in the window leaf:
+  - `provider`
+  - `workspace_mode = "inplace"`
+  - `workspace_mode = "git-worktree"`
+- Legacy rich TOML that repeats `provider` or `workspace_mode` remains accepted
+  when it does not conflict, but `ccb config validate` reports style warnings
+  and CCB-generated config must not introduce those redundant fields.
+- `workspace_mode = "copy"` remains an advanced overlay-only mode until the
+  compact leaf grammar has a first-class copy-mode spelling.
 - `[agents.<name>].role` may bind a configured agent to a reusable Role Pack
   such as `ccb.archi`. The role id is stable package identity; the agent name
   remains the project-local ask target. Role ids must use publisher-qualified
@@ -224,6 +300,8 @@ Contract:
   assets. Provider sessions, auth, runtime authority, mailbox state, and agent
   private memory must remain agent/project scoped.
 - `[agents.<name>]` tables for names no longer referenced by `[windows]` are ignored as stale overlay residue and must not become configured agents or block startup.
+  `ccb config validate` reports them as style warnings so accidental misspelled
+  overlays are visible.
 
 Example managed tool window:
 

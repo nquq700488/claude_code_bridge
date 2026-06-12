@@ -2,6 +2,65 @@
 
 # Changelog
 
+## v7.4.3 (2026-06-12)
+
+### PR #225 Reliability Follow-Up
+
+- **Claude Launcher Contract Restored**: inline `--settings` now stays equal
+  to the materialized settings overlay instead of injecting provider env into
+  settings JSON, preserving the existing launcher contract after PR #225.
+- **Claude WSL Env Forwarding Fixed**: Windows executable launches from WSL
+  now mark only path variables with `/p` in `WSLENV` and forward
+  `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY`, and `ANTHROPIC_BASE_URL` as raw
+  environment values.
+- **AGY Resume Lookup Hardened**: Antigravity conversation metadata lookup now
+  accepts SQLite `bytes`, `str`, and `memoryview` values, and falls back to
+  `--continue` if resume lookup fails instead of hard-failing launcher startup.
+- **Runtime Regression Coverage Added**: launcher tests cover the restored
+  Claude settings contract, WSL API env forwarding, and AGY resume fallback
+  behavior.
+
+## v7.4.2 (2026-06-12)
+
+### Self-Supervision And Empty Reply Guards
+
+- **Self-Supervision Evidence Hardened**: maintenance heartbeat now uses
+  bounded provider-runtime snapshots, project-view activity evidence, suspicion
+  envelopes, and a self-first diagnosis path for CCB runtime health signals.
+- **Empty Provider Replies Terminalized**: Claude/Gemini empty hook replies,
+  Codex protocol `task_complete` empty replies, and AGY pane done-marker empty
+  replies now finish as `incomplete` with diagnostics instead of looking like
+  successful empty completions.
+- **Silence And Callback Semantics Preserved**: `--silence` success remains a
+  valid completed no-reply path, callback parent `callback_pending` empty
+  replies remain legal, and abnormal silent completions stay diagnosable.
+- **Role Pack Refresh Tightened**: default Role Pack install and project role
+  lock refresh paths now handle `agentroles.archi` and `agentroles.ccb_self`
+  more consistently during update/startup.
+
+## v7.4.1 (2026-06-11)
+
+### Maintenance Heartbeat And ccb_self Defaults
+
+- **Maintenance Heartbeat Runner Hardened**: adds the project-scoped
+  maintenance heartbeat runner, schedule handling, activation suppression, and
+  diagnostics evidence paths while keeping heartbeat disabled unless explicitly
+  enabled.
+- **ccb_self Default Alignment**: blank-project built-in config now includes
+  `ccb_self:codex` bound to canonical `agentroles.ccb_self`, and install/update
+  provisioning refreshes the recommended CCB self role without changing
+  existing custom project configs.
+- **Role Identity Compatibility Fixed**: CCB source now matches the
+  `agent-roles-spec` catalog identity `agentroles.ccb_self` and only treats
+  `agentrole.ccb_self` as legacy input compatibility.
+- **Config Authority And Prompt Delivery Hardened**: generated config guidance
+  keeps one role-binding authority, Role Pack hook paths use the correct CCB
+  binary/project root, and Codex prompt delivery acceptance guards reduce false
+  completion.
+- **ccb_self Expert Knowledge Docs Added**: adds the CCB self expert manual,
+  plan-tree decisions, and test coverage for the role's expert reference and
+  communication recovery guidance.
+
 ## v7.4.0 (2026-06-10)
 
 ### ccb_self Maintenance Role

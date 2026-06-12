@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.4.0-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.4.3-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **English** | [中文](README_zh.md)
@@ -160,7 +160,7 @@ tips_height = "35%"
 comms_limit = 3
 ```
 
-If you are not sure how to group windows, how many workers you need, which agents should use worktrees, or which agents need separate models or API routes, add the `agentroles.ccb_self` role and ask `ccb_self` to design the config with its built-in `ccb-config` skill.
+If you are not sure how to group windows, how many workers you need, which agents should use worktrees, or which agents need separate models or API routes, ask `ccb_self` to design the config with its built-in `ccb-config` skill. Blank projects include `ccb_self`; existing custom configs can add it with `ccb roles add agentroles.ccb_self:codex`.
 
 Validate the config:
 
@@ -250,7 +250,7 @@ CCB resolves config in three layers, from lowest to highest priority:
 3. Project config at `.ccb/ccb.config`.
 
 Higher layers replace lower layers as a whole; they are not merged. The project authority file is `.ccb/ccb.config`. The old `.ccb_config/ccb.config` path is legacy migration evidence only.
-The built-in default is a v2 `[windows]` config with `agent1`, `agent2`, `agent3`, and a managed `neovim` tool window using `ccb-nvim`.
+The built-in default is a v2 `[windows]` config with `agent1`, `agent2`, `agent3`, `ccb_self`, and a managed `neovim` tool window using `ccb-nvim`. The default `ccb_self` agent uses `codex` and is bound to `agentroles.ccb_self`.
 
 `.ccb/ccb.config` mainly controls:
 
@@ -267,7 +267,7 @@ The built-in default is a v2 `[windows]` config with `agent1`, `agent2`, `agent3
 
 After editing `.ccb/ccb.config` in a mounted project, run `ccb reload --dry-run` to preview the plan and `ccb reload` to apply it. The explicit reload path can dynamically add agents, add windows, add/remove managed tool windows, unload idle agents, and remove idle windows while keeping unrelated agents and panes running. It does not run as a background file watcher, and unsafe changes such as busy unloads, provider replacement, agent moves, tool command replacement, and arbitrary reshapes are rejected without killing existing panes.
 
-If you want to discuss the configuration before writing it by hand, add `agentroles.ccb_self` and ask `ccb_self` to describe the target team. Its built-in `ccb-config` skill proposes a complete config first, then writes `.ccb/ccb.config` only after confirmation.
+If you want to discuss the configuration before writing it by hand, ask `ccb_self` to describe the target team. Blank projects include this route by default; projects with a user or project config should add `agentroles.ccb_self` if they have overridden the built-in default. Its built-in `ccb-config` skill proposes a complete config first, then writes `.ccb/ccb.config` only after confirmation.
 
 ### Role Packs
 
@@ -280,18 +280,26 @@ The recommended default catalog roles are `agentroles.ccb_self`, the CCB
 self-maintenance role, and `agentroles.archi`, an architecture reviewer role
 from `agent-roles-spec` backed by Architec. `install.sh install` automatically
 attempts to install or refresh these recommended roles by default; `ccb update`
-refreshes installed roles and installs missing recommended roles when Role Pack
-provisioning is accepted. You can also refresh manually:
+refreshes installed roles and installs missing recommended roles in the user
+environment. You can also refresh manually:
 
 ```bash
 ccb roles update agentroles.ccb_self
 ccb roles update agentroles.archi
 ```
 
+Project role bindings stay pinned by `.ccb/role-lock.json`. `ccb update` does
+not rewrite project locks. When you run `ccb` inside a project, CCB checks
+bound role locks against the current installed roles; interactive starts ask
+whether to refresh stale project locks in place, and non-interactive starts
+print a warning only.
+
 `ccb_self` is strongly recommended for CCB projects because it owns CCB config
 maintenance, runtime diagnostics, guarded recovery, and single-agent restart
-assistance without taking over product work. Add it explicitly to each project
-where you want that maintenance agent:
+assistance without taking over product work. Blank projects include it in the
+built-in default. Existing projects, and projects with user or project config
+that replace the built-in default, should add it explicitly where they want
+that maintenance agent:
 
 ```bash
 ccb roles add agentroles.ccb_self:codex
@@ -369,7 +377,7 @@ command = "ccb-nvim"
 label = "neovim"
 ```
 
-`ccb tools install neovim` prepares an isolated `ccb-nvim` wrapper and LazyVim profile under CCB-owned XDG paths. `install.sh install` automatically attempts this provisioning by default and keeps failures non-blocking; `ccb update` asks in interactive terminals whether to refresh it. Set `CCB_INSTALL_NEOVIM=1` to make install provisioning required or `CCB_INSTALL_NEOVIM=0` to skip it.
+`ccb tools install neovim` prepares an isolated `ccb-nvim` wrapper and LazyVim profile under CCB-owned XDG paths. `install.sh install` and `ccb update` automatically attempt this provisioning by default and keep failures non-blocking. Set `CCB_INSTALL_NEOVIM=1` to make install provisioning required or `CCB_INSTALL_NEOVIM=0` to skip it.
 If `nvim` is not already on `PATH`, provisioning attempts to download the official Neovim release tarball for Linux/macOS and verifies the release sha256 before activating it. It does not write `~/.config/nvim`.
 The managed profile defaults to ASCII icons so terminals without Nerd Font support do not show unreadable boxes. To opt back into LazyVim glyph icons, launch with `CCB_LAZYVIM_ICON_STYLE=glyph ccb-nvim`.
 Use `ccb tools doctor neovim` to verify the managed profile. A working LazyVim setup reports `neovim_status: ok` and `lazyvim_health_status: ok`; damaged or partially downloaded plugin trees report `degraded` and can be repaired by rerunning `ccb tools install neovim`.
@@ -399,17 +407,18 @@ Do not commit real API keys to a public repository. `key` / `url` are agent-loca
 
 ## Use ccb_self For CCB Config
 
-The full `ccb-config` skill belongs to the `agentroles.ccb_self` role. It is not a globally inherited skill for every agent. CCB installs or refreshes this Role Pack by default, but it does not silently add a `ccb_self` agent to existing projects; bind it where you want the maintenance assistant.
+The full `ccb-config` skill belongs to the `agentroles.ccb_self` role. It is not a globally inherited skill for every agent. CCB installs or refreshes this Role Pack by default, and blank projects include `ccb_self` in the built-in default config. Existing projects, or projects with a user/project config that replaces the built-in default, should bind it where they want the maintenance assistant.
 
-If you do not want to hand-write `.ccb/ccb.config`, add `ccb_self` and describe your project goal, parallelism, window grouping, worktree isolation, provider/model/API preferences. `ccb_self` uses its built-in `ccb-config` skill to discuss the shape with you and propose a complete config.
+If you do not want to hand-write `.ccb/ccb.config`, ask `ccb_self` and describe your project goal, parallelism, window grouping, worktree isolation, provider/model/API preferences. `ccb_self` uses its built-in `ccb-config` skill to discuss the shape with you and propose a complete config.
 
 Example:
 
 ```bash
-ccb roles add agentroles.ccb_self:codex
-ccb reload
 ccb ask ccb_self "Design a team for a Python library: main coordinates work, three workers implement in worktrees, and one reviewer checks regressions and risks. Recommend whether this should stay single-window or become main/work/review windows."
 ```
+
+For an existing project that does not already configure `ccb_self`, run
+`ccb roles add agentroles.ccb_self:codex` and `ccb reload` first.
 
 <details>
 <summary><b>ccb-config write flow and boundaries</b></summary>
@@ -554,6 +563,58 @@ v7 highlights:
 - Hardened tmux, Ghostty, release helper, Codex trust, and provider session restore paths.
 
 <details open>
+<summary><b>v7.4.3</b> - PR #225 Reliability Follow-Up</summary>
+
+- Restores the Claude launcher contract: inline `--settings` now reflects the
+  materialized settings overlay without injecting provider env into settings
+  JSON.
+- Fixes Claude WSL Windows-executable environment forwarding so path variables
+  use `/p` translation while `ANTHROPIC_*` API values pass through as raw env
+  names.
+- Hardens Antigravity resume lookup for SQLite `bytes`, `str`, and
+  `memoryview` metadata and falls back to `--continue` if lookup fails.
+- Adds regression tests for the Claude settings contract, WSL API env
+  forwarding, and AGY resume fallback behavior.
+
+</details>
+
+<details>
+<summary><b>v7.4.2</b> - Self-Supervision And Empty Reply Guards</summary>
+
+- Hardens CCB self-supervision with bounded provider-runtime snapshots,
+  project-view activity evidence, suspicion envelopes, and a self-first
+  diagnosis path.
+- Treats empty Claude/Gemini hook replies, Codex protocol `task_complete`
+  empty replies, and AGY done-marker empty replies as `incomplete` with
+  diagnostics.
+- Preserves intentional no-reply behavior: `--silence` success remains
+  completed, callback parent `callback_pending` remains legal, and abnormal
+  silent completions stay diagnosable.
+- Tightens default Role Pack install and project role-lock refresh handling for
+  `agentroles.archi` and `agentroles.ccb_self`.
+
+</details>
+
+<details>
+<summary><b>v7.4.1</b> - Maintenance Heartbeat And ccb_self Defaults</summary>
+
+- Hardens the project-scoped maintenance heartbeat runner, schedule handling,
+  activation suppression, and diagnostics evidence paths while keeping
+  heartbeat opt-in.
+- Adds `ccb_self:codex` bound to canonical `agentroles.ccb_self` in the
+  built-in blank-project default and refreshes the recommended role during
+  install/update provisioning without rewriting existing custom configs.
+- Aligns CCB source with the `agent-roles-spec` role id
+  `agentroles.ccb_self`; `agentrole.ccb_self` is accepted only as legacy input
+  compatibility.
+- Tightens generated config authority, Role Pack hook paths, and Codex prompt
+  delivery acceptance guards.
+- Adds the `ccb_self` expert manual, plan decisions, and tests for expert
+  reference and communication recovery guidance.
+
+</details>
+
+<details>
 <summary><b>v7.4.0</b> - ccb_self Maintenance Role</summary>
 
 - Adds the `agentroles.ccb_self` self-maintenance Role Pack path for CCB config
@@ -563,8 +624,9 @@ v7 highlights:
   globally inherited skill.
 - Installs or refreshes recommended default Role Packs, including
   `agentroles.ccb_self`, during install/update Role Pack provisioning.
-- Recommends adding `agentroles.ccb_self:codex` to CCB projects that should
-  have a dedicated maintenance assistant.
+- Adds `ccb_self:codex` bound to `agentroles.ccb_self` in the built-in blank
+  project default; existing custom configs can still add
+  `agentroles.ccb_self:codex` explicitly.
 
 </details>
 

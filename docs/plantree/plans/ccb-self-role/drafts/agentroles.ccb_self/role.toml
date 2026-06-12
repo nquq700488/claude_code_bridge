@@ -35,6 +35,7 @@ skills = [
   "skills/codex/ccb-self-diagnose",
   "skills/codex/ccb-self-recover",
   "skills/codex/ccb-self-chain",
+  "skills/codex/ccb-comm-reply-recover",
   "skills/codex/ccb-config"
 ]
 tools = ["tools/doctor.py"]

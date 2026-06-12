@@ -43,8 +43,8 @@ def apply_namespace_patch(
     new_topology,
     apply_namespace_patch_fn,
 ):
-    if str(plan.get('plan_class') or '') == 'view_only_change':
-        return view_only_namespace_patch_result(plan)
+    if str(plan.get('plan_class') or '') in {'view_only_change', 'maintenance_change'}:
+        return config_only_namespace_patch_result(plan)
     patch_plan = dict(plan.get('namespace_patch_plan') or {})
     if apply_namespace_patch_fn is not None:
         return _custom_namespace_patch(
@@ -83,15 +83,16 @@ def _controller_namespace_patch(app, patch_plan, old_topology, new_topology):
         return exception_namespace_patch_result(exc)
 
 
-def view_only_namespace_patch_result(
+def config_only_namespace_patch_result(
     plan: dict[str, object],
 ) -> NamespacePatchApplyResult:
     steps = tuple((plan.get('namespace_patch_plan') or {}).get('steps') or ())
+    plan_class = str(plan.get('plan_class') or 'config_only_change')
     return NamespacePatchApplyResult(
         status='applied',
         diagnostics={
-            'reason': 'view_only_change',
-            'supported_operations': ['view_only_change'],
+            'reason': plan_class,
+            'supported_operations': ['view_only_change', 'maintenance_change'],
             'namespace_state_written': False,
             'graph_published': False,
             'runtime_authority_written': False,
@@ -115,8 +116,8 @@ def exception_namespace_patch_result(exc: Exception) -> NamespacePatchApplyResul
 
 __all__ = [
     'apply_namespace_patch',
+    'config_only_namespace_patch_result',
     'current_namespace',
     'exception_namespace_patch_result',
     'topology_for',
-    'view_only_namespace_patch_result',
 ]

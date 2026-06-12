@@ -45,7 +45,7 @@ def cmd_roles(
         if args.command == 'sync':
             return _cmd_sync(args, cwd=cwd, stdout=stdout)
         if args.command == 'doctor':
-            return _cmd_doctor(args, script_root=script_root, stdout=stdout)
+            return _cmd_doctor(args, script_root=script_root, cwd=cwd, stdout=stdout)
         if args.command == 'add':
             return _cmd_add(args, script_root=script_root, cwd=cwd, stdout=stdout)
     except RolePackError as exc:
@@ -174,8 +174,13 @@ def _cmd_sync(args, *, cwd: Path, stdout: TextIO) -> int:
     return 0
 
 
-def _cmd_doctor(args, *, script_root: Path, stdout: TextIO) -> int:
-    payload = role_status(args.role_id, script_root=script_root, include_tools=True)
+def _cmd_doctor(args, *, script_root: Path, cwd: Path, stdout: TextIO) -> int:
+    payload = role_status(
+        args.role_id,
+        script_root=script_root,
+        include_tools=True,
+        project_root=find_nearest_project_anchor(cwd),
+    )
     exists = bool(payload.get('available') or payload.get('installed'))
     tools_failed = payload.get('tools_status') == 'failed'
     print('roles_status: ok' if exists and not tools_failed else 'roles_status: missing' if not exists else 'roles_status: degraded', file=stdout)

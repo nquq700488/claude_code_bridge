@@ -123,7 +123,8 @@ view of provider/tool state:
   pane ids, titles, current command, current path, geometry, active/dead flags,
   and slot/agent mapping when known.
 - `ccb_pane_capture_text`: read-only `tmux capture-pane` style text capture for
-  a configured CCB agent, sidebar, or tool window.
+  a configured CCB agent, sidebar, or tool window, with bottom/current-screen
+  capture as the default self-supervision view.
 - `ccb_pane_activity_sample`: short read-only sampling of captured pane text or
   pane metadata over time to distinguish idle, rendering, stuck, and active
   states without sending keys.
@@ -132,11 +133,13 @@ Pane tools should account for a substantial part of runtime diagnosis, but
 they remain evidence only. Use them to confirm what is visible and changing;
 use CCB authority sources to decide ownership, targets, and lineage.
 
-### Tier 2: Visual Evidence
+### Tier 2: Screenshot Fallback
 
-Screenshot capture is useful but more privacy-sensitive than pane text. Visual
-tools are v2 and should be used only after text evidence is insufficient or the
-failure class is visual:
+Screenshot capture is useful but more privacy-sensitive than pane text. For
+self-supervision, the v1 primary evidence path is `tmux capture-pane` text:
+bottom/current prompt content, recent scrollback, and short activity sampling.
+Screenshots are fallback evidence when pane text is unavailable, blank,
+misleading, or insufficient for a visual/layout failure:
 
 - `ccb_pane_screenshot`: screenshot only a CCB-owned pane/window/sidebar/tool
   target and return an image artifact path plus metadata.
@@ -158,9 +161,14 @@ Use screenshots when:
 - a provider TUI is visibly stuck but text capture is inconclusive;
 - a managed tool window such as Neovim or browser output matters;
 - tmux pane geometry, focus, or split layout is the suspected failure.
+- self-supervision cannot classify whether an active provider pane is really
+  working, stale, waiting for input, dead/blank, misframed, rate-limited, or
+  showing a provider update/auth/quota/error screen from text capture alone.
 
 Do not use screenshots for normal job tracing, queue diagnosis, config drift,
-or mailbox repair.
+mailbox repair, or pane self-supervision when `tmux capture-pane` text is
+sufficient. Use screenshots when the failure cannot be classified without
+seeing visual layout or non-text state.
 
 Do not use pane evidence as authority for:
 
@@ -215,6 +223,7 @@ Ship the Role Pack draft with memory, skills, references, and a read-only
 doctor helper first. For MCP, implement structured diagnostics and pane text
 evidence before visual tools.
 
-Add screenshot tooling as a recommended second step, not a hard dependency for
-`ccb_self` activation. It is valuable for real support work, but it should not
-block the first version of the role.
+Make `tmux capture-pane` style text capture a first-class self-supervision
+dependency for ambiguous agent-progress diagnosis. Screenshot tooling should be
+available as a fallback path, but the normal v1 assessor path should start from
+bottom/current pane text and short activity sampling.

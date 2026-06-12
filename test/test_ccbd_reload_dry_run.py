@@ -267,6 +267,54 @@ tips = ["C-b c new win"]
     assert plan['future_safe_to_apply'] is True
 
 
+def test_reload_plan_classifies_maintenance_only_change(tmp_path: Path) -> None:
+    current = _load_config(
+        tmp_path / 'current-maintenance',
+        BASE_CONFIG
+        + """
+[maintenance.heartbeat]
+enabled = false
+assessor = "ccb_self"
+interval_s = 3600
+min_interval_s = 300
+unknown_streak_cap = 3
+escalation_policy = "report_only"
+startup_ensure = true
+""",
+    )
+    new = _load_config(
+        tmp_path / 'new-maintenance',
+        BASE_CONFIG
+        + """
+[maintenance.heartbeat]
+enabled = true
+assessor = "ccb_self"
+interval_s = 900
+min_interval_s = 120
+unknown_streak_cap = 4
+escalation_policy = "ask_user"
+startup_ensure = true
+""",
+    )
+
+    plan = build_reload_dry_run_plan(current, new)
+
+    assert plan['status'] == 'ok'
+    assert plan['plan_class'] == 'maintenance_change'
+    assert plan['old_config_signature'] != plan['new_config_signature']
+    assert plan['operations'] == [
+        {
+            'op': 'maintenance_change',
+            'fields': ['enabled', 'escalation_policy', 'interval_s', 'min_interval_s', 'unknown_streak_cap'],
+            'reason': 'maintenance heartbeat policy changed',
+        }
+    ]
+    assert plan['drain_intents'] == []
+    assert plan['future_safe_to_apply'] is True
+    assert plan['namespace_patch_plan']['status'] == 'planned'
+    assert plan['namespace_patch_plan']['steps'][0]['action'] == 'refresh_project_view'
+
+
 def test_reload_dry_run_invalid_config_is_structured_and_non_mutating(tmp_path: Path, monkeypatch) -> None:
     project_root = _project(tmp_path / 'repo-invalid', BASE_CONFIG)
     app = CcbdApp(project_root, clock=lambda: '2026-05-29T00:00:00Z', pid=4242)

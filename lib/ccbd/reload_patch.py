@@ -11,6 +11,7 @@ from ccbd.services.project_namespace_runtime import build_namespace_topology_pla
 _SUPPORTED_OPS = {
     'no_change',
     'view_only_change',
+    'maintenance_change',
     'add_agent',
     'add_window',
     'remove_agent',
@@ -75,7 +76,7 @@ def build_namespace_patch_plan(
         )
 
     if not blocked:
-        steps.extend(_view_only_steps(op_records))
+        steps.extend(_view_refresh_steps(op_records))
         steps.extend(_additive_window_steps(old_topology, new_topology))
         additive_result = additive_agent_steps(old_topology, new_topology, step_factory=NamespacePatchStep)
         steps.extend(additive_result['steps'])
@@ -135,7 +136,7 @@ def _blocked_unsupported_operations(operations: tuple[dict[str, object], ...]) -
                     'op': op,
                     'agent': operation.get('agent'),
                     'window': operation.get('window'),
-                    'reason': 'namespace patch planner supports view-only, additive, and idle remove_agent operations',
+                    'reason': 'namespace patch planner supports config-only, additive, and idle remove_agent operations',
                 }
             )
     return blocked
@@ -176,13 +177,24 @@ def _scope_payload(*, project_id: str | None, current_namespace) -> dict[str, ob
     return payload
 
 
-def _view_only_steps(operations: tuple[dict[str, object], ...]) -> list[NamespacePatchStep]:
-    if not any(str(item.get('op') or '') == 'view_only_change' for item in operations):
+def _view_refresh_steps(operations: tuple[dict[str, object], ...]) -> list[NamespacePatchStep]:
+    refresh_ops = {
+        str(item.get('op') or '')
+        for item in operations
+        if str(item.get('op') or '') in {'view_only_change', 'maintenance_change'}
+    }
+    if not refresh_ops:
         return []
+    if refresh_ops == {'view_only_change'}:
+        reason = 'presentation-only config changed; no tmux namespace mutation is required'
+    elif refresh_ops == {'maintenance_change'}:
+        reason = 'maintenance heartbeat policy changed; no tmux namespace mutation is required'
+    else:
+        reason = 'presentation/config-only fields changed; no tmux namespace mutation is required'
     return [
         NamespacePatchStep(
             action='refresh_project_view',
-            reason='presentation-only config changed; no tmux namespace mutation is required',
+            reason=reason,
         )
     ]
 

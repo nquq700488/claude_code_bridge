@@ -4,9 +4,10 @@ Date: 2026-06-09
 
 ## Purpose
 
-Plan the `agentroles.ccb_self` Role Pack: a CCB-specific self-maintenance
-agent that helps users and other agents diagnose CCB runtime state, tmux
-mounting issues, provider context faults, and interrupted message/job chains.
+Plan the `agentroles.ccb_self` Role Pack: a CCB-specific self-maintenance and
+expert agent that helps users and other agents understand CCB architecture,
+use CCB features, diagnose CCB runtime state, repair tmux/provider/message
+faults, and keep CCB knowledge current as new features land.
 
 `ccb_self` is an auxiliary role. It does not own product or coding task
 outcomes, and its own failure must not stop any other configured agent from
@@ -26,6 +27,13 @@ business task executor.
   failure isolation, authority boundaries, and activation model.
 - [topics/skills-and-tools.md](topics/skills-and-tools.md): `ccb_self`
   built-in skills, references, local helper scripts, and MCP tool surface.
+- [topics/ccb-expert-knowledge-role.md](topics/ccb-expert-knowledge-role.md):
+  next-stage design for making `ccb_self` the project-local CCB expert across
+  architecture, usage, feature updates, and bounded pane-view diagnosis.
+- [topics/pane-view-self-supervision.md](topics/pane-view-self-supervision.md):
+  self-supervision direction that uses real CCB-owned pane text view, especially
+  bottom/current prompt capture, as primary evidence for ambiguous execution
+  progress, with screenshots only as fallback.
 - [topics/memory-and-mcp-tools.md](topics/memory-and-mcp-tools.md): built-in
   role memory, MCP diagnostic layers, screenshot/visual evidence, and tool
   safety boundaries.
@@ -48,11 +56,24 @@ business task executor.
 - [decisions/003-bounded-autonomy.md](decisions/003-bounded-autonomy.md):
   decision to give `ccb_self` stronger bounded autonomy for maintenance tasks.
 - [decisions/004-default-recommended-install.md](decisions/004-default-recommended-install.md):
-  decision to install or refresh `agentroles.ccb_self` by default while keeping
-  project binding explicit.
+  decision to install or refresh `agentroles.ccb_self` by default, include
+  `ccb_self` in the built-in blank-project default, and keep existing project
+  config binding explicit.
+- [decisions/005-expert-knowledge-database.md](decisions/005-expert-knowledge-database.md):
+  decision to make `ccb_self` a CCB expert through compact memory routing,
+  role references, talk1 manuals indexes, and source-backed lookup instead of
+  embedding full manuals or the whole source tree in role memory.
+- [decisions/006-future-modification-guardrails.md](decisions/006-future-modification-guardrails.md):
+  decision that future `ccb_self` changes must preserve the canonical
+  `agentroles.ccb_self` id and keep maintenance heartbeat disabled unless
+  manually enabled.
 - [drafts/agentroles.ccb_self/](drafts/agentroles.ccb_self/): reviewable draft
   Role Pack payload for `agentroles.ccb_self`; production content should move
   to the role catalog or an accepted local role source after review.
+- [../../../manuals/ccb-self-expert-guide.md](../../../manuals/ccb-self-expert-guide.md):
+  Markdown expert guide for `ccb_self` covering CCB architecture, command
+  surface, config, communication, diagnosis, recovery, source navigation, and
+  knowledge refresh.
 
 ## Related Sources
 
@@ -71,6 +92,9 @@ business task executor.
 In scope:
 
 - Role identity, memory, skills, and reference docs for `agentroles.ccb_self`.
+- CCB expert knowledge support: source architecture navigation, command and
+  config usage explanation, feature/release status awareness, and knowledge
+  refresh after landed changes.
 - Diagnosis of mounted daemon, configured agents, tmux namespace, panes,
   provider runtime evidence, queues, inboxes, replies, artifacts, logs, config
   reload state, and storage boundaries.
@@ -86,7 +110,8 @@ In scope:
   `ccb_self` to diagnose, fix, recover, maintain, or apply a CCB config change.
 - Read-only MCP tools for CCB/tmux runtime snapshots and lineage tracing.
 - Read-only screen evidence tools, including text capture first and bounded
-  screenshot capture for CCB-owned panes/windows when visual state matters.
+  screenshot capture for CCB-owned panes/windows when visual state matters,
+  especially when text capture cannot classify ambiguous agent progress.
 - Mutating MCP tools only when they call CCB control-plane commands and satisfy
   the bounded-autonomy policy.
 - User-facing tmux quickstart reference for CCB-managed sessions.
@@ -97,6 +122,10 @@ Out of scope:
 - Letting `ccb_self` replace `ccbd` as lifecycle authority.
 - Letting `ccb_self` complete the original coding/product task after another
   agent failed.
+- Treating `ccb_self` as a general product engineer for non-CCB business
+  features.
+- Duplicating the entire CCB source tree or long implementation docs into role
+  memory instead of using compact expert references and source-backed lookup.
 - Keeping CCB config design/edit skills universally inherited by every agent.
 - Using the built-in `ccb-config` skill to execute `ccb reload` without
   validation, dry-run review, and maintenance intent.

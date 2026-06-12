@@ -85,11 +85,29 @@ def prepare_claude_home_overrides(
             memory_projection_event_path=memory_projection_event_path,
             memory_projection_marker_path=memory_projection_marker_path,
         )
-    return {
+    overrides = {
         'HOME': str(layout.home_root),
         'CLAUDE_PROJECTS_ROOT': str(layout.projects_root),
         'CLAUDE_PROJECT_ROOT': str(layout.projects_root),
     }
+
+    if "WSL_DISTRO_NAME" in os.environ:
+        # We are running inside WSL. The target claude executable might be a Windows binary (via interop).
+        # We must set USERPROFILE (which Windows Node.js uses as home) to the same isolated path.
+        # WSLENV translates path variables with /p and forwards Claude API env names as raw values
+        # when invoking a Windows executable. Linux executables will ignore WSLENV.
+        overrides['USERPROFILE'] = str(layout.home_root)
+        wslenv_additions = (
+            "HOME/p:USERPROFILE/p:CLAUDE_PROJECTS_ROOT/p:CLAUDE_PROJECT_ROOT/p:"
+            "ANTHROPIC_AUTH_TOKEN:ANTHROPIC_API_KEY:ANTHROPIC_BASE_URL"
+        )
+        existing_wslenv = os.environ.get("WSLENV", "")
+        if existing_wslenv:
+            overrides['WSLENV'] = f"{wslenv_additions}:{existing_wslenv}"
+        else:
+            overrides['WSLENV'] = wslenv_additions
+
+    return overrides
 
 
 def materialize_claude_home_config(

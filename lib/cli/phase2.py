@@ -31,6 +31,7 @@ from cli.services.inbox import inbox_target
 from cli.services.daemon import KillSummary
 from cli.services.kill import kill_project
 from cli.services.logs import agent_logs
+from cli.services.maintenance import maintenance_status
 from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.ps import ps_summary
@@ -40,6 +41,7 @@ from cli.services.reset_project import reset_project_state
 from cli.services.resubmit import resubmit_message
 from cli.services.restart import restart_agent
 from cli.services.retry import retry_attempt
+from cli.services.role_lock_refresh import confirm_project_role_lock_refresh
 from cli.services.start import start_agents
 from cli.services.trace import trace_target
 from cli.services.wait import wait_for_replies
@@ -72,6 +74,8 @@ def maybe_handle_phase2(
             raise
         if _command_requires_bootstrap_config(command):
             ensure_bootstrap_project_config(context.project.project_root)
+        if command.kind == 'start':
+            _confirm_project_role_lock_refresh(context.project.project_root, out=out)
         return _dispatch(context, command, out)
     except Exception as exc:
         return handle_phase2_exception(err, command_kind=command.kind, exc=exc)
@@ -124,6 +128,15 @@ def _confirm_project_reset(project_root: Path, *, out: TextIO) -> None:
     )
 
 
+def _confirm_project_role_lock_refresh(project_root: Path, *, out: TextIO) -> None:
+    confirm_project_role_lock_refresh(
+        project_root,
+        out=out,
+        stdin=sys.stdin,
+        stream_is_tty_fn=_stream_is_tty,
+    )
+
+
 def _dispatch(context, command, out: TextIO) -> int:
     return _dispatch_impl(context, command, out, _dispatch_services())
 
@@ -144,6 +157,7 @@ def _dispatch_services():
         inbox_target=inbox_target,
         kill_project=kill_project,
         list_fault_rules=list_fault_rules,
+        maintenance_status=maintenance_status,
         pend_target=pend_target,
         ping_target=ping_target,
         ps_summary=ps_summary,

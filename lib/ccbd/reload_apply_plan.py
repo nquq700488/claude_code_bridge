@@ -10,6 +10,7 @@ from ccbd.reload_transaction_records import graph_signature
 _ALLOWED_PLAN_CLASSES = frozenset({
     'no_change',
     'view_only_change',
+    'maintenance_change',
     'add_agent',
     'add_window',
     'remove_agent',
@@ -18,6 +19,7 @@ _ALLOWED_PLAN_CLASSES = frozenset({
 })
 _ALLOWED_OPERATIONS = frozenset({
     'view_only_change',
+    'maintenance_change',
     'add_agent',
     'add_window',
     'remove_agent',
@@ -35,7 +37,8 @@ def plan_blocker(plan: dict[str, object]) -> tuple[str, str] | None:
         return (
             'unsupported_plan_class',
             'additive reload apply only accepts view_only_change, '
-            'no_change, add_agent, add_window, idle remove_agent, add_tool_window, and remove_tool_window',
+            'maintenance_change, no_change, add_agent, add_window, idle remove_agent, '
+            'add_tool_window, and remove_tool_window',
         )
     operation_blocker = _operation_blocker(plan)
     if operation_blocker is not None:
