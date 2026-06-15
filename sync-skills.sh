@@ -35,6 +35,7 @@ sync_skills() {
 
         # Copy any additional files
         for extra in "${skill_dir}"/*; do
+            [[ -f "${extra}" ]] || continue
             local extra_name
             extra_name="$(basename "${extra}")"
             if [[ "${extra_name}" != "SKILL.md" && "${extra_name}" != "SKILL.md.bash" ]]; then
@@ -43,7 +44,7 @@ sync_skills() {
         done
 
         echo "  ${skill_name}"
-        ((count++))
+        count=$((count + 1))
     done
 
     echo "OK: ${count} ${provider} skills → ${dst_dir}"
