@@ -6,6 +6,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from provider_core.fifo_delivery import cleanup_acks
+
 from .env import env_float
 from .runtime_io import process_request, read_request
 from .runtime_state import build_bridge_runtime_state
@@ -60,19 +62,19 @@ class DualBridge:
 
     def run(self) -> int:
         self._log_console('Codex bridge started, waiting for Claude commands...')
+        cleanup_acks(self._runtime.paths.runtime_dir / 'acks')
         self.binding_tracker.start()
         self._start_socket_server()
         idle_sleep = env_float('CCB_BRIDGE_IDLE_SLEEP', 0.05)
         error_backoff_min = env_float('CCB_BRIDGE_ERROR_BACKOFF_MIN', 0.05)
         error_backoff_max = env_float('CCB_BRIDGE_ERROR_BACKOFF_MAX', 0.2)
         error_backoff = max(0.0, min(error_backoff_min, error_backoff_max))
+        poll_timeout = idle_sleep if idle_sleep else 0.05
         try:
             while self._running:
                 try:
-                    payload = self._read_request()
+                    payload = self._read_request(timeout=poll_timeout)
                     if payload is None:
-                        if idle_sleep:
-                            time.sleep(idle_sleep)
                         continue
                     self._process_request(payload)
                     error_backoff = max(0.0, min(error_backoff_min, error_backoff_max))
@@ -88,12 +90,14 @@ class DualBridge:
         finally:
             self._stop_socket_server()
             self.binding_tracker.stop()
+            if self._runtime.fifo_reader is not None:
+                self._runtime.fifo_reader.close()
 
         self._log_console('Codex bridge exited')
         return 0
 
-    def _read_request(self):
-        return read_request(self._runtime)
+    def _read_request(self, *, timeout: float = 0.0):
+        return read_request(self._runtime, timeout=timeout)
 
     def _process_request(self, payload) -> None:
         process_request(self._runtime, payload, log_console_fn=self._log_console)

@@ -67,11 +67,17 @@ OPENCODE_RUNTIME_SPEC = _provider_runtime_spec("opencode")
 CLAUDE_RUNTIME_SPEC = _provider_runtime_spec("claude")
 DROID_RUNTIME_SPEC = _provider_runtime_spec("droid")
 AGY_RUNTIME_SPEC = _provider_runtime_spec("agy")
+KIMI_RUNTIME_SPEC = _provider_runtime_spec("kimi")
+DEEPSEEK_RUNTIME_SPEC = _provider_runtime_spec("deepseek")
+MIMO_RUNTIME_SPEC = _provider_runtime_spec("mimo")
 COPILOT_RUNTIME_SPEC = _provider_runtime_spec("copilot")
 CODEBUDDY_RUNTIME_SPEC = _provider_runtime_spec("codebuddy")
 QWEN_RUNTIME_SPEC = _provider_runtime_spec("qwen")
 MMX_RUNTIME_SPEC = _provider_runtime_spec("mmx")
-KIMI_RUNTIME_SPEC = _provider_runtime_spec("kimi")
+CURSOR_RUNTIME_SPEC = _provider_runtime_spec("cursor")
+CRUSH_RUNTIME_SPEC = _provider_runtime_spec("crush")
+KIRO_RUNTIME_SPEC = _provider_runtime_spec("kiro")
+PI_RUNTIME_SPEC = _provider_runtime_spec("pi")
 
 CODEX_CLIENT_SPEC = _client_spec(
     provider_key="codex",
@@ -97,6 +103,18 @@ AGY_CLIENT_SPEC = _client_spec(
     provider_key="agy",
     session_filename=".agy-session",
 )
+KIMI_CLIENT_SPEC = _client_spec(
+    provider_key="kimi",
+    session_filename=".kimi-session",
+)
+DEEPSEEK_CLIENT_SPEC = _client_spec(
+    provider_key="deepseek",
+    session_filename=".deepseek-session",
+)
+MIMO_CLIENT_SPEC = _client_spec(
+    provider_key="mimo",
+    session_filename=".mimo-session",
+)
 COPILOT_CLIENT_SPEC = _client_spec(
     provider_key="copilot",
     session_filename=".copilot-session",
@@ -113,9 +131,21 @@ MMX_CLIENT_SPEC = _client_spec(
     provider_key="mmx",
     session_filename=".mmx-session",
 )
-KIMI_CLIENT_SPEC = _client_spec(
-    provider_key="kimi",
-    session_filename=".kimi-session",
+CURSOR_CLIENT_SPEC = _client_spec(
+    provider_key="cursor",
+    session_filename=".cursor-session",
+)
+CRUSH_CLIENT_SPEC = _client_spec(
+    provider_key="crush",
+    session_filename=".crush-session",
+)
+KIRO_CLIENT_SPEC = _client_spec(
+    provider_key="kiro",
+    session_filename=".kiro-session",
+)
+PI_CLIENT_SPEC = _client_spec(
+    provider_key="pi",
+    session_filename=".pi-session",
 )
 
 RUNTIME_SPECS_BY_PROVIDER = {
@@ -125,11 +155,17 @@ RUNTIME_SPECS_BY_PROVIDER = {
     "claude": CLAUDE_RUNTIME_SPEC,
     "droid": DROID_RUNTIME_SPEC,
     "agy": AGY_RUNTIME_SPEC,
+    "kimi": KIMI_RUNTIME_SPEC,
+    "deepseek": DEEPSEEK_RUNTIME_SPEC,
+    "mimo": MIMO_RUNTIME_SPEC,
     "copilot": COPILOT_RUNTIME_SPEC,
     "codebuddy": CODEBUDDY_RUNTIME_SPEC,
     "qwen": QWEN_RUNTIME_SPEC,
     "mmx": MMX_RUNTIME_SPEC,
-    "kimi": KIMI_RUNTIME_SPEC,
+    "cursor": CURSOR_RUNTIME_SPEC,
+    "crush": CRUSH_RUNTIME_SPEC,
+    "kiro": KIRO_RUNTIME_SPEC,
+    "pi": PI_RUNTIME_SPEC,
 }
 
 CLIENT_SPECS_BY_PROVIDER = {
@@ -139,11 +175,17 @@ CLIENT_SPECS_BY_PROVIDER = {
     "claude": CLAUDE_CLIENT_SPEC,
     "droid": DROID_CLIENT_SPEC,
     "agy": AGY_CLIENT_SPEC,
+    "kimi": KIMI_CLIENT_SPEC,
+    "deepseek": DEEPSEEK_CLIENT_SPEC,
+    "mimo": MIMO_CLIENT_SPEC,
     "copilot": COPILOT_CLIENT_SPEC,
     "codebuddy": CODEBUDDY_CLIENT_SPEC,
     "qwen": QWEN_CLIENT_SPEC,
     "mmx": MMX_CLIENT_SPEC,
-    "kimi": KIMI_CLIENT_SPEC,
+    "cursor": CURSOR_CLIENT_SPEC,
+    "crush": CRUSH_CLIENT_SPEC,
+    "kiro": KIRO_CLIENT_SPEC,
+    "pi": PI_CLIENT_SPEC,
 }
 
 
@@ -176,20 +218,32 @@ __all__ = [
     "CODEX_RUNTIME_SPEC",
     "COPILOT_CLIENT_SPEC",
     "COPILOT_RUNTIME_SPEC",
+    "CRUSH_CLIENT_SPEC",
+    "CRUSH_RUNTIME_SPEC",
+    "CURSOR_CLIENT_SPEC",
+    "CURSOR_RUNTIME_SPEC",
+    "DEEPSEEK_CLIENT_SPEC",
+    "DEEPSEEK_RUNTIME_SPEC",
     "DROID_CLIENT_SPEC",
     "DROID_RUNTIME_SPEC",
     "GEMINI_CLIENT_SPEC",
     "GEMINI_RUNTIME_SPEC",
+    "KIMI_CLIENT_SPEC",
+    "KIMI_RUNTIME_SPEC",
+    "KIRO_CLIENT_SPEC",
+    "KIRO_RUNTIME_SPEC",
+    "MIMO_CLIENT_SPEC",
+    "MIMO_RUNTIME_SPEC",
+    "MMX_CLIENT_SPEC",
+    "MMX_RUNTIME_SPEC",
     "OPENCODE_CLIENT_SPEC",
     "OPENCODE_RUNTIME_SPEC",
+    "PI_CLIENT_SPEC",
+    "PI_RUNTIME_SPEC",
     "ProviderClientSpec",
     "ProviderRuntimeSpec",
     "QWEN_CLIENT_SPEC",
     "QWEN_RUNTIME_SPEC",
-    "MMX_CLIENT_SPEC",
-    "MMX_RUNTIME_SPEC",
-    "KIMI_CLIENT_SPEC",
-    "KIMI_RUNTIME_SPEC",
     "RUNTIME_SPECS_BY_PROVIDER",
     "make_qualified_key",
     "parse_qualified_provider",

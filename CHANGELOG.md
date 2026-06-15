@@ -2,6 +2,107 @@
 
 # Changelog
 
+## v7.5.3 (2026-06-14)
+
+### Kimi Runtime Reliability And Hindsight Compatibility
+
+- **Kimi Pane Fallback Added**: Kimi can now use stable pane evidence for K2.7
+  Code when the native turn log does not expose a completed reply in time,
+  without changing other provider execution paths.
+- **Kimi Hindsight Bridge Added**: Kimi can recall and retain Hindsight memory
+  at the CCB execution boundary when `.hindsight/kimi.json`,
+  `.hindsight/codex.json`, `HINDSIGHT_API_URL`, or `HINDSIGHT_BANK_ID` is
+  configured. Hindsight failures remain non-blocking diagnostics.
+- **Hindsight Token Compatibility Fixed**: both `HINDSIGHT_API_KEY` and
+  `HINDSIGHT_API_TOKEN` are accepted by the Kimi bridge and the
+  `scripts/hindsight` helper.
+- **Codex Hindsight Hook Inheritance Scoped**: managed Codex homes may inherit
+  only allowlisted Hindsight hooks from `.hindsight/codex/scripts/`, preserving
+  CCB-managed activity hooks and filtering unrelated root hooks.
+- **README Release Surface Updated**: English and Chinese README files document
+  the Kimi/Hindsight behavior and keep the public supported-provider surface
+  aligned with the 7.5 line.
+
+## v7.5.2 (2026-06-13)
+
+### Native CLI Provider Wave
+
+- **Provider Strip Expanded**: English and Chinese README provider strips now
+  include Qwen, Cursor, GitHub Copilot, Crush, Kiro, and Pi, and the public
+  provider badge count is updated to 14 CLI families.
+- **Next-Wave Native Providers Added**: CCB registers optional provider ids
+  `qwen`, `cursor`, `copilot`, `crush`, `kiro`, and `pi` with runtime specs,
+  session bindings, simple tmux launchers, command overrides, deterministic
+  stubs, and focused execution coverage.
+- **Native Completion Preserved**: Qwen, Cursor, Copilot, and Pi parse
+  structured JSON/stream-json events, while Crush and Kiro use subprocess exit
+  plus stdout. Pi terminalizes on native `turn_end`; none of these adapters
+  require model-printed `CCB_DONE`.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and native
+  provider plan-tree evidence are aligned for the 7.5.2 patch release.
+
+## v7.5.1 (2026-06-13)
+
+### MiMo Provider Release Surface
+
+- **MiMo Public Provider Surface**: English and Chinese README provider strips
+  now include MiMo with a Xiaomi-branded badge, and the public positioning is
+  updated from seven to eight CLI families.
+- **MiMo Run-Mode Hardened**: CCB now runs MiMo ask jobs through
+  `mimo run --pure --format json`, avoiding external plugin/tool-call
+  intermediate steps that can consume simple CCB ask jobs before final text.
+- **MiMo Completion Parsing Fixed**: MiMo `tool-calls` step-finish events are
+  treated as intermediate evidence until final assistant text or process exit,
+  while normal `step_finish` / `part.reason=stop` still completes as
+  `mimo_run_stop`.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and native
+  provider plan-tree evidence are aligned for the 7.5.1 patch release.
+
+## v7.5.0 (2026-06-13)
+
+### Native CLI Providers And Homepage Sync
+
+- **Native CLI Provider Expansion**: Kimi and the DeepCode-backed `deepseek`
+  adapter now have managed tmux launchers, runtime specs, provider registry
+  integration, session bindings, command overrides, and cleanup coverage.
+- **Native Completion Detection**: Kimi, DeepCode/DeepSeek, and Antigravity
+  now bind on `CCB_REQ_ID` and complete from provider-owned session, snapshot,
+  or transcript evidence instead of requiring model-printed `CCB_DONE`.
+- **Provider Diagnostics Hardened**: Kimi `TurnEnd` empty replies,
+  DeepCode completed-empty replies, DeepCode `permission_denied`, and AGY
+  missing-anchor/timeout paths now surface explicit incomplete or failed
+  diagnostics.
+- **Kimi Auto-Permission Compatibility**: CCB now injects Kimi's current
+  `--auto-approve` flag for auto-permission while recognizing legacy/alias
+  flags such as `--auto`, `--yes`, `-y`, and `--yolo` as explicit user input.
+- **README Homepage Synchronized**: English and Chinese README homepages now
+  share the same agent-parity positioning, v7 UI tour shape, refreshed hero
+  assets, and seven public CLI-family strip.
+
+## v7.4.4 (2026-06-12)
+
+### Claude End-Turn And npm Release Surface
+
+- **Claude `end_turn` Terminalization Fixed**: Claude pane-backed asks that
+  emit a primary assistant response with `stop_reason=end_turn`, observed
+  request anchor, and non-empty reply now produce normalized
+  `TURN_BOUNDARY(reason=assistant_end_turn)` evidence and complete promptly
+  instead of waiting for the 900-second reliability timeout.
+- **Session-Boundary Empty Reply Guard Added**: empty session-boundary terminal
+  events with no prior assistant reply now finish as
+  `incomplete/task_complete_empty_reply` with `empty_provider_reply`
+  diagnostics, matching the existing protocol empty-reply policy.
+- **npm Release Surface Restored**: the source tree now includes the
+  `@seemseam/ccb` package manifest, npm CLI runner wrappers, and a
+  tag-triggered Trusted Publishing workflow that waits for GitHub release
+  artifacts before publishing the npm package.
+- **README v7 Homepage Refreshed**: public README files now use the canonical
+  v7 hero assets, npm-first install wording, and stronger `ccb_self`
+  positioning as CCB's built-in usage, config, diagnostics, and recovery
+  expert.
+
 ## v7.4.3 (2026-06-12)
 
 ### PR #225 Reliability Follow-Up

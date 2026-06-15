@@ -14,6 +14,15 @@ PROVIDER_SESSION_FILENAMES = {
     'mmx': '.mmx-session',
     'kimi': '.kimi-session',
     'agy': '.agy-session',
+    'kimi': '.kimi-session',
+    'deepseek': '.deepseek-session',
+    'mimo': '.mimo-session',
+    'qwen': '.qwen-session',
+    'cursor': '.cursor-session',
+    'copilot': '.copilot-session',
+    'crush': '.crush-session',
+    'kiro': '.kiro-session',
+    'pi': '.pi-session',
 }
 
 

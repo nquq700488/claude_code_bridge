@@ -28,7 +28,6 @@ class ParsedClearCommand:
 
 
 @dataclass(frozen=True)
-@dataclass(frozen=True)
 class ParsedMaintenanceCommand:
     project: str | None
     action: str = 'status'

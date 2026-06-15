@@ -1,0 +1,441 @@
+# Native CLI Providers Implementation Status
+
+Date: 2026-06-13
+
+## Current Phase
+
+Native completion pivot is implemented in source and `v7.5.0` has been
+published. Kimi, DeepSeek/DeepCode, AGY, and MiMo now use provider-native
+session/event logs or structured result streams for completion detection
+instead of asking the model to print `CCB_DONE`. Kimi and OpenCode inherited
+ask skill injection landed in commit `a4395c2`. MiMo inherited ask instruction
+injection and `mimo run --format json` execution landed in commit `fce17c3`.
+
+The active phase is next-wave provider validation for Qwen Code, GitHub
+Copilot CLI, Cursor Agent, Kiro CLI, Charm Crush, and Pi. Source implementation has
+landed for the minimal built-in provider path, and the stub-backed
+source-runtime smoke plus real CLI version smoke have passed.
+
+## Last Landed
+
+- Shared pane-quiet support and Kimi/DeepSeek provider backends were added in
+  the earlier first slice and remain as compatibility/test support.
+- Source-runtime smoke project added at
+  `/home/bfly/yunwei/test_ccb2/native_provider_smoke`.
+- Real Kimi validation project added at
+  `/home/bfly/yunwei/test_ccb2/kimi_ccb_real` with `kimi1:kimi, kimi2:kimi`.
+- Kimi launcher no longer injects implicit `--continue`; Kimi 1.47.0 exits
+  when no previous session exists for the workdir.
+- Pane-quiet parsing now ignores prompt-echo done markers, strips Kimi TUI's
+  leading assistant bullet, and defers Kimi prompt delivery until the TUI input
+  area is ready.
+- Current native pivot:
+  - Kimi reads `~/.kimi/sessions/<project-md5>/<session>/wire.jsonl`.
+  - DeepSeek reads `~/.deepcode/projects/<project-code>/sessions-index.json`
+    plus `<session>.jsonl`.
+  - AGY reads
+    `~/.gemini/antigravity-cli/brain/<conversation>/.system_generated/logs/transcript*.jsonl`.
+  - Provider stubs now write those native stores for source runtime tests.
+- Ask skill projection:
+  - Kimi inherited ask skill lives at
+    `inherit_skills/kimi_skills/ask/SKILL.md` and is passed to Kimi through a
+    managed provider-state skills root with `--skills-dir`. CCB also passes
+    existing Kimi default project/user skill directories first because Kimi
+    treats explicit `--skills-dir` as replacement for default discovery.
+  - OpenCode inherited ask guidance lives at
+    `inherit_skills/opencode_skills/ask.md` and is appended to generated
+    `opencode.json.instructions` through
+    `.ccb/runtime/skills/<agent>/opencode/ask.md`.
+- MiMo provider integration:
+  - Provider key `mimo`, default command `mimo`, override `MIMO_START_CMD`.
+  - Launch prepares `MIMOCODE_HOME`, `MIMOCODE_CONFIG`, memory bridge, and
+    generated ask instruction path in MiMo `mimocode.json`.
+  - CCB ask execution uses `mimo run --pure --format json --dir <workdir>` as a
+    per-job native subprocess. The visible pane remains a managed MiMo session
+    for user/runtime maintenance, but completion no longer depends on TUI pane
+    prompt injection.
+  - Completion parser handles MiMo 0.1.0 JSON events where reply text is in
+    `part.text` and stop reason is in `part.reason` under a
+    `step_finish` event.
+- Next-wave native CLI provider implementation:
+  - Optional provider ids `qwen`, `cursor`, `copilot`, `crush`, `kiro`, and
+    `pi`
+    are registered through provider-core manifests, execution adapters,
+    session bindings, runtime launchers, runtime specs, command defaults, and
+    session filenames.
+  - Shared native CLI subprocess support now handles prompt wrapping without
+    `CCB_DONE`, stdout/stderr artifacts, JSONL/stream-json result parsing,
+    stdout-on-exit providers, empty reply diagnostics, nonzero exit failures,
+    and tool/intermediate events that do not terminalize early.
+  - Default commands and overrides:
+    `qwen`/`QWEN_START_CMD`, `agent`/`CURSOR_START_CMD`,
+    `copilot`/`COPILOT_START_CMD`, `crush`/`CRUSH_START_CMD`,
+    `kiro-cli`/`KIRO_START_CMD`, and `pi`/`PI_START_CMD`.
+  - Visible panes use the shared simple-tmux launcher while CCB ask execution
+    uses per-job subprocesses: structured JSON for Qwen/Cursor/Copilot/Pi and
+    process exit plus stdout for Crush/Kiro.
+  - Talk1 review found one release-blocking gap: Crush ask execution used
+    `--data-dir`, but the visible pane did not. The shared native CLI launcher
+    now supports prepared-state-derived visible arguments, and the Crush visible
+    pane starts with `--data-dir <provider-state>/data`.
+  - Storage classification now recognizes Qwen, Cursor, Copilot, Crush, Kiro,
+    and Pi provider-state contents as native CLI provider-owned session/cache
+    or projected skill evidence instead of leaving them as unknown paths.
+
+## Active TODO
+
+1. Decide whether to keep the smoke/real test projects as reusable validation
+   fixtures.
+2. Decide whether provider-specific auth diagnostics should land before the
+   next public release or remain a follow-up.
+3. Decide whether real authenticated blackbox asks for all six next-wave CLIs
+   should be required before a public release or tracked as manual follow-up.
+
+## Blocked By
+
+None for design. Real provider API execution may require user-owned
+Kimi/DeepSeek/MiMo/Qwen/Copilot/Cursor/Kiro/Crush/Pi credentials; CCB integration
+can still be validated with provider command templates, installed CLI
+help/version checks, and source-backed parser tests.
+
+## Last Verified
+
+Historical first-slice verification:
+
+- `node --version` returned `v22.20.0`.
+- `npm view @moonshot-ai/kimi-code@0.14.2 version bin engines --json` returned
+  bin `kimi` and engine `>=22.19.0`.
+- `npm view @vegamo/deepcode-cli@0.1.29 version bin engines --json` returned
+  bin `deepcode` and engine `>=22`.
+- `npx --yes @moonshot-ai/kimi-code@0.14.2 --help` and `--version` succeeded.
+- `npx --yes @vegamo/deepcode-cli@0.1.29 --help` and `--version` succeeded.
+- `python -m pytest -q test/test_pane_quiet_support.py
+  test/test_native_cli_providers.py test/test_v2_provider_catalog.py
+  test/test_v2_provider_core_registry.py test/test_runtime_specs.py`:
+  `18 passed`.
+- Focused config/runtime-launch checks: `3 passed`.
+- Full `test/test_v2_config_loader.py`: `87 passed`.
+- Full `test/test_v2_runtime_launch.py`: `78 passed`.
+- Kill/provider catalog/registry focused set: `12 passed`.
+- Execution/completion/session-binding related set: `88 passed`.
+- `python -m py_compile` for new provider modules and touched stubs passed.
+- `git diff --check` passed.
+- Full repository `python -m pytest -q`: `2585 passed, 2 skipped`.
+- `/home/bfly/yunwei/ccb_source/ccb_test --diagnose` passed from
+  `/home/bfly/yunwei/test_ccb2/native_provider_smoke`.
+- Smoke `ccb_test config validate`: valid, agents `deep1, kimi1`.
+- Smoke `ccb_test -s`: launched `kimi1` and `deep1`.
+- Smoke `ccb_test ask`: both providers completed with
+  `completion_reason: pane_done_marker`.
+- Smoke `ccb_test restart kimi1` and `restart deep1`: both `restart_status: ok`.
+- Smoke post-restart asks: both completed with `pane_done_marker`.
+- Smoke `ccb_test reload --dry-run`: `plan_class: no_change`.
+- Smoke runtime stopped with `ccb_test kill -f`.
+- Real Kimi CLI install check from `/home/bfly/yunwei/test_ccb2`:
+  `kimi --version` returned `kimi, version 1.47.0`.
+- Real Kimi CCB project
+  `/home/bfly/yunwei/test_ccb2/kimi_ccb_real`:
+  `ccb_test config validate` valid, agents `kimi1, kimi2`.
+- Real Kimi `ccb_test -s` launched both Kimi panes with command `kimi`.
+- Real Kimi immediate post-start ask completed with
+  `reply: KIMI_READY_SEND_OK` and `completion_reason: pane_done_marker`,
+  proving ready-before-send protection.
+- Real Kimi serial ask set completed for `KIMI_SERIAL_OK_1` through
+  `KIMI_SERIAL_OK_5`.
+- Real Kimi after-fix concurrent pressure set submitted 8 jobs across
+  `kimi1` and `kimi2`; all completed with exact replies
+  `KIMI_AFTERFIX_OK_1` through `KIMI_AFTERFIX_OK_8`.
+- Real Kimi `ccb_test restart kimi1` succeeded; post-restart ask completed
+  with `reply: KIMI_RESTART_AFTERFIX_OK`.
+- Real Kimi `ccb_test clear kimi1 kimi2` succeeded; post-clear ask completed
+  with `completion_reason: pane_done_marker`.
+- Real Kimi artifact reply path stored
+  `job_29c1cf2fb1a2-art_0bc032960b444864.txt`.
+- Focused related pytest set after the real-Kimi fixes:
+  `113 passed`.
+
+Current native pivot verification:
+
+- Native pivot compile check:
+  `python -m py_compile test/stubs/provider_stub.py
+  lib/provider_backends/kimi/execution.py
+  lib/provider_backends/deepseek/execution.py
+  lib/provider_backends/agy/execution_runtime/poll.py`: passed.
+- Native pivot focused tests:
+  `python -m pytest -q test/test_agy_execution_polling.py
+  test/test_native_cli_completion.py
+  test/test_native_cli_providers.py test/test_v2_provider_catalog.py
+  test/test_pane_quiet_support.py`: `25 passed`.
+- Native pivot focused config/catalog tests:
+  `python -m pytest -q test/test_native_cli_completion.py
+  test/test_native_cli_providers.py test/test_v2_provider_catalog.py
+  test/test_v2_provider_core_registry.py test/test_runtime_specs.py
+  test/test_v2_config_loader.py -k 'native or provider_catalog or optional or
+  kimi or deepseek or agy or runtime_spec'`: `16 passed, 90 deselected`.
+- Source-runtime smoke from
+  `/home/bfly/yunwei/test_ccb2/native_provider_smoke` with isolated
+  `HOME=/home/bfly/yunwei/test_ccb2/source_home`:
+  - `ccb_test config validate`: valid, agents `agy1, deep1, kimi1`.
+  - `ccb_test -s`: `start_status: ok`, agents `kimi1, deep1, agy1`.
+  - `ccb_test ask kimi1`: job `job_462bb2fd5afb`, reply completed with
+    reason `kimi_turn_end`.
+  - `ccb_test ask deep1`: job `job_bfa7f505da0f`, reply completed with
+    reason `deepseek_session_completed`.
+  - `ccb_test ask agy1`: job `job_bd583f5b76cb`, reply completed with
+    reason `agy_transcript_response_done`.
+  - Native files observed under source home:
+    Kimi `wire.jsonl`, DeepCode `sessions-index.json`/session jsonl, and AGY
+    `transcript.jsonl`.
+  - `ccb_test ping all`: mounted and idle for `agy1`, `deep1`, `kimi1`.
+  - Smoke runtime stopped with `ccb_test kill -f`.
+- Source-marker probe:
+  - Kimi real 1.47.0 local wire logs use
+    `TurnBegin`/`ContentPart`/`StatusUpdate`/`TurnEnd`.
+  - Kimi npm source `@moonshot-ai/kimi-code@0.14.2` also exposes event-stream
+    names `turn.started`/`assistant.delta`/`turn.ended`; the Kimi parser now
+    accepts source-style `turn.prompt`/`assistant.delta`/`turn.ended` records
+    when they appear in `wire.jsonl`.
+  - Kimi launcher now injects `--auto-approve` for CCB auto-permission on
+    current Kimi versions, while treating legacy/alias flags
+    `--auto`, `--auto-approve`, `--yes`, `-y`, and `--yolo` as explicit
+    auto-permission flags to avoid duplication.
+  - DeepCode source `@vegamo/deepcode-cli@0.1.29` confirms
+    `permission_denied`; DeepSeek polling now terminalizes it as
+    `deepseek_native_permission_denied`.
+  - AGY local runtime artifacts confirm transcript `DONE` rows as the stable
+    evidence surface; sqlite conversation DB status enums remain diagnostic
+    only.
+  - OpenCode npm package `opencode-ai@1.16.2` is a binary installer wrapper;
+    CCB's existing OpenCode storage contract remains the native completion
+    authority (`time.completed`).
+- Source-marker focused verification:
+  - `python -m py_compile lib/provider_backends/kimi/native_log.py
+    lib/provider_backends/deepseek/native_log.py
+    lib/provider_backends/deepseek/execution.py
+    test/test_native_cli_completion.py`: passed.
+  - `python -m pytest -q test/test_native_cli_completion.py`: `8 passed`.
+  - `python -m pytest -q test/test_agy_execution_polling.py
+    test/test_native_cli_completion.py test/test_native_cli_providers.py
+    test/test_v2_provider_catalog.py test/test_pane_quiet_support.py`:
+    `27 passed`.
+- Kimi auto flag compatibility verification:
+  - `kimi --auto-approve --version`: succeeded on local Kimi 1.47.0.
+  - `python -m py_compile lib/provider_backends/kimi/launcher.py
+    test/test_native_cli_providers.py`: passed.
+  - `python -m pytest -q test/test_native_cli_providers.py`: `5 passed`.
+
+Next-wave provider source verification:
+
+- Landing history:
+  [history/next-wave-provider-landing-2026-06-13.md](history/next-wave-provider-landing-2026-06-13.md)
+- Compile check:
+  `python -m py_compile lib/provider_backends/native_cli_support/*.py
+  lib/provider_backends/qwen/*.py lib/provider_backends/copilot/*.py
+  lib/provider_backends/cursor/*.py lib/provider_backends/crush/*.py
+  lib/provider_backends/kiro/*.py lib/provider_core/runtime_specs.py
+  lib/provider_core/runtime_shared.py lib/provider_core/pathing.py
+  lib/provider_core/registry_runtime/builtin_backends.py
+  test/stubs/provider_stub.py`: passed.
+- Focused source tests:
+  `pytest -q test/test_native_cli_provider_execution.py
+  test/test_v2_provider_catalog.py test/test_v2_provider_core_registry.py
+  test/test_v2_execution_registry.py test/test_runtime_specs.py
+  test/test_v2_runtime_launch.py::test_provider_start_parts_respect_env_override
+  test/test_v2_runtime_launch.py::test_provider_start_parts_fall_back_to_default_binary
+  test/test_v2_runtime_launch.py::test_native_cli_launcher_builds_provider_state_payload`:
+  `35 passed`.
+- Native CLI adapter timeout regression:
+  `pytest -q test/test_native_cli_provider_execution.py`: `23 passed`.
+  This covers completed, empty reply, nonzero exit, run timeout, and structured
+  tool-event intermediate behavior for `qwen`, `cursor`, `copilot`, `crush`,
+  and `kiro`.
+- Control-plane env regression:
+  `pytest -q test/test_runtime_env_control_plane.py
+  test/test_v2_runtime_launch.py::test_provider_start_parts_respect_env_override
+  test/test_v2_runtime_launch.py::test_provider_start_parts_fall_back_to_default_binary`:
+  `9 passed`.
+- Wider touched-provider suite:
+  `pytest -q test/test_native_cli_provider_execution.py
+  test/test_v2_provider_catalog.py test/test_v2_provider_core_registry.py
+  test/test_v2_execution_registry.py test/test_runtime_specs.py
+  test/test_v2_config_loader.py test/test_v2_runtime_launch.py
+  test/test_storage_classification.py test/test_repo_hygiene.py`:
+  `238 passed`.
+- Talk1 blocker fix verification:
+  `pytest -q
+  test/test_v2_runtime_launch.py::test_native_cli_launcher_builds_provider_state_payload
+  test/test_storage_classification.py`: `14 passed`.
+- Native execution/control-plane regression after the blocker fix:
+  `pytest -q test/test_native_cli_provider_execution.py
+  test/test_runtime_env_control_plane.py`: `30 passed`.
+- Compile check after the blocker fix:
+  `python -m py_compile lib/provider_backends/native_cli_support/launcher.py
+  lib/provider_backends/crush/launcher.py
+  lib/storage_classification/provider_home.py
+  test/test_v2_runtime_launch.py test/test_storage_classification.py`: passed.
+- Source-runtime smoke from
+  `/home/bfly/yunwei/test_ccb2/next_wave_provider_smoke` with isolated
+  `HOME=/home/bfly/yunwei/test_ccb2/source_home` and provider `*_START_CMD`
+  overrides pointing at `test/stubs/provider_stub.py`:
+  - `ccb_test config validate`: valid, agents
+    `qwen1, cursor1, copilot1, crush1, kiro1`.
+  - `ccb_test -s`: `start_status: ok`, mounted all five providers.
+  - Initial launch exposed a control-plane env gap: ccbd filtered
+    `QWEN_START_CMD` and failed with `qwen executable not found in PATH`.
+    `runtime_env.control_plane` now explicitly passes provider
+    start-command override env vars while continuing to filter outer provider
+    home/session authority.
+  - `ccb_test ask qwen1`: job `job_1129f5da5303`, completed with
+    reason `qwen_run_stop`.
+  - `ccb_test ask cursor1`: job `job_2e2e1e2d4b9a`, completed with
+    reason `cursor_run_stop`.
+  - `ccb_test ask copilot1`: job `job_a302bc361685`, completed with
+    reason `copilot_run_stop`.
+  - `ccb_test ask crush1`: job `job_b4c402fa2231`, completed with
+    reason `crush_run_exit`.
+  - `ccb_test ask kiro1`: job `job_9ad49ec0674a`, completed with
+    reason `kiro_run_exit`.
+  - `ccb_test pend --queue --detail all`: queue depth 0, pending replies 0,
+    all five agents idle/restored.
+  - Post-review recheck confirmed `.ccb/.crush-crush1-session` start command
+    contains `--data-dir` with
+    `/home/bfly/yunwei/test_ccb2/next_wave_provider_smoke/.ccb/agents/crush1/provider-state/crush/data`.
+  - Post-review asks completed:
+    `job_4f21ddb8ba16` (`qwen_run_stop`),
+    `job_2450b6ebe7fa` (`cursor_run_stop`),
+    `job_264559b3e599` (`copilot_run_stop`),
+    `job_4217a811aebe` (`crush_run_exit`), and
+    `job_abaee56ecd84` (`kiro_run_exit`).
+  - Post-review `ccb_test pend --queue --detail all`: queue depth 0, pending
+    replies 0, all five agents idle/restored.
+  - Smoke runtime stopped with `ccb_test kill -f`.
+- Current focused verification after Pi landing:
+  `python -m pytest -q test/test_native_cli_provider_execution.py
+  test/test_runtime_env_control_plane.py test/test_v2_provider_catalog.py
+  test/test_v2_provider_core_registry.py test/test_v2_execution_registry.py
+  test/test_runtime_specs.py test/test_v2_config_loader.py
+  test/test_v2_runtime_launch.py test/test_storage_classification.py
+  test/test_repo_hygiene.py`: `238 passed`.
+  `python -m py_compile` for touched provider/core modules passed.
+  `git diff --check` passed.
+- Real CLI version smoke from
+  `/home/bfly/yunwei/test_ccb2/cli-integration-lab`:
+  - `qwen --version`: `0.18.0`.
+  - `agent --version`: `2026.06.12-19-59-36-f6aba9a`.
+  - `copilot --version`: `GitHub Copilot CLI 1.0.61`.
+  - `crush --version`: `crush version v0.76.0`.
+  - `kiro-cli --version`: `kiro-cli 2.7.0`.
+  - `pi --version`: `0.79.3`.
+- Pi add-on source-runtime smoke after adding `pi1:pi`:
+  - Installed `@earendil-works/pi-coding-agent@0.79.3` into
+    `/home/bfly/yunwei/test_ccb2/cli-integration-lab/npm-prefix`.
+  - `/home/bfly/yunwei/test_ccb2/.ccb/ccb.config` now includes `pi1:pi` in the
+    `native` window, with PATH pointing at the lab npm prefix.
+  - `/home/bfly/yunwei/test_ccb2/next_wave_provider_smoke/.ccb/ccb.config`
+    now includes `pi1:pi`.
+  - `ccb_test config validate` accepted all six smoke agents.
+  - `ccb_test -s` mounted `qwen1, cursor1, copilot1, crush1, kiro1, pi1`.
+  - `ccb_test ask pi1`: job `job_69a5905eb423`, completed with reply
+    `stub reply for job_69a5905eb423`.
+  - `ccb_test trace job_69a5905eb423`: reply reason `pi_run_stop`.
+  - `.ccb/.pi-pi1-session` start command contains isolated
+    `PI_CODING_AGENT_DIR`, `PI_CODING_AGENT_SESSION_DIR`,
+    `PI_SKIP_VERSION_CHECK=1`, `PI_TELEMETRY=0`, and visible
+    `--session-dir <provider-state>/sessions --no-approve`.
+  - Smoke runtime stopped with `ccb_test kill -f`.
+- Full source test gate on the current branch:
+  `pytest test/ -q -m "not provider_blackbox"`:
+  `2621 passed, 2 skipped, 21 deselected`.
+- Full compile gate:
+  `python -m compileall -q lib bin ccb`: passed.
+- `git diff --check`: passed.
+
+Ask skill injection verification:
+
+- `python -m py_compile lib/provider_backends/opencode/launcher.py
+  lib/provider_backends/kimi/launcher.py lib/provider_backends/kimi/skills.py
+  lib/provider_core/inherited_skills.py lib/storage_classification/service.py
+  lib/storage_classification/provider_home.py`: passed.
+- `python -m pytest -q test/test_native_cli_providers.py
+  test/test_provider_hook_settings.py test/test_v2_runtime_launch.py
+  test/test_project_memory_real_context.py
+  test/test_provider_memory_external_matrix.py test/test_storage_classification.py
+  test/test_repo_hygiene.py test/test_ask_skill_templates.py`:
+  `141 passed, 1 skipped`.
+- `git diff --check`: passed.
+- From `/home/bfly/yunwei/test_ccb2` with isolated source home,
+  `/home/bfly/yunwei/ccb_source/ccb_test --diagnose`: passed.
+- From `/home/bfly/yunwei/test_ccb2` with isolated source home,
+  `/home/bfly/yunwei/ccb_source/ccb_test config validate`: valid.
+
+MiMo provider verification:
+
+- Real installed MiMo package:
+  - `npm view @mimo-ai/cli` showed latest stable `0.1.0`.
+  - `npm install -g @mimo-ai/cli@0.1.0` installed binary `mimo`.
+  - `mimo --version` returned `0.1.0`.
+- Real native run:
+  - From `/home/bfly/yunwei/test_ccb2/mimo_real` with isolated MiMo home,
+    `mimo run --format json --dir ... 'Reply exactly: MIMO_CCB_REAL_OK'`
+    exited 0 and produced JSON `text` plus `step_finish reason=stop`.
+- Source-runtime real CCB run:
+  - `/home/bfly/yunwei/ccb_source/ccb_test --diagnose` passed from
+    `/home/bfly/yunwei/test_ccb2`.
+  - `/home/bfly/yunwei/test_ccb2/mimo_ccb_real/.ccb/ccb.config` contains
+    `cmd; mimo1:mimo`.
+  - `ccb_test config validate`: valid, agent `mimo1`.
+  - `ccb_test -s`: `start_status: ok`.
+  - First TUI-style attempt proved the old pane prompt injection path did not
+    create MiMo DB messages; this drove the decision to switch CCB execution to
+    `mimo run --format json`.
+  - After implementing nested MiMo JSON parsing and restarting ccbd,
+    `ccb_test ask mimo1 'Reply exactly: MIMO_CCB_RUN_OK_3'` completed job
+    `job_ae41cad0e98a` with reply `MIMO_CCB_RUN_OK_3` and
+    `completion_reason: mimo_run_stop`.
+  - Matching stdout artifact:
+    `.ccb/agents/mimo1/provider-runtime/mimo/completion/job_ae41cad0e98a.mimo-run.jsonl`
+    contained `part.text = MIMO_CCB_RUN_OK_3` and
+    `step_finish` / `part.reason = stop`.
+- Release-gate rerun:
+  - A non-pure probe exposed `mimo_run_finished:tool-calls` with an empty
+    reply after MiMo invoked its memory plugin.
+  - CCB MiMo execution now passes `--pure`, and tool-call `step_finish` is
+    treated as an intermediate finish reason until final text or process exit.
+  - After restart, `ccb_test ask mimo1 'Reply exactly: MIMO_RELEASE_751_OK'`
+    completed job `job_023d114681ca` with reply `MIMO_RELEASE_751_OK` and
+    `completion_reason: mimo_run_stop`.
+- Focused final test set:
+  `python -m pytest -q test/test_mimo_provider.py
+  test/test_native_cli_providers.py test/test_v2_provider_catalog.py
+  test/test_v2_provider_core_registry.py test/test_runtime_specs.py
+  test/test_v2_config_loader.py test/test_v2_runtime_launch.py
+  test/test_storage_classification.py test/test_repo_hygiene.py
+  test/test_ask_skill_templates.py test/test_provider_hook_settings.py
+  test/test_project_memory_real_context.py
+  test/test_provider_memory_external_matrix.py test/test_opencode_comm_sqlite.py
+  test/test_opencode_execution_polling.py
+  test/test_provider_execution_service_runtime.py`: `263 passed, 1 skipped`.
+- Full release-gate pytest: `2613 passed, 2 skipped`.
+
+Next-wave install/source lab:
+
+- External lab root:
+  `/home/bfly/yunwei/test_ccb2/cli-integration-lab`.
+- Installed binary checks:
+  - `qwen --version`: `0.18.0`.
+  - `copilot --version`: `GitHub Copilot CLI 1.0.61`.
+  - `crush --version`: `crush version v0.76.0`.
+  - `agent --version`: `2026.06.12-19-59-36-f6aba9a`.
+  - `kiro-cli --version`: `kiro-cli 2.7.0`.
+- Installed package/source checks:
+  - `@qwen-code/qwen-code` exposes bin `qwen` and requires Node `>=22.0.0`.
+  - `@github/copilot` exposes bin `copilot`.
+  - `@charmland/crush` exposes bin `crush`.
+  - Cursor Agent and Kiro CLI install from official shell installers, not npm.
+- Source/bundle locations:
+  - `/home/bfly/yunwei/test_ccb2/cli-integration-lab/src/qwen-code`.
+  - `/home/bfly/yunwei/test_ccb2/cli-integration-lab/src/copilot-cli`.
+  - `/home/bfly/yunwei/test_ccb2/cli-integration-lab/src/crush`.
+  - `/home/bfly/yunwei/test_ccb2/cli-integration-lab/src/kiro`.
+  - `/home/bfly/yunwei/test_ccb2/cli-integration-lab/home/.local/share/cursor-agent/versions/2026.06.12-19-59-36-f6aba9a`.
+- `git diff --check`: passed.

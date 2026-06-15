@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.2.3 | 最后更新：2026-06-03
+> 版本：适用于 CCB v7.5.3 | 最后更新：2026-06-15
 
 ---
 
@@ -259,6 +259,12 @@ ccb update
 # - 不依赖原始 git checkout
 ```
 
+也可以通过 npm 全局安装（v7.4.4+）：
+
+```bash
+npm install -g @seemseam/ccb
+```
+
 ---
 
 ## 安装后验证
@@ -508,7 +514,7 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 # 同一 Provider 不同模型
 cmd; fast:codex, deep:codex
 
-# 全部 Provider（含本地 Kimi、MMX、Antigravity）
+# 全部 Provider（v7.5.2+ 支持 14 个 CLI 家族：Codex、Claude、Gemini、Kimi、Antigravity、OpenCode、Droid、MMX、DeepSeek、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Pi）
 cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx, agent5:agy
 
 # 按权重非对称布局：主面板更宽
@@ -953,7 +959,7 @@ provider = "kimi"
 restore = "provider"   # 仅在需要恢复 Kimi 本地历史会话时启用
 ```
 
-> **注意**：Kimi 的 CCB manifest 声明 `supports_resume=False`，CCB 层面不支持跨重启的 submission 恢复。`restore = "provider"` 仅控制是否让 Kimi CLI 自身尝试 `--continue` 恢复本地会话。
+> **注意**：Kimi 的 CCB manifest 声明 `supports_resume=True`（v7.5.0+），但执行适配器仍以 `resubmit_required` 模式运行——中断的 in-flight job 不支持跨重启恢复到原生 turn log 中间状态。
 
 ### Q16: Agent 长时间空闲后返回旧结果/过期回复
 
@@ -1129,6 +1135,8 @@ ccb kill               # 停止项目运行时
 ccb kill -f            # 强制清理
 ccb restart            # 重启所有 Agent pane
 ccb restart <agent>... # 重启指定 Agent（可多个）
+ccb maintenance status  # 查看 maintenance heartbeat 策略与状态（v7.4.1+）
+ccb maintenance tick    # 运行一次诊断 tick（v7.4.1+）
 ccb reload             # 动态应用支持的配置变更（v7.1.0+）
 ccb reload --dry-run   # 预览 reload 计划而不执行（v7.1.0+）
 

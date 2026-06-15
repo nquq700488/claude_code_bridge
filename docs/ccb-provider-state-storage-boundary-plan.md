@@ -157,6 +157,10 @@ Rules:
 - generated OpenCode `provider-state/opencode/opencode.json` is
   `PROJECTED_CONFIG`; project `opencode.json` remains user content outside the
   provider-state tree
+- Qwen, Cursor, Copilot, Crush, Kiro, and Pi use shared native CLI provider-state
+  roots with `<provider>_home` and `<provider>_data_dir`; until provider-native
+  config projection is added, their contents are classified as provider-owned
+  session/auth/cache evidence rather than project worktree content
 - sharing is allowed only after content-addressed whole-bundle storage and
   atomic replacement are implemented
 - default behavior remains per-agent/per-home storage
@@ -196,6 +200,9 @@ Examples:
 - Claude `.claude/skills/`, `.claude/commands/`, `.claude/CLAUDE.md`
 - Droid inherited `skills/`
 - Gemini `.gemini/settings.json`, `.gemini/trustedFolders.json`
+- Kimi inherited and role `skills/` directories under managed provider state
+- OpenCode generated `opencode.json` and generated ask skill instruction files
+  under `.ccb/runtime/skills/<agent>/opencode/`
 
 Auth, OAuth, token, and credential files are never `PROJECTED_CONFIG` even when
 they were created by a projection step. They must classify as `SECRET`.
@@ -561,6 +568,8 @@ May route through projected assets or shared-cache:
 
 - inherited `skills/` and `commands/`; startup should prefer symlinks to the
   source home and fall back to marked copies
+- Kimi inherited skill roots; startup routes them as projected assets and passes
+  them with `--skills-dir`
 - `.tmp/plugins/`; the real bundle may live under
   `.ccb/shared-cache/codex/plugin-bundles/<sha>/`, with managed homes pointing
   at that bundle and retaining their local `.tmp/plugins.sha`

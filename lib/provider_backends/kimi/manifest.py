@@ -8,18 +8,18 @@ from provider_core.manifests import ProviderManifest
 
 def build_manifest() -> ProviderManifest:
     return ProviderManifest(
-        provider='kimi',
-        supports_resume=False,
-        supports_permission_auto=False,
+        provider="kimi",
+        supports_resume=True,
+        supports_permission_auto=True,
         supports_stream_watch=False,
-        supports_subagents=False,
+        supports_subagents=True,
         supports_workspace_attach=True,
         runtime_profiles={
             RuntimeMode.PANE_BACKED: CompletionManifest(
-                provider='kimi',
+                provider="kimi",
                 runtime_mode=RuntimeMode.PANE_BACKED.value,
                 completion_family=CompletionFamily.SESSION_BOUNDARY,
-                completion_source_kind=CompletionSourceKind.SESSION_SNAPSHOT,
+                completion_source_kind=CompletionSourceKind.SESSION_EVENT_LOG,
                 supports_exact_completion=False,
                 supports_observed_completion=True,
                 supports_anchor_binding=True,
@@ -31,4 +31,4 @@ def build_manifest() -> ProviderManifest:
     )
 
 
-__all__ = ['build_manifest']
+__all__ = ["build_manifest"]
