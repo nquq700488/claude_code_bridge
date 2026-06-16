@@ -2,6 +2,35 @@
 
 # Changelog
 
+## v7.6.6 (2026-06-16)
+
+### Role Store Home Pinning
+
+- **Managed Provider Role Lookup Fixed**: CCB now pins role store resolution
+  outside managed provider homes so provider session `HOME` rewrites no longer
+  make `agentroles.*` lookups fall back to `.ccb/agents/.../provider-state/.../home/.roles`.
+- **Role Store Diagnostics Improved**: missing role errors now include the
+  resolved role store path, making provider-home drift visible when diagnosing
+  role installation or host-adapter startup issues.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.6.
+
+## v7.6.5 (2026-06-16)
+
+### Rich WezTerm IME
+
+- **Rich WezTerm IME Fixed**: generated rich WezTerm profiles now enable IME
+  support and derive `xim_im_name` from `XMODIFIERS`, allowing X11 fcitx/ibus
+  input methods to connect when users type Chinese or other IME-backed text.
+- **Workbench IME Environment Normalized**: generated `ccb-workbench` wrappers
+  preserve user-provided input-method variables, and otherwise detect
+  `fcitx5`, `fcitx`, or `ibus-daemon` before launching WezTerm, filling
+  `XMODIFIERS`, `GTK_IM_MODULE`, and `QT_IM_MODULE` only when unset.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.5.
+
 ## v7.6.4 (2026-06-16)
 
 ### macOS Release Install Smoke

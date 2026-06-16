@@ -10,7 +10,7 @@
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.6.4-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.6.6-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **English** | [中文](README_zh.md)
