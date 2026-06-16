@@ -14,6 +14,7 @@ from provider_backends.deepseek.native_log import (
     observe_deepseek_session,
 )
 from provider_backends.kimi.execution import KimiProviderAdapter, _with_kimi_context_pointer
+from project.ids import compute_project_id
 from provider_backends.kimi.native_log import kimi_project_hash, kimi_sessions_root, observe_kimi_turn
 from provider_backends.native_cli_support import wrap_native_prompt
 from provider_execution.base import ProviderSubmission
@@ -320,6 +321,138 @@ def test_kimi_observes_source_style_turn_events(monkeypatch, tmp_path: Path) -> 
     assert observed is not None
     assert observed.completed is True
     assert observed.reply == "source-style kimi reply"
+
+
+def test_kimi_observes_kimi_code_wire_with_step_end_turn(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    project_name = work_dir.name
+    project_prefix = compute_project_id(work_dir)[:12]
+    wire = (
+        home
+        / ".kimi-code"
+        / "sessions"
+        / f"wd_{project_name}_{project_prefix}"
+        / "session_00000000-0000-0000-0000-000000000001"
+        / "agents"
+        / "main"
+        / "wire.jsonl"
+    )
+    _write_jsonl(
+        wire,
+        [
+            {"type": "metadata", "protocol_version": "1.4", "created_at": 1},
+            {
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "CCB_REQ_ID: job_kimi_code_test\ndo something"}],
+                "time": 10,
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "content.part",
+                    "uuid": "part-uuid-1",
+                    "turnId": "0",
+                    "step": 4,
+                    "stepUuid": "step-uuid-1",
+                    "part": {"type": "text", "text": "result from new kimi format"},
+                },
+                "time": 20,
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "step.end",
+                    "uuid": "step-uuid-1",
+                    "turnId": "0",
+                    "step": 4,
+                    "finishReason": "end_turn",
+                },
+                "time": 30,
+            },
+        ],
+    )
+
+    observed = observe_kimi_turn(work_dir, "job_kimi_code_test", home_candidates=[home])
+
+    assert observed is not None
+    assert observed.completed is True
+    assert observed.reply == "result from new kimi format"
+    assert observed.provider_turn_ref == "0"
+
+
+def test_kimi_ignores_think_parts_in_loop_events(monkeypatch, tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    work_dir = tmp_path / "project2"
+    work_dir.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    project_name = work_dir.name
+    project_prefix = compute_project_id(work_dir)[:12]
+    wire = (
+        home
+        / ".kimi-code"
+        / "sessions"
+        / f"wd_{project_name}_{project_prefix}"
+        / "session_00000000-0000-0000-0000-000000000002"
+        / "agents"
+        / "main"
+        / "wire.jsonl"
+    )
+    _write_jsonl(
+        wire,
+        [
+            {"type": "metadata", "protocol_version": "1.4", "created_at": 1},
+            {
+                "type": "turn.prompt",
+                "input": [{"type": "text", "text": "CCB_REQ_ID: job_kimi_think_test\nhello"}],
+                "time": 10,
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "content.part",
+                    "uuid": "part-uuid-think",
+                    "turnId": "0",
+                    "step": 1,
+                    "stepUuid": "step-uuid-think",
+                    "part": {"type": "think", "think": "internal reasoning, not for user"},
+                },
+                "time": 15,
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "content.part",
+                    "uuid": "part-uuid-text",
+                    "turnId": "0",
+                    "step": 1,
+                    "stepUuid": "step-uuid-think",
+                    "part": {"type": "text", "text": "visible reply"},
+                },
+                "time": 20,
+            },
+            {
+                "type": "context.append_loop_event",
+                "event": {
+                    "type": "step.end",
+                    "uuid": "step-uuid-think",
+                    "turnId": "0",
+                    "step": 1,
+                    "finishReason": "end_turn",
+                },
+                "time": 30,
+            },
+        ],
+    )
+
+    observed = observe_kimi_turn(work_dir, "job_kimi_think_test", home_candidates=[home])
+
+    assert observed is not None
+    assert observed.completed is True
+    # think parts should be filtered out; only text-type content parts appear
+    assert observed.reply == "visible reply"
 
 
 def test_deepseek_observes_session_store_and_poll_emits_boundary(monkeypatch, tmp_path: Path) -> None:

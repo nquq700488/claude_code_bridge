@@ -499,6 +499,31 @@ inherit_skills = true     # 是否继承全局 skills
 inherit_commands = true   # 是否继承全局 commands
 ```
 
+#### Job Heartbeat 超时配置（v7.6.4+）
+
+Job Heartbeat 是 CCB 的任务级心跳监控机制。当 Agent 收到任务后在指定时间内无进度输出（如 extended thinking），CCB 会判定超时并标记任务失败。从 v7.6.4 起，超时参数可在项目级 `ccb.config` 中配置：
+
+```toml
+[maintenance.heartbeat]
+# Job 心跳超时配置（所有值必须是正整数）
+job_silence_start_after_s = 600    # 静默多久开始心跳检测（默认 600s，即 10 分钟）
+job_repeat_interval_s = 300        # 每次心跳通知间隔（默认 300s，即 5 分钟）
+job_terminal_notice_count = 3      # 多少次通知后判定超时（默认 3 次）
+# 总超时窗口 = job_silence_start_after_s + job_repeat_interval_s × job_terminal_notice_count
+# 默认：600 + 3×300 = 1500s（25 分钟）
+```
+
+**超时窗口计算**：`总等待时间 = silence_start + repeat_interval × terminal_notice_count`
+
+| 场景 | silence_start | repeat_interval | terminal_notices | 总等待 |
+|------|---------------|-----------------|------------------|--------|
+| 默认（extended thinking 友好） | 600s | 300s | 3 | 25 分钟 |
+| 激进（快速反馈） | 120s | 120s | 3 | 8 分钟 |
+| 宽松（大型任务） | 900s | 600s | 5 | 65 分钟 |
+| 禁用超时检测 | 任意 | 任意 | 0 | ∞ |
+
+> **注意**：`job_terminal_notice_count = 0` 会完全禁用 Job Heartbeat 超时检测。`job_silence_start_after_s` 和 `job_repeat_interval_s` 建议根据 Agent 使用的模型推理速度调整——使用 Extended Thinking（DeepSeek/Claude）时建议不小于默认值。
+
 ### 常用布局模板
 
 ```text
@@ -915,19 +940,26 @@ macOS 的 Unix Domain Socket 路径长度限制为 104 字节。当项目目录�
 
 ### Q14: Kimi/MMX Agent 任务卡住无响应
 
-v7.0+ 为 Kimi 和 MMX 配置了 `CompletionReliabilityPolicy`，当 Agent 超过 600 秒没有任何语义进度事件（如 `ANCHOR_SEEN`、`ASSISTANT_CHUNK`、`TURN_BOUNDARY`）时，任务会被自动标记为超时并结束。
+v7.6.4+ 为所有 Agent 引入项目级可配置的 Job Heartbeat 超时检测。当 Agent 在指定时间内无进度事件（如 `ANCHOR_SEEN`、`ASSISTANT_CHUNK`、`TURN_BOUNDARY`）时，任务自动标记为超时并结束。默认超时窗口为 25 分钟（600s 静默开始 + 3×300s 通知间隔），已为 Extended Thinking 模型优化。
 
-如需调整超时阈值：
+调整方式：
 
 ```bash
-# 将 Kimi 超时设为 5 分钟
+# 方式一：环境变量（Kimi/MMX 专用，向后兼容）
 export CCB_KIMI_NO_TERMINAL_TIMEOUT_S=300
-ccb
-
-# 将 MMX 超时设为 5 分钟
 export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300
 ccb
 ```
+
+```toml
+# 方式二：ccb.config 项目级配置（v7.6.4+，所有 Agent 通用）
+[maintenance.heartbeat]
+job_silence_start_after_s = 600    # 静默多久开始检测（默认 600s）
+job_repeat_interval_s = 300        # 检测间隔（默认 300s）
+job_terminal_notice_count = 3      # N 次后超时（默认 3 次）
+```
+
+详见上方 [Job Heartbeat 超时配置](#job-heartbeat-超时配置v764) 章节。
 
 ### Q15: Kimi Agent 启动后立即崩溃、陷入无限重启、或回复后任务不完成
 

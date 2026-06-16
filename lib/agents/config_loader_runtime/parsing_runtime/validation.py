@@ -29,6 +29,9 @@ _MAINTENANCE_HEARTBEAT_KEYS = {
     'unknown_streak_cap',
     'escalation_policy',
     'startup_ensure',
+    'job_silence_start_after_s',
+    'job_repeat_interval_s',
+    'job_terminal_notice_count',
 }
 
 
@@ -151,6 +154,15 @@ def _parse_maintenance_heartbeat(document: dict[str, Any]) -> MaintenanceHeartbe
             unknown_streak_cap=_optional_positive_int(heartbeat, 'unknown_streak_cap', default=3),
             escalation_policy=_optional_string(heartbeat, 'escalation_policy', default='report_only'),
             startup_ensure=_optional_bool(heartbeat, 'startup_ensure', default=True),
+            job_silence_start_after_s=_optional_positive_int(
+                heartbeat, 'job_silence_start_after_s', default=600,
+            ),
+            job_repeat_interval_s=_optional_positive_int(
+                heartbeat, 'job_repeat_interval_s', default=300,
+            ),
+            job_terminal_notice_count=_optional_positive_int(
+                heartbeat, 'job_terminal_notice_count', default=3,
+            ),
         )
     except AgentValidationError as exc:
         raise ConfigValidationError(str(exc)) from exc

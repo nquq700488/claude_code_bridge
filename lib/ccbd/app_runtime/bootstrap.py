@@ -39,8 +39,6 @@ from .request_guard import lifecycle_is_stopping, rejection_for_request
 from .service_graph import CcbdServiceGraphDependencies, build_ccbd_service_graph, publish_ccbd_service_graph
 
 APP_REQUEST_TIMEOUT_S = 0.0
-JOB_HEARTBEAT_SILENCE_START_AFTER_S = 120.0
-JOB_HEARTBEAT_REPEAT_INTERVAL_S = 120.0
 
 
 def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> None:
@@ -114,14 +112,16 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     )
     publish_ccbd_service_graph(app, service_graph)
     app.heartbeat_state_store = HeartbeatStateStore(app.paths)
+    hb_config = config.maintenance_heartbeat
     app.job_heartbeat = JobHeartbeatService(
         app.paths,
         policy=HeartbeatPolicy(
-            silence_start_after_s=JOB_HEARTBEAT_SILENCE_START_AFTER_S,
-            repeat_interval_s=JOB_HEARTBEAT_REPEAT_INTERVAL_S,
+            silence_start_after_s=float(hb_config.job_silence_start_after_s),
+            repeat_interval_s=float(hb_config.job_repeat_interval_s),
         ),
         store=app.heartbeat_state_store,
         clock=app.clock,
+        terminal_notice_count=hb_config.job_terminal_notice_count,
     )
     app.webhook = WebhookSender(load_webhook_config_from_env())
 

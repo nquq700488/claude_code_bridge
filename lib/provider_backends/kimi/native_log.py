@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Iterable
 
+from project.ids import compute_project_id
 from provider_backends.native_cli_support import clean_native_reply
 from provider_core.source_home import current_provider_source_home
 
@@ -63,6 +64,23 @@ def _wire_paths(work_dir: Path, *, home_candidates: Iterable[Path] | None) -> li
         if not root.is_dir():
             continue
         for path in root.glob("*/wire.jsonl"):
+            try:
+                resolved = path.resolve(strict=False)
+            except Exception:
+                resolved = path
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            paths.append(path)
+    # Also search .kimi-code/sessions/ — newer Kimi format (post wire.jsonl migration)
+    # .kimi-code session directories are named wd_<dirname>_<project_id_prefix>
+    project_id = compute_project_id(work_dir)
+    short_prefix = project_id[:12]
+    for home in _candidate_homes(home_candidates):
+        kimi_code_root = home.expanduser() / ".kimi-code" / "sessions"
+        if not kimi_code_root.is_dir():
+            continue
+        for path in kimi_code_root.glob(f"wd_*_{short_prefix}/session_*/agents/main/wire.jsonl"):
             try:
                 resolved = path.resolve(strict=False)
             except Exception:
@@ -247,6 +265,20 @@ def _observe_wire_file(path: Path, *, req_id: str) -> KimiTurnObservation | None
                         completed_at=None,
                         line_count=index,
                     )
+            if nested_type == "step.end":
+                turn_id = str(nested.get("turnId") or "").strip()
+                if turn_id and current is not None:
+                    current["turn_id"] = turn_id
+                if nested.get("finishReason") == "end_turn":
+                    latest = _observation_from_state(
+                        path,
+                        current,
+                        req_id=req_id,
+                        completed=True,
+                        completed_at=timestamp,
+                        line_count=index,
+                    )
+                    current = None
             continue
 
         if event_type == "StatusUpdate":
@@ -354,7 +386,7 @@ def _observation_from_state(
     parts = state.get("parts")
     reply = clean_native_reply("\n".join(str(part) for part in parts), req_id) if isinstance(parts, list) else ""
     session_id = path.parent.name if path.parent.name else None
-    message_id = state.get("message_id")
+    message_id = state.get("message_id") or state.get("turn_id")
     provider_turn_ref = str(message_id).strip() if message_id else session_id
     return KimiTurnObservation(
         request_seen=True,
