@@ -5,12 +5,12 @@
 <p>
   <img src="https://img.shields.io/badge/v7-multi--agent--workspace-0B7285?style=for-the-badge" alt="v7 multi-agent workspace">
   <img src="https://img.shields.io/badge/terminal-tmux-2F9E44?style=for-the-badge" alt="tmux">
-  <img src="https://img.shields.io/badge/providers-Codex%20%7C%20Claude%20%7C%20Gemini%20%7C%20OpenCode%20%7C%20Antigravity-CF1322?style=for-the-badge" alt="providers">
+  <img src="https://img.shields.io/badge/providers-14%20CLI%20families-0B7285?style=for-the-badge" alt="providers">
 </p>
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.4.3-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.6.4-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)
@@ -551,7 +551,7 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
-<summary><b>v7.4.3</b> - PR #225 可靠性跟进修复</summary>
+<summary><b>v7.6.4</b> - Rich Workbench Lifecycle & macOS 安装修复</summary>
 
 - 恢复 Claude launcher contract：inline `--settings` 只反映 materialized
   settings overlay，不再把 provider env 注入 settings JSON。

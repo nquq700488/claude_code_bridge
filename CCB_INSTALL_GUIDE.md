@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.5.3 | 最后更新：2026-06-15
+> 版本：适用于 CCB v7.6.4 | 最后更新：2026-06-16
 
 ---
 
@@ -1138,6 +1138,7 @@ ccb restart <agent>... # 重启指定 Agent（可多个）
 ccb maintenance status  # 查看 maintenance heartbeat 策略与状态（v7.4.1+）
 ccb maintenance tick    # 运行一次诊断 tick（v7.4.1+）
 ccb reload             # 动态应用支持的配置变更（v7.1.0+）
+ccb rich               # 启动 Rich Workbench 生命周期管理（v7.6.0+）
 ccb reload --dry-run   # 预览 reload 计划而不执行（v7.1.0+）
 
 # Role Packs（v7.2.0+）
