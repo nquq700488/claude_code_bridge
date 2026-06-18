@@ -1334,6 +1334,7 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'focus-events', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'escape-time', '10')) in calls
+    assert ('set-option', ('set-option', '-g', 'allow-passthrough', 'on')) in calls
     assert ('set-window-option', ('set-window-option', '-g', 'mode-keys', 'vi')) in calls
     assert ('bind-key', ('bind-key', '-T', 'copy-mode-vi', 'v', 'send-keys', '-X', 'begin-selection')) in calls
     assert _clipboard_bind_call('y') in calls
@@ -1515,6 +1516,7 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'focus-events', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'escape-time', '10')) in calls
+    assert ('set-option', ('set-option', '-g', 'allow-passthrough', 'on')) in calls
     assert ('set-window-option', ('set-window-option', '-g', 'mode-keys', 'vi')) in calls
     assert ('bind-key', ('bind-key', '-T', 'copy-mode-vi', 'y', 'send-keys', '-X', 'copy-selection-and-cancel')) not in calls
     assert _clipboard_bind_call('y') in calls
@@ -1656,6 +1658,7 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     monkeypatch.setenv('CRUSH_START_CMD', '/tmp/stub-crush --profile test')
     monkeypatch.setenv('KIRO_START_CMD', '/tmp/stub-kiro --profile test')
     monkeypatch.setenv('PI_START_CMD', '/tmp/stub-pi --profile test')
+    monkeypatch.setenv('ZAI_START_CMD', '/tmp/stub-zai --profile test')
 
     assert runtime_launch._provider_start_parts('gemini') == ['/tmp/stub-gemini', '--flag']
     assert runtime_launch._provider_start_parts('claude') == ['/tmp/stub-claude']
@@ -1667,6 +1670,7 @@ def test_provider_start_parts_respect_env_override(monkeypatch: pytest.MonkeyPat
     assert runtime_launch._provider_start_parts('crush') == ['/tmp/stub-crush', '--profile', 'test']
     assert runtime_launch._provider_start_parts('kiro') == ['/tmp/stub-kiro', '--profile', 'test']
     assert runtime_launch._provider_start_parts('pi') == ['/tmp/stub-pi', '--profile', 'test']
+    assert runtime_launch._provider_start_parts('zai') == ['/tmp/stub-zai', '--profile', 'test']
     monkeypatch.setenv('KIMI_START_CMD', '/tmp/stub-kimi --profile test')
     monkeypatch.setenv('DEEPSEEK_START_CMD', '/tmp/stub-deepcode --profile test')
     assert runtime_launch._provider_start_parts('kimi') == ['/tmp/stub-kimi', '--profile', 'test']
@@ -1687,6 +1691,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     monkeypatch.delenv('CRUSH_START_CMD', raising=False)
     monkeypatch.delenv('KIRO_START_CMD', raising=False)
     monkeypatch.delenv('PI_START_CMD', raising=False)
+    monkeypatch.delenv('ZAI_START_CMD', raising=False)
 
     assert runtime_launch._provider_start_parts('gemini') == ['gemini']
     assert runtime_launch._provider_start_parts('claude') == ['claude']
@@ -1700,6 +1705,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     assert runtime_launch._provider_start_parts('crush') == ['crush']
     assert runtime_launch._provider_start_parts('kiro') == ['kiro-cli']
     assert runtime_launch._provider_start_parts('pi') == ['pi']
+    assert runtime_launch._provider_start_parts('zai') == ['zai']
 
 
 @pytest.mark.parametrize(
@@ -1711,6 +1717,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
         ('crush', 'crush', None),
         ('kiro', 'kiro-cli', 'HOME'),
         ('pi', 'pi', None),
+        ('zai', 'zai', 'HOME'),
     ],
 )
 def test_native_cli_launcher_builds_provider_state_payload(
@@ -1768,6 +1775,13 @@ def test_native_cli_launcher_builds_provider_state_payload(
             '--session-dir',
             str(state_dir / 'sessions'),
             '--no-approve',
+            '--demo',
+        ]
+    elif provider == 'zai':
+        assert visible_parts == [
+            default_executable,
+            '--directory',
+            str(plan.workspace_path),
             '--demo',
         ]
     else:
@@ -1845,6 +1859,7 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'focus-events', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'escape-time', '10')) in calls
+    assert ('set-option', ('set-option', '-g', 'allow-passthrough', 'on')) in calls
     assert ('set-window-option', ('set-window-option', '-g', 'mode-keys', 'vi')) in calls
     assert _clipboard_bind_call('MouseDragEnd1Pane') in calls
     assert ('bind-key', ('bind-key', 'l', 'select-pane', '-R')) in calls

@@ -450,27 +450,32 @@ def _print_catalog_followups(rows: tuple[dict[str, object], ...], *, include_def
     missing = [row for row in rows if row.get('status') == 'installed_source_missing']
     if recommended:
         print('⭐ Recommended Agent Roles available:')
-        _print_catalog_role_rows(recommended)
+        _print_catalog_role_rows(recommended, include_commands=True)
         print('   Install with `ccb roles install <role-id>`; bind with `ccb roles add <role-id>:<provider>`.')
     if available:
-        print('🆕 New Agent Roles available:')
-        _print_catalog_role_rows(available)
-        print('   Install with `ccb roles install <role-id>`; bind with `ccb roles add <role-id>:<provider>`.')
+        print('')
+        print('🆕 New Agent Roles available in the catalog')
+        print('   These roles were not installed automatically. Review the intro, then install the roles you want:')
+        _print_catalog_role_rows(available, include_commands=True)
     for row in missing:
         role_id = str(row.get('role_id') or '').strip()
         source_path = str(row.get('path') or '').strip()
         print(f'⚠️  Installed Role Pack source missing: {role_id}' + (f' ({source_path})' if source_path else ''))
 
 
-def _print_catalog_role_rows(rows: list[dict[str, object]]) -> None:
+def _print_catalog_role_rows(rows: list[dict[str, object]], *, include_commands: bool = False) -> None:
     for index, row in enumerate(rows, start=1):
         role_id = str(row.get('role_id') or '').strip()
         version = str(row.get('version') or '').strip()
         name = str(row.get('name') or '').strip()
         description = _short_catalog_text(str(row.get('description') or '').strip())
         label = f'{role_id} v{version}' if version else role_id
-        details = ' - '.join(item for item in (name, description) if item)
-        print(f'   {index}. {label}' + (f': {details}' if details else ''))
+        print(f'   {index}. {label}' + (f': {name}' if name else ''))
+        if description:
+            print(f'      intro: {description}')
+        if include_commands and role_id:
+            print(f'      install: ccb roles install {role_id}')
+            print(f'      bind:    ccb roles add {role_id}:<provider>')
 
 
 def _short_catalog_text(text: str, *, limit: int = 96) -> str:

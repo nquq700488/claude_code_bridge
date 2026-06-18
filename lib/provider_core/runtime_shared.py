@@ -22,6 +22,7 @@ _PROVIDER_START_ENV_VARS = {
     'crush': 'CRUSH_START_CMD',
     'kiro': 'KIRO_START_CMD',
     'pi': 'PI_START_CMD',
+    'zai': 'ZAI_START_CMD',
 }
 
 _PROVIDER_DEFAULT_EXECUTABLES = {
@@ -42,6 +43,7 @@ _PROVIDER_DEFAULT_EXECUTABLES = {
     'crush': 'crush',
     'kiro': 'kiro-cli',
     'pi': 'pi',
+    'zai': 'zai',
 }
 
 PROVIDER_COMMAND_PLACEHOLDER = '{command}'

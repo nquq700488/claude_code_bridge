@@ -99,6 +99,8 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert '*.mp4' not in rich_config
     wezterm_config = (root / 'profiles' / 'wezterm' / 'wezterm.lua').read_text(encoding='utf-8')
     assert 'config.warn_about_missing_glyphs = false' in wezterm_config
+    assert 'config.use_ime = true' in wezterm_config
+    assert 'config.xim_im_name = xim_im_name' in wezterm_config
     assert 'config.font = wezterm.font_with_fallback' in wezterm_config
     assert 'JetBrains Mono' in wezterm_config
     assert 'Fira Code' in wezterm_config
@@ -109,8 +111,6 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert 'Unifont CSUR' in wezterm_config
     assert 'Segoe UI Emoji' in wezterm_config
     assert 'weight = "Regular"' not in wezterm_config
-    assert 'config.use_ime = true' in wezterm_config
-    assert 'config.xim_im_name = xim_im_name' in wezterm_config
     assert 'config.harfbuzz_features = { "calt=0", "clig=0", "liga=0" }' in wezterm_config
     assert 'config.font_size = 10.5' in wezterm_config
     assert 'config.line_height = 1.05' in wezterm_config
@@ -132,12 +132,11 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert str(tmp_path / 'home' / '.config') not in wrapper
     workbench = (root / 'bin' / 'ccb-workbench').read_text(encoding='utf-8')
     assert 'WEZTERM_PANE' in workbench
+    assert 'reuse_current_wezterm=0' in workbench
+    assert 'current_workbench_root="${CCB_WORKBENCH_ROOT:-}"' in workbench
+    assert 'current_workbench_profile="$(printf \'%s\' "${CCB_WORKBENCH_PROFILE:-}"' in workbench
     assert '"$wezterm_bin" cli spawn --cwd "$PWD" -- env' in workbench
     assert '"$wezterm_bin" --config-file' in workbench
-    assert "XMODIFIERS='@im=fcitx'" in workbench
-    assert 'GTK_IM_MODULE=fcitx' in workbench
-    assert 'QT_IM_MODULE=fcitx' in workbench
-    assert "XMODIFIERS='@im=ibus'" in workbench
     assert 'find_windows_wezterm()' in workbench
     assert 'wsl.exe -d "$WSL_DISTRO_NAME" --cd "$PWD"' in workbench
     assert '--config-file' in workbench
@@ -147,6 +146,10 @@ def test_workbench_install_writes_independent_bundle_profiles(tmp_path: Path, mo
     assert str(root / 'profiles' / 'wezterm' / 'wezterm.lua') in workbench
     assert 'CCB_WORKBENCH_FORCE_RICH=1' in workbench
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm' in workbench
+    assert "XMODIFIERS='@im=fcitx'" in workbench
+    assert 'GTK_IM_MODULE=fcitx' in workbench
+    assert 'QT_IM_MODULE=fcitx' in workbench
+    assert "XMODIFIERS='@im=ibus'" in workbench
     assert 'CCB_WORKBENCH_TERMINAL_PROGRAM_VERSION="${TERM_PROGRAM_VERSION:-}"' not in workbench
     assert 'ccb-workbench terminal requires WezTerm or Windows wezterm.exe under WSL' in workbench
     assert 'set -- "${SHELL:-/bin/sh}" -lc' in workbench
@@ -216,8 +219,10 @@ def test_rich_auto_start_allowed_respects_enabled_state_and_terminal_guard(tmp_p
     workbench_tools.update_rich_workbench()
 
     assert workbench_tools.rich_auto_start_allowed(environ={}) is True
-    assert workbench_tools.rich_auto_start_allowed(environ={'WEZTERM_PANE': '1'}) is False
+    assert workbench_tools.rich_auto_start_allowed(environ={'WEZTERM_PANE': '1'}) is True
+    assert workbench_tools.rich_auto_start_allowed(environ={'TERM_PROGRAM': 'WezTerm'}) is True
     assert workbench_tools.rich_auto_start_allowed(environ={'CCB_WORKBENCH_PROFILE': 'rich'}) is False
+    assert workbench_tools.rich_auto_start_allowed(environ={'CCB_WORKBENCH_ROOT': '/tmp/ccb-workbench'}) is False
     assert workbench_tools.rich_auto_start_allowed(environ={'CCB_RICH_AUTO_START': '0'}) is False
 
 
@@ -385,7 +390,7 @@ def test_workbench_launch_detaches_outer_tmux_environment(tmp_path: Path, monkey
     assert 'CCB_TMUX_SOCKET_PATH' not in env
 
 
-def test_workbench_terminal_reuses_current_wezterm_window(tmp_path: Path, monkeypatch) -> None:
+def test_workbench_terminal_starts_managed_wezterm_when_current_window_is_not_ccb_rich(tmp_path: Path, monkeypatch) -> None:
     fake_bin = _prepare_env(tmp_path, monkeypatch)
     _stub_neovim(monkeypatch, tmp_path)
     workbench_tools.provision_workbench(profile='rich')
@@ -400,6 +405,54 @@ def test_workbench_terminal_reuses_current_wezterm_window(tmp_path: Path, monkey
     (fake_bin / 'wezterm').chmod(0o755)
     monkeypatch.setenv('WEZTERM_PANE', '7')
     monkeypatch.setenv('WEZTERM_ARGV_LOG', str(wezterm_log))
+    monkeypatch.setenv('TMUX', '/tmp/tmux-1000/outer,123,0')
+    monkeypatch.setenv('TMUX_PANE', '%7')
+
+    env = workbench_tools._detached_terminal_env()
+    env['PATH'] = f'{fake_bin}:/usr/bin:/bin'
+    result = workbench_tools.subprocess.run(
+        [
+            str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'),
+            'terminal',
+            '/bin/sh',
+            '-lc',
+            'echo rich',
+        ],
+        cwd=project_root,
+        env=env,
+        text=True,
+        stdout=workbench_tools.subprocess.PIPE,
+        stderr=workbench_tools.subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    argv = wezterm_log.read_text(encoding='utf-8').splitlines()
+    assert argv[:6] == ['--config-file', str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'profiles' / 'wezterm' / 'wezterm.lua'), 'start', '--always-new-process', '--no-auto-connect', '--cwd']
+    assert str(project_root) in argv
+    assert '-u' in argv
+    assert 'TMUX' in argv
+    assert 'CCB_WORKBENCH_FORCE_RICH=1' in argv
+    assert argv[-3:] == ['/bin/sh', '-lc', 'echo rich']
+
+
+def test_workbench_terminal_reuses_current_ccb_rich_wezterm_window(tmp_path: Path, monkeypatch) -> None:
+    fake_bin = _prepare_env(tmp_path, monkeypatch)
+    _stub_neovim(monkeypatch, tmp_path)
+    workbench_tools.provision_workbench(profile='rich')
+    project_root = tmp_path / 'project'
+    project_root.mkdir()
+    wezterm_log = tmp_path / 'wezterm-argv.txt'
+    (fake_bin / 'wezterm').write_text(
+        '#!/usr/bin/env sh\n'
+        'printf "%s\\n" "$@" > "$WEZTERM_ARGV_LOG"\n',
+        encoding='utf-8',
+    )
+    (fake_bin / 'wezterm').chmod(0o755)
+    monkeypatch.setenv('WEZTERM_PANE', '7')
+    monkeypatch.setenv('WEZTERM_ARGV_LOG', str(wezterm_log))
+    monkeypatch.setenv('CCB_WORKBENCH_PROFILE', 'rich')
+    monkeypatch.setenv('CCB_WORKBENCH_ROOT', str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench'))
     monkeypatch.setenv('TMUX', '/tmp/tmux-1000/outer,123,0')
     monkeypatch.setenv('TMUX_PANE', '%7')
 
@@ -514,6 +567,70 @@ def test_workbench_terminal_uses_windows_wezterm_from_wsl(tmp_path: Path, monkey
     env['WEZTERM_ARGV_LOG'] = str(wezterm_log)
     env['WSL_DISTRO_NAME'] = 'Ubuntu'
     env['WSL_INTEROP'] = '/run/WSL/1_interop'
+    result = workbench_tools.subprocess.run(
+        [
+            str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'),
+            'terminal',
+            '/bin/sh',
+            '-lc',
+            'echo rich',
+        ],
+        cwd=project_root,
+        env=env,
+        text=True,
+        stdout=workbench_tools.subprocess.PIPE,
+        stderr=workbench_tools.subprocess.PIPE,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    argv = wezterm_log.read_text(encoding='utf-8').splitlines()
+    config_path = str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'profiles' / 'wezterm' / 'wezterm.lua')
+    assert argv[:1] + argv[2:8] == ['--config-file', 'start', '--always-new-process', '--no-auto-connect', '--', 'wsl.exe', '-d']
+    assert argv[1] == config_path or argv[1].replace('\\', '/').endswith('/xdg-data/ccb/tools/workbench/profiles/wezterm/wezterm.lua')
+    assert 'Ubuntu' in argv
+    assert str(project_root) in argv
+    env_index = argv.index('env')
+    assert argv[env_index - 1] == '--'
+    assert '--cwd' not in argv
+    path_arg = next(item for item in argv if item.startswith('PATH='))
+    assert str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin') in path_arg
+    assert env['PATH'] in path_arg
+    assert 'CCB_WORKBENCH_FORCE_RICH=1' in argv
+    assert argv[-3:] == ['/bin/sh', '-lc', 'echo rich']
+
+
+def test_workbench_terminal_reuses_current_ccb_rich_wezterm_window_from_wsl(tmp_path: Path, monkeypatch) -> None:
+    fake_bin = _prepare_env(tmp_path, monkeypatch)
+    (fake_bin / 'wezterm').unlink()
+    _stub_neovim(monkeypatch, tmp_path)
+    workbench_tools.provision_workbench(profile='rich')
+    project_root = tmp_path / 'project'
+    project_root.mkdir()
+    wezterm_log = tmp_path / 'wezterm-exe-argv.txt'
+    (fake_bin / 'wezterm.exe').write_text(
+        '#!/usr/bin/env sh\n'
+        'printf "%s\\n" "$@" > "$WEZTERM_ARGV_LOG"\n',
+        encoding='utf-8',
+    )
+    (fake_bin / 'wezterm.exe').chmod(0o755)
+    monkeypatch.setenv('WEZTERM_PANE', '7')
+    monkeypatch.setenv('WEZTERM_ARGV_LOG', str(wezterm_log))
+    monkeypatch.setenv('WSL_DISTRO_NAME', 'Ubuntu')
+    monkeypatch.setenv('WSL_INTEROP', '/run/WSL/1_interop')
+    monkeypatch.setenv('CCB_WORKBENCH_PROFILE', 'rich')
+    monkeypatch.setenv('CCB_WORKBENCH_ROOT', str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench'))
+    monkeypatch.setenv('TMUX', '/tmp/tmux-1000/outer,123,0')
+    monkeypatch.setenv('TMUX_PANE', '%7')
+
+    env = workbench_tools._detached_terminal_env()
+    env['PATH'] = f'{fake_bin}:/usr/bin:/bin'
+    env['WEZTERM_PANE'] = '7'
+    env['WEZTERM_ARGV_LOG'] = str(wezterm_log)
+    env['WSL_DISTRO_NAME'] = 'Ubuntu'
+    env['WSL_INTEROP'] = '/run/WSL/1_interop'
+    env['CCB_WORKBENCH_PROFILE'] = 'rich'
+    env['CCB_WORKBENCH_ROOT'] = str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench')
     result = workbench_tools.subprocess.run(
         [
             str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'),

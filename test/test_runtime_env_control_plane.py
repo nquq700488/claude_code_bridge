@@ -70,6 +70,38 @@ def test_control_plane_env_keeps_user_session_transport_for_cmd_shell(monkeypatc
     assert env['SSH_AUTH_SOCK'] == '/tmp/ssh-agent.sock'
 
 
+def test_control_plane_env_keeps_rich_terminal_workbench_signals(monkeypatch) -> None:
+    monkeypatch.setenv('TERM_PROGRAM', 'WezTerm')
+    monkeypatch.setenv('TERM_PROGRAM_VERSION', '20260615')
+    monkeypatch.setenv('WEZTERM_EXECUTABLE', '/usr/bin/wezterm')
+    monkeypatch.setenv('WEZTERM_PANE', '7')
+    monkeypatch.setenv('WEZTERM_UNIX_SOCKET', '/tmp/wezterm.sock')
+    monkeypatch.setenv('KITTY_WINDOW_ID', '42')
+    monkeypatch.setenv('CCB_WORKBENCH_PROFILE', 'rich')
+    monkeypatch.setenv('CCB_WORKBENCH_FORCE_RICH', '1')
+    monkeypatch.setenv('CCB_WORKBENCH_ROOT', '/tmp/workbench')
+    monkeypatch.setenv('CCB_WORKBENCH_TERMINAL_PROGRAM', 'WezTerm')
+    monkeypatch.setenv('CCB_WORKBENCH_TERMINAL_PROGRAM_VERSION', '20260615')
+    monkeypatch.setenv('CCB_WORKBENCH_YAZI_SAFE_CONFIG', '/tmp/workbench/yazi-safe')
+    monkeypatch.setenv('CCB_WORKBENCH_YAZI_RICH_CONFIG', '/tmp/workbench/yazi-rich')
+
+    env = control_plane_env()
+
+    assert env['TERM_PROGRAM'] == 'WezTerm'
+    assert env['TERM_PROGRAM_VERSION'] == '20260615'
+    assert env['WEZTERM_EXECUTABLE'] == '/usr/bin/wezterm'
+    assert env['WEZTERM_PANE'] == '7'
+    assert env['WEZTERM_UNIX_SOCKET'] == '/tmp/wezterm.sock'
+    assert env['KITTY_WINDOW_ID'] == '42'
+    assert env['CCB_WORKBENCH_PROFILE'] == 'rich'
+    assert env['CCB_WORKBENCH_FORCE_RICH'] == '1'
+    assert env['CCB_WORKBENCH_ROOT'] == '/tmp/workbench'
+    assert env['CCB_WORKBENCH_TERMINAL_PROGRAM'] == 'WezTerm'
+    assert env['CCB_WORKBENCH_TERMINAL_PROGRAM_VERSION'] == '20260615'
+    assert env['CCB_WORKBENCH_YAZI_SAFE_CONFIG'] == '/tmp/workbench/yazi-safe'
+    assert env['CCB_WORKBENCH_YAZI_RICH_CONFIG'] == '/tmp/workbench/yazi-rich'
+
+
 def test_control_plane_env_keeps_network_transport_without_provider_authority(monkeypatch) -> None:
     monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:7890')
     monkeypatch.setenv('NO_PROXY', 'localhost,127.0.0.1')

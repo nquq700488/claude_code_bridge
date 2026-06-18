@@ -526,8 +526,11 @@ def test_post_update_does_not_prompt_for_new_non_default_role_install(
     assert code == 0
     output = stdout.getvalue() + captured.out
     assert calls == [["install", "agentroles.ccb_self"]]
-    assert "New Agent Roles available" in output
+    assert "New Agent Roles available in the catalog" in output
     assert "agentroles.new v0.1.0" in output
+    assert "intro: New catalog role." in output
+    assert "install: ccb roles install agentroles.new" in output
+    assert "bind:    ccb roles add agentroles.new:<provider>" in output
     assert "Install newly available Agent Roles now?" not in output
 
 
@@ -696,8 +699,10 @@ def test_update_roles_defaults_without_prompt(monkeypatch, tmp_path: Path) -> No
     assert "Install newly available Agent Roles now?" not in stdout.getvalue()
     assert "Role Pack updated: agentroles.archi" in stdout.getvalue()
     assert "Default Role Pack installed: agentroles.ccb_self" in stdout.getvalue()
-    assert "New Agent Roles available" in stdout.getvalue()
+    assert "New Agent Roles available in the catalog" in stdout.getvalue()
     assert "agentroles.new v0.1.0" in stdout.getvalue()
+    assert "intro: New catalog role." in stdout.getvalue()
+    assert "install: ccb roles install agentroles.new" in stdout.getvalue()
 
 
 def test_update_roles_current_status_does_not_run_update_hooks(monkeypatch, tmp_path: Path) -> None:
@@ -812,6 +817,8 @@ def test_update_roles_noninteractive_defaults_without_prompt(monkeypatch, tmp_pa
     assert "Recommended Agent Roles available" not in stdout.getvalue()
     assert "Default Role Pack installed: agentroles.ccb_self" in stdout.getvalue()
     assert "agentroles.new v0.1.0" in stdout.getvalue()
+    assert "intro: New catalog role." in stdout.getvalue()
+    assert "install: ccb roles install agentroles.new" in stdout.getvalue()
 
 
 def test_cmd_update_rich_updates_workbench_without_release_lookup(monkeypatch, tmp_path: Path, capsys) -> None:

@@ -941,15 +941,9 @@ def _in_rich_terminal_context(env: dict[str, str]) -> bool:
         return True
     if str(env.get('CCB_WORKBENCH_PROFILE') or '').strip().lower() == 'rich':
         return True
-    if str(env.get('CCB_WORKBENCH_TERMINAL_PROGRAM') or '').strip().lower() == 'wezterm':
+    if str(env.get('CCB_WORKBENCH_ROOT') or '').strip():
         return True
-    if str(env.get('WEZTERM_PANE') or '').strip():
-        return True
-    if str(env.get('WEZTERM_EXECUTABLE') or '').strip():
-        return True
-    if str(env.get('WEZTERM_UNIX_SOCKET') or '').strip():
-        return True
-    return str(env.get('TERM_PROGRAM') or '').strip().lower() == 'wezterm'
+    return False
 
 
 def uninstall_workbench(*, profile: str = DEFAULT_PROFILE, remove_cache: bool = False) -> dict[str, object]:
@@ -1578,9 +1572,17 @@ case "$cmd" in
     if [ -n "${{WEZTERM_PANE:-}}" ] || [ -n "${{WEZTERM_EXECUTABLE:-}}" ] || [ -n "${{WEZTERM_UNIX_SOCKET:-}}" ] || [ "$term_program" = "wezterm" ] || [ "$workbench_terminal" = "wezterm" ]; then
       in_wezterm=1
     fi
+    reuse_current_wezterm=0
+    if [ "$in_wezterm" = 1 ]; then
+      current_workbench_root="${{CCB_WORKBENCH_ROOT:-}}"
+      current_workbench_profile="$(printf '%s' "${{CCB_WORKBENCH_PROFILE:-}}" | tr '[:upper:]' '[:lower:]')"
+      if [ "$current_workbench_profile" = "rich" ] && [ "$current_workbench_root" = {_shell_quote(str(paths['root']))} ]; then
+        reuse_current_wezterm=1
+      fi
+    fi
     if [ -n "$wezterm_windows" ]; then
       config_win="$(wsl_to_windows_path {_shell_quote(str(paths['wezterm_config']))})"
-      if [ "$in_wezterm" = 1 ]; then
+      if [ "$reuse_current_wezterm" = 1 ]; then
         if [ -n "${{WSL_DISTRO_NAME:-}}" ]; then
           exec "$wezterm_windows" cli spawn -- wsl.exe -d "$WSL_DISTRO_NAME" --cd "$PWD" -- env \
             -u TMUX \
@@ -1625,26 +1627,11 @@ case "$cmd" in
           CCB_WORKBENCH_YAZI_RICH_CONFIG={_shell_quote(str(paths['yazi_rich_profile']))} \
           CCB_WORKBENCH_FORCE_RICH=1 \
           "$@"
-    fi
-    exec "$wezterm_windows" --config-file "$config_win" \
-      start --always-new-process --no-auto-connect -- wsl.exe --cd "$PWD" -- env \
-      -u TMUX \
-      -u TMUX_PANE \
-      -u CCB_TMUX_SOCKET \
-        -u CCB_TMUX_SOCKET_PATH \
-        PATH="$PATH" \
-        CCB_WORKBENCH_PROFILE=rich \
-        CCB_WORKBENCH_ROOT={_shell_quote(str(paths['root']))} \
-        CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm \
-        CCB_WORKBENCH_YAZI_SAFE_CONFIG={_shell_quote(str(paths['yazi_safe_profile']))} \
-        CCB_WORKBENCH_YAZI_RICH_CONFIG={_shell_quote(str(paths['yazi_rich_profile']))} \
-      CCB_WORKBENCH_FORCE_RICH=1 \
-      "$@"
-  fi
-  if [ "$in_wezterm" = 1 ]; then
-    exec "$wezterm_bin" cli spawn --cwd "$PWD" -- env \
-      -u TMUX \
-      -u TMUX_PANE \
+      fi
+      exec "$wezterm_windows" --config-file "$config_win" \
+        start --always-new-process --no-auto-connect -- wsl.exe --cd "$PWD" -- env \
+        -u TMUX \
+        -u TMUX_PANE \
         -u CCB_TMUX_SOCKET \
         -u CCB_TMUX_SOCKET_PATH \
         PATH="$PATH" \
@@ -1653,10 +1640,24 @@ case "$cmd" in
         CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm \
         CCB_WORKBENCH_YAZI_SAFE_CONFIG={_shell_quote(str(paths['yazi_safe_profile']))} \
         CCB_WORKBENCH_YAZI_RICH_CONFIG={_shell_quote(str(paths['yazi_rich_profile']))} \
-      CCB_WORKBENCH_FORCE_RICH=1 \
-      "$@"
-  fi
-  exec "$wezterm_bin" --config-file {_shell_quote(str(paths['wezterm_config']))} \
+        CCB_WORKBENCH_FORCE_RICH=1 \
+        "$@"
+    fi
+    if [ "$reuse_current_wezterm" = 1 ]; then
+      exec "$wezterm_bin" cli spawn --cwd "$PWD" -- env \
+        -u TMUX \
+        -u TMUX_PANE \
+        -u CCB_TMUX_SOCKET \
+        -u CCB_TMUX_SOCKET_PATH \
+        CCB_WORKBENCH_PROFILE=rich \
+        CCB_WORKBENCH_ROOT={_shell_quote(str(paths['root']))} \
+        CCB_WORKBENCH_TERMINAL_PROGRAM=WezTerm \
+        CCB_WORKBENCH_YAZI_SAFE_CONFIG={_shell_quote(str(paths['yazi_safe_profile']))} \
+        CCB_WORKBENCH_YAZI_RICH_CONFIG={_shell_quote(str(paths['yazi_rich_profile']))} \
+        CCB_WORKBENCH_FORCE_RICH=1 \
+        "$@"
+    fi
+    exec "$wezterm_bin" --config-file {_shell_quote(str(paths['wezterm_config']))} \
       start --always-new-process --no-auto-connect --cwd "$PWD" -- env \
       -u TMUX \
       -u TMUX_PANE \

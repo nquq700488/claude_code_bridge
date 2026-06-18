@@ -2,6 +2,78 @@
 
 # Changelog
 
+## v7.6.10 (2026-06-17)
+
+### Z.ai Provider Support
+
+- **Z.ai CLI Provider Added**: CCB now includes `provider = "zai"` as an
+  optional managed native CLI provider with visible `zai --directory` panes and
+  per-job `zai --prompt` execution.
+- **Native Completion Boundary Preserved**: Z.ai jobs terminalize on subprocess
+  exit plus assistant stdout extraction from JSONL output, without requiring
+  model-printed `CCB_DONE`.
+- **Provider Surface Integrated**: `ZAI_START_CMD`, provider session/pathing,
+  storage classification, deterministic test stubs, focused execution tests,
+  and README/provider lists now include Z.ai.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.10.
+
+## v7.6.9 (2026-06-17)
+
+### Kimi And AGY Provider Reliability
+
+- **Kimi Completion Evidence Hardened**: Kimi execution now records receipt,
+  no-captured-output diagnostics, trace, and resume metadata so missing replies
+  and recovered turns are easier to diagnose.
+- **AGY Delivery Reliability Improved**: AGY prompt delivery now waits for
+  ready evidence, handles pane fallback and ambiguous tmux send outcomes, and
+  reports coalesced request diagnostics more clearly.
+- **Provider Trace Diagnostics Expanded**: dispatcher, mailbox trace, and text
+  artifact paths now expose the provider diagnostics needed to investigate
+  Kimi/AGY delivery and completion edge cases.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.9.
+
+## v7.6.8 (2026-06-17)
+
+### Role Pack Current Store
+
+- **Single Current Role Store**: Role Pack runtime lookup now follows the
+  installed current role package under `.roles/installed/<role-id>/current`;
+  legacy `versions/<version>/<digest>` stores remain compatibility input, not
+  runtime authority.
+- **Project Role Locks Demoted**: `.ccb/role-lock.json` is no longer written or
+  used to pin role resolution. Existing lock files are treated as legacy
+  diagnostics and no longer suppress role memory or skills.
+- **Role-Aware Restart Guard**: provider launch session files now record role
+  id, version, and digest. `ccb restart <agent>` fails explicitly when the
+  launched digest differs from installed current, avoiding a misleading resume
+  of an old provider conversation.
+- **Release Metadata Patch Fixed**: release artifact builds now patch version,
+  commit, and date metadata in `ccb.py` after the bash launcher split.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.8.
+
+## v7.6.7 (2026-06-17)
+
+### Rich Workbench Closure
+
+- **Rich Launcher Closure**: plain `ccb` and `ccb rich` now start the
+  CCB-managed rich WezTerm launcher unless already running inside that managed
+  rich session; ordinary external WezTerm sessions no longer suppress rich
+  auto-start.
+- **Runtime Launcher Pinning**: command entrypoints now share the `_ccb-python`
+  launcher so installed and source runtimes use a consistent interpreter.
+- **Default Self Window Updated**: the built-in default config keeps `ccb_self`
+  in its own window with the `claude` provider while preserving the rich-only
+  optional workbench model and avoiding ordinary default Neovim tool windows.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.7.
+
 ## v7.6.6 (2026-06-16)
 
 ### Role Store Home Pinning

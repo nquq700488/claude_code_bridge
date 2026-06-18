@@ -5,12 +5,12 @@
 <p>
   <img src="https://img.shields.io/badge/v7-multi--agent--workspace-0B7285?style=for-the-badge" alt="v7 multi-agent workspace">
   <img src="https://img.shields.io/badge/terminal-tmux-2F9E44?style=for-the-badge" alt="tmux">
-  <img src="https://img.shields.io/badge/providers-14%20CLI%20families-0B7285?style=for-the-badge" alt="providers">
+  <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285?style=for-the-badge" alt="providers">
 </p>
 
 [![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.6.6-orange.svg)]()
+[![Version](https://img.shields.io/badge/version-7.6.10-orange.svg)]()
 [![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
 
 **中文** | [English](README.md)

@@ -144,8 +144,12 @@ WSL terminal contract:
 - Windows WezTerm launches `wsl.exe --cd "$PWD" -- env ...` so the visible
   terminal is native Windows, while `ccb-workbench`, Yazi, preview helpers, and
   provider commands continue running inside the current Linux distro.
-- If already inside WezTerm, the launcher uses `wezterm cli spawn`; otherwise
-  it starts a new WezTerm window with the generated CCB config.
+- If the current shell is already inside a CCB-managed rich WezTerm session,
+  the launcher may reuse that process with `wezterm cli spawn`.
+- If the current shell is inside a user/global WezTerm that was not launched by
+  the CCB rich bundle, the launcher must still start a new WezTerm window with
+  the generated CCB config so managed IME, font, theme, and preview settings do
+  not depend on user-global WezTerm state.
 
 ## WezTerm Visual Encapsulation
 
