@@ -410,6 +410,8 @@ def test_workbench_terminal_starts_managed_wezterm_when_current_window_is_not_cc
 
     env = workbench_tools._detached_terminal_env()
     env['PATH'] = f'{fake_bin}:/usr/bin:/bin'
+    env.pop('CCB_WORKBENCH_PROFILE', None)
+    env.pop('CCB_WORKBENCH_ROOT', None)
     result = workbench_tools.subprocess.run(
         [
             str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'),
@@ -567,6 +569,8 @@ def test_workbench_terminal_uses_windows_wezterm_from_wsl(tmp_path: Path, monkey
     env['WEZTERM_ARGV_LOG'] = str(wezterm_log)
     env['WSL_DISTRO_NAME'] = 'Ubuntu'
     env['WSL_INTEROP'] = '/run/WSL/1_interop'
+    env.pop('CCB_WORKBENCH_PROFILE', None)
+    env.pop('CCB_WORKBENCH_ROOT', None)
     result = workbench_tools.subprocess.run(
         [
             str(tmp_path / 'xdg-data' / 'ccb' / 'tools' / 'workbench' / 'bin' / 'ccb-workbench'),

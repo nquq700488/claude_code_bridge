@@ -114,7 +114,7 @@ Examples:
 - Codex active `sessions/` namespace for the agent
 - Codex `.ccb-session-namespace.json` inside the managed home
 - Claude managed `HOME`, `.claude/projects/`, and `.claude/session-env/`
-- Claude `.claude.json` managed trust/account metadata authority
+- Claude `.claude.json` managed trust/account/MCP metadata authority
 - Gemini managed `HOME`, `GEMINI_CLI_HOME`, and `GEMINI_ROOT`
 - Gemini `<gemini_home>/.gemini/tmp/`
 - project-scoped `.codex-<agent>-session`,
@@ -218,6 +218,9 @@ shared cache.
 Examples:
 
 - provider auth files
+- Claude `.claude.json`, because inherited MCP server definitions may include
+  environment variables or other auth-adjacent launch material even though the
+  file also contains managed workspace trust authority
 - Codex `auth.json`
 - Claude `.claude/.credentials.json`
 - Claude `.config/claude-code/auth.json`
@@ -393,7 +396,8 @@ Exit criteria:
 - diagnostics can report cache vs authority without exporting large binaries
 - malformed or unknown paths are reported as `UNKNOWN` or `RESIDUE`, not ignored
 - Codex session namespace markers, Claude `.claude.json`, and Gemini
-  `.gemini/tmp/` do not classify as `UNKNOWN`
+  `.gemini/tmp/` do not classify as `UNKNOWN`; Claude `.claude.json` uses the
+  `SECRET` primary class because it may contain inherited MCP launch env
 
 ### Phase A.5 - Provider Profile Runtime-Home Migration
 
@@ -594,6 +598,7 @@ Must remain agent-isolated:
 
 Must remain secret and agent-local:
 
+- `.claude.json`
 - `.claude/.credentials.json`
 - `.config/claude-code/auth.json`
 - `Library/Keychains` macOS fallback symlink
@@ -705,7 +710,8 @@ Required unit tests:
 - classify Codex `.ccb-session-namespace.json` as session authority
 - classify Codex plugin projection plus sha as `STARTUP_AUTHORITY_BUNDLE`
 - classify Claude versions as rebuildable cache and active version separately
-- classify Claude `.claude.json` as managed trust/session authority
+- classify Claude `.claude.json` as managed trust/session authority with
+  `SECRET` as the primary storage class
 - classify Gemini npm/node-gyp cache as rebuildable cache
 - classify Gemini `.gemini/tmp/` as session
 - classify provider auth files as secret
@@ -809,8 +815,9 @@ Implemented:
 - Provider auth/OAuth files classify as `SECRET`, not `PROJECTED_CONFIG`.
 - Codex `.tmp/plugins/` plus `.tmp/plugins.sha` classify as
   `STARTUP_AUTHORITY_BUNDLE`, not rebuildable cache.
-- Codex `.ccb-session-namespace.json`, Claude `.claude.json`, and Gemini
-  `.gemini/tmp/` classify as session authority/evidence.
+- Codex `.ccb-session-namespace.json` and Gemini `.gemini/tmp/` classify as
+  session authority/evidence; Claude `.claude.json` remains managed
+  trust/session authority but classifies as `SECRET`.
 - Claude version-cache entries include active-version metadata:
   `active`, `is_active_version`, `reachable_from_current_symlink`,
   `reclaimable`, and `reason`.

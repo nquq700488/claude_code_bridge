@@ -92,8 +92,11 @@ Inside that home, the managed Claude state is:
   - removed when `inherit_memory = false`
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude.json`
   - contains managed workspace trust plus selected inherited Claude account
-    metadata required for official login reuse; it is not a provider
-    conversation identity
+    metadata required for official login reuse
+  - when config inheritance is enabled, also contains inherited global Claude
+    Code MCP servers plus current project/workspace-scoped MCP metadata needed
+    for the isolated managed home to see the user's configured MCP tools
+  - it is not a provider conversation identity
 
 If the effective Claude home is explicitly overridden by a provider profile, the
 effective projects root and session-env root must still be derived from that
@@ -146,6 +149,9 @@ When `ccb` starts a managed Claude agent:
 - managed `settings.json` projection must treat inherited system settings as the
   baseline and preserve managed runtime sections such as `hooks` and compatible
   Claude-written runtime state such as `permissions`
+- managed `settings.json` hook projection must merge source-home Claude Code
+  hooks with existing managed runtime hooks, rather than allowing the managed
+  CCB finish/activity hooks to hide inherited user hooks on later restarts
 - when CCB starts a managed Claude runtime with `auto_permission=true`, a
   managed `permissions` section that has drifted into a CCB-only command
   allowlist must not be preserved over inherited user permissions; CCB may drop
@@ -175,9 +181,17 @@ When `ccb` starts a managed Claude agent:
   metadata such as `oauthAccount` and onboarding state from the source
   `.claude.json` on each launch, while preserving managed workspace trust
   records already written under the private managed home
+- managed `.claude.json` projection must also refresh source-home global
+  `mcpServers` and selected MCP fields for the current project/workspace
+  record, including `mcpServers`, `enabledMcpjsonServers`,
+  `disabledMcpjsonServers`, `disabledMcpServers`, and `mcpContextUris`, so
+  managed Claude agents can inherit the user's Claude Code MCP tool setup
 - managed `.claude.json` projection must not copy source workspace trust records
   as conversation authority, and must not copy source API-key secrets such as
   `primaryApiKey`
+- managed `.claude.json` projection must not copy unrelated source project
+  records; project-scoped MCP state may only be mapped onto the current managed
+  workspace/project key
 - when source-home auth inheritance is enabled and the source Claude settings
   still provide auth env keys, startup must refresh those source auth values
   into the managed home on each managed launch
@@ -333,6 +347,6 @@ Diagnostics export should include:
   home
 
 Diagnostics export must exclude copied credential files and projected trust/auth
-state such as `.claude/.credentials.json`, `.config/claude-code/auth.json`, and
-the macOS `Library/Keychains` fallback link. Support bundles must not follow
-that symlink.
+state such as `.claude/.credentials.json`, `.config/claude-code/auth.json`,
+`.claude.json`, and the macOS `Library/Keychains` fallback link. Support
+bundles must not follow that symlink.

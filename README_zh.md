@@ -1,112 +1,110 @@
 <div align="center">
 
-# CCB - 可见、可控的多 Agent CLI 工作台
+# CCB
+
+**基于agent平权思想设计**
+**可见、可控的多 Agent 合作TUI工作台**
 
 <p>
-  <img src="https://img.shields.io/badge/v7-multi--agent--workspace-0B7285?style=for-the-badge" alt="v7 multi-agent workspace">
-  <img src="https://img.shields.io/badge/terminal-tmux-2F9E44?style=for-the-badge" alt="tmux">
-  <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285?style=for-the-badge" alt="providers">
+  <img src="https://img.shields.io/badge/version-7.6.12-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
+  <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
-[![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg)]()
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)]()
-[![Version](https://img.shields.io/badge/version-7.6.10-orange.svg)]()
-[![Release](https://img.shields.io/badge/install-release--first-orange.svg)]()
+<p>
+  <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
+  <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
+  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
+  <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
+  <img src="https://img.shields.io/badge/Qwen-6A5CFF?style=flat-square" alt="Qwen">
+  <img src="https://img.shields.io/badge/Cursor-111111?style=flat-square" alt="Cursor">
+  <img src="https://img.shields.io/badge/Copilot-111111?style=flat-square&logo=githubcopilot&logoColor=white" alt="GitHub Copilot">
+  <img src="https://img.shields.io/badge/Crush-FF5A5F?style=flat-square" alt="Crush">
+  <img src="https://img.shields.io/badge/Kiro-6D5EF6?style=flat-square" alt="Kiro">
+  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
+  <img src="https://img.shields.io/badge/Z.ai-111111?style=flat-square" alt="Z.ai">
+  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
+  <img src="https://img.shields.io/badge/Antigravity-6D5EF6?style=flat-square&logo=google&logoColor=white" alt="Antigravity">
+  <img src="https://img.shields.io/badge/Droid-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Droid">
+</p>
 
 **中文** | [English](README.md)
 
-[为什么需要多 agents](#为什么需要多-agents) · [方案对比](#多-agents-方案怎么选) · [v7 界面](#v7-界面速览) · [快速开始](#快速开始) · [tmux 常规操作](#tmux-常规操作) · [配置团队](#配置-agent-团队) · [安装更新](#安装和更新)
+[快速开始](#快速开始) · [v7 界面](#v7-界面速览) · [Rich 模式](#rich-mode-new) · [配置团队](#配置-agent-团队) · [使用文档](docs/manuals/user-guide/) · [开发文档](docs/manuals/developer-guide/)
+
+<p align="center">
+  <img src="assets/readme_v7/ccb-hero-zh.png" alt="CCB v7 可见多 Agent CLI 工作台" width="960">
+</p>
 
 </div>
 
 ---
 
-## 为什么需要多 agents
+## 支持的 CLI
 
-小任务用单 agent 就够了；一旦任务需要规划、并行实现、审查、测试和交接，多 agents 的价值就变成：把角色、上下文、模型和执行过程拆开管理。CCB 的重点是把多个真实 CLI agent 放进同一个可见终端工作台。
+可在 `.ccb/ccb.config` 中按 agent 混用不同 CLI；实际可用性取决于本机 CLI 安装和账号权限。
 
-| 价值 | 直观理解 |
-| :--- | :--- |
-| 角色分离 | `main` 负责任务拆分，`worker` 负责实现，`reviewer` 负责审查。 |
-| 并行推进 | 一个 agent 写代码时，另一个 agent 可以读文档、跑验证或审查风险。 |
-| 模型和上下文分层 | 不同 agent 可以用不同 provider、model、API、worktree 和记忆。 |
+<table>
+  <tr>
+    <td>Codex<br><code>codex</code></td>
+    <td>Claude<br><code>claude</code></td>
+    <td>Gemini<br><code>gemini</code></td>
+    <td>Kimi<br><code>kimi</code></td>
+    <td>MiMo<br><code>mimo</code></td>
+  </tr>
+  <tr>
+    <td>Qwen<br><code>qwen</code></td>
+    <td>Cursor<br><code>cursor</code></td>
+    <td>GitHub Copilot CLI<br><code>copilot</code></td>
+    <td>Crush<br><code>crush</code></td>
+    <td>Kiro CLI<br><code>kiro</code></td>
+  </tr>
+  <tr>
+    <td>Pi<br><code>pi</code></td>
+    <td>Z.ai CLI<br><code>zai</code></td>
+    <td>OpenCode<br><code>opencode</code></td>
+    <td>Antigravity<br><code>agy</code></td>
+    <td>Droid<br><code>droid</code></td>
+  </tr>
+</table>
 
-<details>
-<summary><b>展开：单 agent 为什么会吃力？</b></summary>
+**全新角色规范**：可把 skills、记忆和工具依赖封装进自封闭 Role Pack，快速生成可热加载、可卸载的专业 agent。
 
-- 角色混杂会影响上下文集中度：同一个会话既要做架构，又要写代码，还要自我审查，容易在长任务里丢掉重点。
-- 可执行复杂度有上限：任务越长，越需要拆分、交接、核对和回滚点。
-- 成本压力更高：如果所有步骤都依赖一个最强模型，简单任务也会变贵。
-- 工具和 skill 集中会变难管理：什么都给一个 agent，等于把权限、说明和工具复杂度全部堆在一起。
-- 串行等待效率低：一个 agent 在跑测试、读日志或长时间思考时，其他可并行工作无法自然展开。
+## 为什么用 CCB？
 
-</details>
-
-## 多 agents 方案怎么选
-
-多 agents 不是一种固定形态。先用下面这张表判断大方向，细节可以展开看。
-
-| 方案 | 一句话 | 更适合你如果 |
+| 看得见 | 混合 provider | 项目级控制 |
 | :--- | :--- | :--- |
-| [Claude Code 原生 subagents](https://code.claude.com/docs/en/sub-agents) / [agent teams](https://code.claude.com/docs/en/agent-teams) | Claude Code 内部的原生分工。 | 你主要留在 Claude Code，并接受更多协调由 Claude lead 处理。 |
-| [Hive / OpenHive](https://github.com/aden-hive/hive) | 面向生产工作流的多 agent harness。 | 你要状态、恢复、观测、成本控制和图式工作流。 |
-| CCB | 可见、可控、混合 provider 的本地 CLI agent 工作台。 | 你要把 Codex、Claude、Gemini、OpenCode、Antigravity 等真实 CLI 放到一个项目终端里操作。 |
-
-<details>
-<summary><b>展开：模型、可控性、上下文和复杂工作流怎么区别？</b></summary>
-
-| 关键问题 | Claude Code 原生 | Hive / OpenHive | CCB |
-| :--- | :--- | :--- | :--- |
-| 能否使用不同家的模型 | 可给 teammate / subagent 指定 Claude 模型；整体仍在 Claude Code 体系内。 | 通过 LiteLLM 路线支持大量 hosted / local provider。 | 按 agent 选择 Codex、Claude、Gemini、OpenCode、Droid、Antigravity 等，并可设置独立 model / key / url。 |
-| 过程是否可见 | in-process 或 split panes，取决于模式和终端。 | 强调 runtime observability 和控制台视角。 | 默认就是 tmux 可见 pane，用户能直接点击、输入、复制、观察每个 CLI。 |
-| 拓扑是否可控 | 可自然语言指定队友，但运行时协调较多交给 lead。 | 由目标生成图式拓扑，偏 harness。 | 配置文件显式定义 agent、窗口、pane、worktree 和 sidebar。 |
-| 上下文是否可管理 | subagent / teammate 有独立上下文；team 有任务和消息状态。 | 角色记忆、状态持久化、恢复能力是核心卖点。 | 每个 CLI 保留自己的 provider 会话；项目共享记忆和 per-agent 记忆可选。 |
-| 最适合的落点 | Claude Code 内部的快速委派和团队模式。 | 业务流程自动化、长期运行和生产可靠性。 | 本地开发、代码协作、跨 provider CLI agent 可视化工作台。 |
-
-CCB 也支持复杂工作流，但它不是自动生成 DAG 的 harness；复杂度主要通过 `.ccb/ccb.config`、多 window、角色记忆、worktree、model/API 配置和 ask/callback 路由显式设计。
-
-</details>
-
-## CCB 是什么
-
-> **名称演变**：CCB 最初代表 "Claude Code Bridge"。随着项目扩展到支持多模型（Codex、Claude、Gemini、OpenCode、Kimi、Droid、MMX），这个缩写现在代表 **"Collaborative Code Bridge"** —— 一个让多个 CLI agent 协作的项目级工作台。
-
-CCB 是一个项目级 agent CLI 工作台。它用 tmux 管理多个真实 CLI agent，把启动、恢复、通信、配置、窗口和运行态聚合在一个项目里。
-
-- **真实 CLI，不是模拟面板**：每个 agent pane 都运行对应 provider 的真实 CLI。
-- **可见协作**：sidebar 展示窗口、agent 状态和通信区；用户可以用鼠标直接切 pane。
-- **混合 provider**：一个项目里可以同时跑 Codex、Claude、Gemini、OpenCode、Droid 和 Antigravity（`agy`）。
-- **项目级配置**：`.ccb/ccb.config` 决定团队、布局、窗口、worktree、model、key、url。
-- **Roles**：全新的角色封装概念；它让携带“重武器”（独立 skills、记忆和
-  工具依赖等）的专业角色瞬间“降临”到目标项目中，成为一个可以快速热加载和
-  卸载的独立 agent，同时保持主环境、用户全局配置和项目运行状态不发生改变。
-- **可恢复运行态**：CCB 后台守护 agent pane，支持 attach、恢复和项目级清理。
-- **显式协作通道**：agent 可以通过 `/ask`、`$ask`、callback 和 silence 进行委派与交接。
-
-## v7 界面速览
-
-下面截图来自 `ccb_test2` 项目的真实深色终端会话。图片上的标注只解释区域，不代表必须记住所有快捷键。
-
-<p align="center">
-  <img src="assets/readme_v7/ccb-test2-terminal-annotated.png" alt="CCB v7 终端工作台区域说明" width="960">
-</p>
-
-| 区域 | 作用 |
-| :--- | :--- |
-| Sidebar | 显示当前 window、agent 列表、provider 标签、当前选中 agent 和状态提示。 |
-| Comms | 显示 ask/callback 等协作消息和通信状态。 |
-| Agent pane | 每个 pane 是一个真实 CLI 会话，例如 Codex 或 Claude。 |
-| 当前输入目标 | 状态栏和 pane 边框会提示当前输入会发给哪个 agent。 |
-| 状态栏 | 显示项目名、当前 agent、CCB 版本、日期和常用鼠标/键盘提示。 |
-| Window 分组 | v7 可用 `[windows]` 把 agent 按 main、work、review、research 等窗口分组。 |
-
-Sidebar 相关实现使用并借鉴了 [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 的思路，在此表示感谢。
+| 每个 agent 都是真实终端，支持界面排布设计。 | 一个命令同时并发运行多 CLI。 | 稳定后台通信，支持多线并发任务编排。 |
 
 ## 快速开始
 
 ### 1. 安装或更新
 
-新用户优先使用 release 包。到 [Releases](https://github.com/SeemSeam/claude_codex_bridge/releases) 下载与你的平台匹配的包，解压后安装：
+新安装推荐使用 npm 包：
+
+```bash
+npm install -g @seemseam/ccb
+```
+
+安装完成后，后续更新直接使用 CCB 自带 updater：
+
+```bash
+ccb update
+```
+
+可选富媒体工作台用 `ccb update rich` 安装或刷新；它会优先下载并验证可封装的二进制，只把必要的终端、媒体和字体依赖交给平台包管理器安装：
+
+```bash
+ccb update rich
+```
+
+rich 启用后，普通 `ccb` 会自动打开 rich WezTerm launcher，只有当当前已经处于 CCB 自己拉起的 rich WezTerm 中时才不会再次跳转；运行 `ccb uninstall rich` 可退回普通终端启动。
+
+<details>
+<summary><b>GitHub release 包和源码安装兜底</b></summary>
+
+如果当前环境不方便使用 npm，可以到 [Releases](https://github.com/SeemSeam/claude_codex_bridge/releases) 下载与你的平台匹配的包，解压后安装：
 
 ```bash
 tar -xzf ccb-*.tar.gz
@@ -114,14 +112,7 @@ cd ccb-*
 ./install.sh install
 ```
 
-如果你已经装过 CCB：
-
-```bash
-ccb update
-```
-
-<details>
-<summary><b>源码安装只建议开发或临时兜底使用</b></summary>
+源码安装只建议开发或临时兜底使用：
 
 ```bash
 git clone https://github.com/SeemSeam/claude_codex_bridge.git
@@ -129,9 +120,16 @@ cd claude_codex_bridge
 ./install.sh install
 ```
 
-源码安装会让全局 `ccb` / `ask` 链接回当前 checkout。普通用户更建议安装或更新到稳定 release。
+源码安装会让全局 `ccb` / `ask` 链接回当前 checkout。普通用户更建议使用 npm 包。
 
 </details>
+
+开箱即用：在项目目录执行 `ccb` 即可使用。
+如果启动时提示无法自动创建 `.ccb` 或找不到项目锚点，需要手动创建 `.ccb` 作为项目锚点：
+
+```bash
+mkdir -p .ccb
+```
 
 ### 2. 创建项目配置
 
@@ -158,7 +156,7 @@ tips_height = "35%"
 comms_limit = 3
 ```
 
-如果你不确定应该如何分组、要几个 worker、哪些 agent 用 worktree、哪些 agent 需要独立模型或 API，可以让 `ccb_self` 使用它内置的 `ccb-config` 和你讨论并生成配置方案。空白项目默认包含 `ccb_self`；已有自定义配置可用 `ccb roles add agentroles.ccb_self:codex` 添加。
+如果你不确定应该如何分组、要几个 worker、哪些 agent 用 worktree、哪些 agent 需要独立模型或 API，可以直接问当前工作台里的 `ccb_self`。它是 CCB 内置的 self-agent，理解 CCB 命令、配置权威层、roles、windows、reload 边界和常见恢复路径，并能用私有 `ccb-config` skill 和你讨论后生成配置方案。空白项目默认包含 `ccb_self`。
 
 验证配置：
 
@@ -180,7 +178,138 @@ ccb
 /ask reviewer review the latest parser changes and list blocking issues.
 ```
 
-## 日常操作
+也可以在工作编排中让 agent 自动调用 `/ask` 完成委派和交接。
+
+### v7 界面速览
+
+| 区域 | 说明 |
+| :--- | :--- |
+| Sidebar | 显示刷新/关闭 CCB 控件、window 和 agent 列表、内部通信状态，以及可在配置文件中修改并热加载的 tips。 |
+| 鼠标操作 | 支持点击切换 window、agent 和 pane，也可在通信区刷新、kill 或删除条目。 |
+| 工作区 | 每个 pane 都是真实 CLI；可以鼠标点击切换，也可以用 tmux 快捷键切换。 |
+| 常用技巧 | `Ctrl-b h/j/k/l` 切换相邻 pane，`Ctrl-b z` 放大或还原当前 CLI pane。 |
+
+<a id="rich-mode-new"></a>
+
+### Rich 模式（NEW!）
+
+运行 `ccb update rich` 安装可选富媒体工作台；它会尽量封装 Yazi 等二进制，并用 WezTerm 承载富媒体终端界面，提供 Markdown 渲染和图片/PDF/视频预览。安装后，普通 `ccb` 会自动打开 rich launcher，只有当当前已经处于 CCB 自己拉起的 rich WezTerm 中时才不会再次跳转；`ccb rich` 仍可作为显式启动入口。
+
+<p align="center">
+  <img src="assets/readme_v7/rich-workbench.png" alt="CCB rich 富媒体工作台在 WezTerm 中使用 Yazi 预览" width="860">
+</p>
+
+### Agent Roles Spec 规范和角色库
+
+CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：这是一个 host-neutral 的专业 agent 封装规范，可把专业角色打包成可安装、可挂载、可卸载的 Role Pack。该仓库同时也是公开角色库。
+
+<details>
+<summary><b>当前角色库</b></summary>
+
+| Role | 基本功能 |
+| :--- | :--- |
+| `agentroles.ccb_self` | CCB 自维护、配置辅助、运行诊断、受保护恢复和工作流编排。 |
+| `agentroles.archi` | 架构审查、边界检查、耦合分析、可维护性风险和后续 gate 建议。 |
+| `agentroles.frontend_engineer` | 前端设计与实现、设计系统、可访问性、浏览器 QA 和受审查的 AGY 委派。 |
+| `agentroles.mobile_app_engineer` | iOS、Android、React Native、Expo、Flutter、SwiftUI、Jetpack Compose 等移动端设计与实现。 |
+| `agentroles.mother` | Role 创建、Role source 审计、角色研究、蓝图设计和 Agent Roles 规范合规检查。 |
+| `agentroles.su_ccb` | SU-CCB 工作流操作，覆盖需求分析、计划、派发、审查 gate、归档和恢复。 |
+
+</details>
+
+### 联系方式
+
+- Email: `bfly123@126.com`
+- 微信: `seemseam-com`
+
+<p align="center">
+  <img src="assets/weixin.jpg" alt="微信群" width="240">
+</p>
+
+---
+
+## 更多阅读
+
+初次使用先看“快速开始”即可。下面按用途折叠，需要哪块再展开。
+
+| 主题 | 什么时候看 |
+| :--- | :--- |
+| 概念和定位 | 了解 CCB 是什么、多 agent 为什么有用，以及与其他方案的区别。 |
+| 日常操作 | 查常用命令、tmux 基础操作和复制粘贴。 |
+| 配置和角色 | 配 `.ccb/ccb.config`、Role Packs、`ccb_self` 配置助手。 |
+| 协作与维护 | ask 路由、安装更新、FAQ 和致谢。 |
+| 版本记录 | 查看当前 v7 重点和历史版本条目。 |
+
+<details open>
+<summary><b>概念和定位</b></summary>
+
+### CCB 是什么
+
+CCB 是一个项目级 agent CLI 工作台。它用 tmux 管理多个真实 CLI agent，把启动、恢复、通信、配置、窗口和运行态聚合在一个项目里。
+
+- **真实 CLI，不是模拟面板**：每个 agent pane 都运行对应 provider 的真实 CLI。
+- **可见协作**：sidebar 展示窗口、agent 状态和通信区；用户可以用鼠标直接切 pane。
+- **混合 provider**：一个项目里可以同时跑 Codex、Claude、Gemini、Kimi（`kimi`）、MiMo（`mimo`）、Qwen（`qwen`）、Cursor（`cursor`）、Copilot（`copilot`）、Crush（`crush`）、Kiro（`kiro`）、Pi（`pi`）、Z.ai CLI（`zai`）、OpenCode、Droid 和 Antigravity（`agy`）。
+- **项目级配置**：`.ccb/ccb.config` 决定团队、布局、窗口、worktree、model、key、url。
+- **内置 CCB 专家**：空白项目默认包含 `ccb_self`，它是具备 CCB 自理解能力的自维护 agent，可帮助使用 CCB、设计配置、诊断运行态、恢复工作流。
+- **Roles**：全新的角色封装概念；它让携带“重武器”（独立 skills、记忆和
+  工具依赖等）的专业角色瞬间“降临”到目标项目中，成为一个可以快速热加载和
+  卸载的独立 agent，同时保持主环境、用户全局配置和项目运行状态不发生改变。
+- **可恢复运行态**：CCB 后台守护 agent pane，支持 attach、恢复和项目级清理。
+- **显式协作通道**：agent 可以通过 `/ask`、`$ask`、callback 和 silence 进行委派与交接。
+
+### 为什么需要多 agents
+
+小任务用单 agent 就够了；一旦任务需要规划、并行实现、审查、测试和交接，多 agents 的价值就变成：把角色、上下文、模型和执行过程拆开管理。CCB 的重点是把多个真实 CLI agent 放进同一个可见终端工作台。
+
+| 价值 | 直观理解 |
+| :--- | :--- |
+| 角色分离 | `main` 负责任务拆分，`worker` 负责实现，`reviewer` 负责审查。 |
+| 并行推进 | 一个 agent 写代码时，另一个 agent 可以读文档、跑验证或审查风险。 |
+| 模型和上下文分层 | 不同 agent 可以用不同 provider、model、API、worktree 和记忆。 |
+
+<details>
+<summary><b>展开：单 agent 为什么会吃力？</b></summary>
+
+- 角色混杂会影响上下文集中度：同一个会话既要做架构，又要写代码，还要自我审查，容易在长任务里丢掉重点。
+- 可执行复杂度有上限：任务越长，越需要拆分、交接、核对和回滚点。
+- 成本压力更高：如果所有步骤都依赖一个最强模型，简单任务也会变贵。
+- 工具和 skill 集中会变难管理：什么都给一个 agent，等于把权限、说明和工具复杂度全部堆在一起。
+- 串行等待效率低：一个 agent 在跑测试、读日志或长时间思考时，其他可并行工作无法自然展开。
+
+</details>
+
+### 多 agents 方案怎么选
+
+多 agents 不是一种固定形态。先用下面这张表判断大方向，细节可以展开看。
+
+| 方案 | 一句话 | 更适合你如果 |
+| :--- | :--- | :--- |
+| [Claude Code 原生 subagents](https://code.claude.com/docs/en/sub-agents) / [agent teams](https://code.claude.com/docs/en/agent-teams) | Claude Code 内部的原生分工。 | 你主要留在 Claude Code，并接受更多协调由 Claude lead 处理。 |
+| [Hive / OpenHive](https://github.com/aden-hive/hive) | 面向生产工作流的多 agent harness。 | 你要状态、恢复、观测、成本控制和图式工作流。 |
+| CCB | 可见、可控、混合 provider 的本地 CLI agent 工作台。 | 你要把 Codex、Claude、Gemini、Kimi、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Z.ai CLI、OpenCode、Antigravity 等真实 CLI 放到一个项目终端里操作。 |
+
+<details>
+<summary><b>展开：模型、可控性、上下文和复杂工作流怎么区别？</b></summary>
+
+| 关键问题 | Claude Code 原生 | Hive / OpenHive | CCB |
+| :--- | :--- | :--- | :--- |
+| 能否使用不同家的模型 | 可给 teammate / subagent 指定 Claude 模型；整体仍在 Claude Code 体系内。 | 通过 LiteLLM 路线支持大量 hosted / local provider。 | 按 agent 选择 Codex、Claude、Gemini、Kimi、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Z.ai CLI、OpenCode、Droid、Antigravity 等，并可设置独立 model / key / url。 |
+| 过程是否可见 | in-process 或 split panes，取决于模式和终端。 | 强调 runtime observability 和控制台视角。 | 默认就是 tmux 可见 pane，用户能直接点击、输入、复制、观察每个 CLI。 |
+| 拓扑是否可控 | 可自然语言指定队友，但运行时协调较多交给 lead。 | 由目标生成图式拓扑，偏 harness。 | 配置文件显式定义 agent、窗口、pane、worktree 和 sidebar。 |
+| 上下文是否可管理 | subagent / teammate 有独立上下文；team 有任务和消息状态。 | 角色记忆、状态持久化、恢复能力是核心卖点。 | 每个 CLI 保留自己的 provider 会话；项目共享记忆和 per-agent 记忆可选。 |
+| 最适合的落点 | Claude Code 内部的快速委派和团队模式。 | 业务流程自动化、长期运行和生产可靠性。 | 本地开发、代码协作、跨 provider CLI agent 可视化工作台。 |
+
+CCB 也支持复杂工作流，但它不是自动生成 DAG 的 harness；复杂度主要通过 `.ccb/ccb.config`、多 window、角色记忆、worktree、model/API 配置和 ask/callback 路由显式设计。
+
+</details>
+
+</details>
+
+<details>
+<summary><b>日常操作</b></summary>
+
+### 日常操作
 
 | 目标 | 命令 |
 | :--- | :--- |
@@ -190,11 +319,14 @@ ccb
 | 停止当前项目后台 | `ccb kill` |
 | 强制清理当前项目残留后再重建 | `ccb kill -f` 后接 `ccb -n` |
 | 更新到最新稳定 release | `ccb update` |
+| 安装或刷新可选 rich 富媒体工作台 | `ccb update rich` |
+| 移除 rich 模式并退回普通启动 | `ccb uninstall rich` |
+| 打开 rich 富媒体工作台 | `ccb rich` |
 | 查看当前使用的配置层 | `ccb config validate` |
 | 预览配置热加载计划，不修改 tmux | `ccb reload --dry-run` |
 | 应用支持的配置变更，不重启其他 agent | `ccb reload` |
 
-## tmux 常规操作
+### tmux 常规操作
 
 CCB 虽然基本全部可以使用鼠标操作，但是学会 tmux 命令可以显著增加便利性。下面列举了部分常用的键盘操作快捷键。
 
@@ -236,7 +368,12 @@ CCB 虽然基本全部可以使用鼠标操作，但是学会 tmux 命令可以�
 
 </details>
 
-## 配置 agent 团队
+</details>
+
+<details>
+<summary><b>配置和角色</b></summary>
+
+### 配置 agent 团队
 
 CCB 配置有三层，优先级从低到高：
 
@@ -245,7 +382,7 @@ CCB 配置有三层，优先级从低到高：
 3. 项目配置 `.ccb/ccb.config`。
 
 更高层会整体替换低层，不做局部合并。当前项目的权威配置文件是 `.ccb/ccb.config`；旧路径 `.ccb_config/ccb.config` 只应作为迁移参考。
-内置默认配置是 v2 `[windows]` 拓扑，包含 `agent1`、`agent2`、`agent3`、`ccb_self`，以及一个使用 `ccb-nvim` 的托管 `neovim` 工具 window。默认 `ccb_self` 使用 `codex` 并绑定 `agentroles.ccb_self`。
+内置默认配置是 v2 `[windows]` 拓扑，包含 `agent1`、`agent2`、`agent3` 和 `ccb_self`。可选 rich 富媒体工作台通过 `ccb update rich` 安装；启用后普通 `ccb` 会走 rich launcher，运行 `ccb uninstall rich` 后退回普通终端启动。默认 `ccb_self` 使用 `codex` 并绑定 `agentroles.ccb_self`。
 
 `.ccb/ccb.config` 主要配置这些内容：
 
@@ -255,7 +392,7 @@ CCB 配置有三层，优先级从低到高：
 | agent 名称和 provider | `main:codex`、`reviewer:claude` | 名称用于界面、ask 路由和记忆文件；provider 决定启动哪家 CLI。 |
 | 工作区隔离 | `worker1:codex(worktree)` | 给实现类 agent 独立 git worktree，降低互相覆盖的风险。 |
 | sidebar 行为 | `[ui.sidebar]` | 控制 sidebar 是否每个 window 都显示、宽度和 Comms 高度。 |
-| 工具 window | `[tool_windows.<name>]` | 添加 Neovim 这类非 agent 托管 window；sidebar 只显示一行，不是 `ask` 目标。 |
+| 工具 window | `[tool_windows.<name>]` | 添加 rich 富媒体工作台这类非 agent 托管 window；sidebar 只显示一行，不是 `ask` 目标。 |
 | 单 agent 模型/API | `[agents.<name>]` | 可为不同 agent 配 `model`、`key`、`url` 等。 |
 | Role Pack 绑定 | `agentroles.archi:codex` | 通过 window leaf 绑定可复用角色包；role 资产统一安装，再投影到解析出的 agent。 |
 | 角色说明 | `[agents.<name>] description = "..."` | 给 agent 一个简短职责说明；更长的工作流规则建议写到 memory。 |
@@ -264,11 +401,17 @@ CCB 配置有三层，优先级从低到高：
 
 如果你想先讨论配置而不是手写，可以直接让 `ccb_self` 描述目标团队。空白项目默认已经有这个路由；使用用户配置或项目配置覆盖内置默认的项目，如果还没有 `ccb_self`，需要先添加 `agentroles.ccb_self`。它的内置 `ccb-config` skill 会先提出完整方案，确认后再修改 `.ccb/ccb.config`。
 
-### Role Packs
+#### Role Packs
 
-Role Pack 用来定义可复用的 agent 角色。一个 role 可以包含稳定身份、职责、
-记忆、provider-specific skills、工具 hooks 和依赖准备逻辑。这样项目配置会更短，
-专门角色也能跨项目复用，不需要在每个项目里复制一大段角色说明。
+Role Pack 通过 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)
+定义可复用的 agent 角色。这个规范是 host-neutral 的专业 agent 包格式：一个
+Role 可以把稳定身份、职责、非目标、记忆、skills、prompts、references、tools、
+plugin 内容、验证说明和 host adapter metadata 放进一个可审查的独立单元。
+
+它的意义是把边界分清楚：Role source 保持可移植、可版本化；项目绑定决定这个
+Role 挂载到哪里；provider 运行态、凭据、任务进度和生成的投影文件都留在 Role
+外部。这样专门 agent 更容易安装、更新、审计、迁移和卸载，不需要在每个项目里复制
+大段 prompt，也不会污染用户全局配置。
 
 推荐默认 catalog roles 包括 `agentroles.ccb_self` 和
 `agentroles.archi`：前者是 CCB 自维护角色，后者用于架构审查，来自
@@ -277,6 +420,9 @@ Role Pack 用来定义可复用的 agent 角色。一个 role 可以包含稳定
 推荐角色。也可以手动刷新：
 
 ```bash
+ccb roles list
+ccb roles show agentroles.archi
+ccb roles install agentroles.archi
 ccb roles update agentroles.ccb_self
 ccb roles update agentroles.archi
 ```
@@ -286,10 +432,11 @@ ccb roles update agentroles.archi
 role；如果锁已经落后，交互式启动会询问是否就地刷新项目锁，非交互启动只打印
 提醒。
 
-强烈建议 CCB 项目保留 `ccb_self`，因为它负责 CCB 配置维护、运行诊断、受保护
-恢复、工作链修复和单 agent 重启辅助，同时不接管业务任务。空白项目的内置默认配置
-已经包含它；已有项目，或使用用户配置/项目配置替换内置默认的项目，需要该维护
-agent 时应显式把它作为 window leaf 加进去：
+强烈建议 CCB 项目保留 `ccb_self`，因为它是 CCB 内置专家 agent，携带 CCB
+项目配置、命令使用、role 绑定、reload 边界、运行诊断、受保护恢复、工作链修复和
+单 agent 重启辅助等专用知识，同时不接管业务任务。空白项目的内置默认配置已经
+包含它；已有项目，或使用用户配置/项目配置替换内置默认的项目，需要该维护 agent
+时应显式把它作为 window leaf 加进去：
 
 ```bash
 ccb roles add agentroles.ccb_self:codex
@@ -310,7 +457,7 @@ provider home。
 <details>
 <summary><b>配置格式示例：单窗口、多 window、per-agent 模型/API</b></summary>
 
-### 单窗口紧凑配置
+#### 单窗口紧凑配置
 
 ```text
 cmd; main:codex, worker1:codex(worktree); reviewer:claude
@@ -324,7 +471,7 @@ cmd; main:codex, worker1:codex(worktree); reviewer:claude
 - `;` 表示左右分栏，`,` 表示上下堆叠。
 - `(worktree)` 表示该 agent 使用独立 git worktree。
 
-### 多 window 拓扑
+#### 多 window 拓扑
 
 当你想把规划、实现、审查、研究分到不同 tmux window 时，使用 `version = 2` 和 `[windows]`：
 
@@ -351,7 +498,7 @@ comms_limit = 3
 
 注意：`cmd` 只属于紧凑/混合单窗口布局；`[windows]` 拓扑里不要写 `cmd`。
 
-### 托管 Neovim 工具 window
+#### Rich 富媒体工作台工具 window
 
 工具 window 是 CCB 管理的 tmux window，但不是 agent。它不会出现在 `ccb ask` 目标中，也不会创建 provider runtime 记录。
 
@@ -362,17 +509,14 @@ entry_window = "main"
 [windows]
 main = "main:codex"
 
-[tool_windows.neovim]
-command = "ccb-nvim"
-label = "neovim"
+[tool_windows.rich]
+command = "CCB_WORKBENCH_PROFILE=rich CCB_WORKBENCH_FORCE_RICH=1 ccb-workbench files"
+label = "rich"
 ```
 
-`ccb tools install neovim` 会准备隔离的 `ccb-nvim` wrapper 和 LazyVim profile，路径在 CCB 自己的 XDG 目录下。`install.sh install` 和 `ccb update` 默认都会尝试安装或刷新该工具，并把默认 provisioning 失败保留为 warning。设置 `CCB_INSTALL_NEOVIM=1` 可强制 provisioning，设置 `CCB_INSTALL_NEOVIM=0` 可跳过。
-如果 `PATH` 里没有 `nvim`，provisioning 会尝试下载 Linux/macOS 官方 Neovim release tarball，并校验 release sha256 后再启用；不会写入 `~/.config/nvim`。
-托管 profile 默认使用 ASCII 图标，避免没有 Nerd Font 的终端出现方块/乱码。确认终端字体支持 Nerd Font 时，可用 `CCB_LAZYVIM_ICON_STYLE=glyph ccb-nvim` 恢复 LazyVim 图标。
-用 `ccb tools doctor neovim` 验证托管 profile。LazyVim 真正可用时会显示 `neovim_status: ok` 和 `lazyvim_health_status: ok`；插件目录损坏或半下载会显示 `degraded`，重新运行 `ccb tools install neovim` 会尝试修复。
+`ccb update rich` 会在 CCB 自己的 XDG 目录下准备可选工作台包，优先下载并验证可封装的二进制，只把 WezTerm、Markdown/PDF/图片/视频辅助工具和推荐字体等必要依赖交给平台包管理器。WSL 下可以调用 Windows 原生 `wezterm.exe`，同时让 rich 工具继续运行在当前 Linux 发行版内。普通 `ccb update` 不会主动安装或刷新该包；需要安装、修复或更新时重新运行 `ccb update rich`。运行 `ccb uninstall rich` 会移除该包，并让普通 `ccb` 回到常规终端启动。设置 `CCB_RICH_DOWNLOAD_BINARIES=0` 可跳过二进制下载，设置 `CCB_RICH_INSTALL_DEPS=0` 可跳过系统包安装。
 
-### 给 agent 单独配置模型、API key 或 base URL
+#### 给 agent 单独配置模型、API key 或 base URL
 
 如果只需要布局，用紧凑格式即可；如果某些 agent 需要单独模型或 API 路由，在紧凑头后追加 TOML overlay：
 
@@ -395,9 +539,11 @@ model = "sonnet"
 
 </details>
 
-## 使用 ccb_self 配置 CCB
+### 使用 ccb_self 配置 CCB
 
 完整的 `ccb-config` skill 属于 `agentroles.ccb_self` 角色，不再作为所有 agent 都继承的公共 skill。CCB 默认会安装或刷新这个 Role Pack，空白项目的内置默认配置也会包含 `ccb_self`。已有项目，或使用用户配置/项目配置替换内置默认的项目，需要维护助手时应显式绑定它。
+
+`ccb_self` 不只是配置助手，它被设计成 CCB 的自理解 agent。使用 CCB 时遇到布局解释、团队拓扑选择、`.ccb/ccb.config` 迁移、运行态诊断、恢复路径或工作流修复问题，都可以先问它。
 
 如果你不想手写 `.ccb/ccb.config`，可以直接询问 `ccb_self`，再用自然语言描述项目目标、并行程度、窗口分组、worktree 隔离、provider/model/API 偏好。`ccb_self` 会使用它内置的 `ccb-config` 和你讨论后提出完整配置方案。
 
@@ -423,7 +569,12 @@ ccb ask ccb_self "为一个 Python library 设计团队：main 负责任务拆�
 
 </details>
 
-## Agent 之间如何协作
+</details>
+
+<details>
+<summary><b>协作与维护</b></summary>
+
+### Agent 之间如何协作
 
 普通 `ask` 是提交即返回：把任务交给目标 agent 后，当前 agent 不应该轮询等待。
 
@@ -456,36 +607,35 @@ spill 只是兜底，所以只要精确输入或完整输出重要，就应该�
 
 </details>
 
-## 编辑器工作流
+### 安装和更新
 
-<p align="center">
-  <img src="assets/nvim.png" alt="Neovim 集成多模型代码审查" width="860">
-</p>
+#### 环境要求
 
-CCB 不要求你离开编辑器。常见方式是：编辑器负责写代码，CCB 终端负责多 agent 规划、实现、审查、测试和交接。
-
-## 安装和更新
-
-### 环境要求
-
+- 推荐 npm 安装路径需要 Node.js 和 npm
 - Python 3.10+
 - `tmux`
-- 至少一个你要使用的 agent CLI，例如 Codex、Claude、Gemini、OpenCode、Droid 或 Antigravity
+- 至少一个你要使用的 agent CLI，例如 Codex、Claude、Gemini、Kimi、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Z.ai CLI、OpenCode、Droid 或 Antigravity
 - Linux、macOS 或 WSL
 
 当前 v7 / 新版本不声明原生 Windows 支持。原生 Windows 只支持到 v5 线；如果你在 Windows 上使用新版本，推荐使用 WSL，并让 `ccb` 与 agent CLI 都运行在 WSL 内。
 
-### Release 优先
+#### npm 优先
 
-首次安装推荐使用 [GitHub Releases](https://github.com/SeemSeam/claude_codex_bridge/releases) 的 release 包；已安装用户推荐：
+首次安装推荐使用 npm：
+
+```bash
+npm install -g @seemseam/ccb
+```
+
+后续更新直接使用：
 
 ```bash
 ccb update
 ```
 
-源码 checkout 安装只适合开发、验证修复或 release 包暂不可用时临时使用。
+[GitHub Releases](https://github.com/SeemSeam/claude_codex_bridge/releases) 仍作为不方便使用 npm 时的备选路径。源码 checkout 安装只适合开发、验证修复或临时兜底。
 
-### 卸载
+#### 卸载
 
 ```bash
 ccb uninstall
@@ -495,7 +645,7 @@ ccb reinstall
 ./install.sh uninstall
 ```
 
-## 常见问题
+### 常见问题
 
 <details>
 <summary><b>启动后没有看到预期 agent</b></summary>
@@ -525,21 +675,18 @@ ccb reinstall
 
 </details>
 
-## 社区和致谢
-
-📧 Email: `bfly123@126.com`
-
-💬 微信: `seemseam-com`
+### 社区和致谢
 
 感谢 [Linux.do 社区](https://linux.do) 在测试、反馈和讨论中的支持。
 
 感谢 [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 提供的 sidebar 思路和启发。
 
-<div align="center">
-  <img src="assets/weixin.jpg" alt="微信群" width="300">
-</div>
+</details>
 
-## 新版本记录
+<details>
+<summary><b>版本记录</b></summary>
+
+### 新版本记录
 
 v7 线重点：
 
@@ -551,7 +698,253 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
-<summary><b>v7.6.4</b> - Rich Workbench Lifecycle & macOS 安装修复</summary>
+<summary><b>v7.6.12</b> - Claude MCP 与 Hook 继承</summary>
+
+- managed Claude agent 现在会从 source `.claude.json` 继承 Claude Code MCP
+  配置，包括全局 `mcpServers` 和当前 project/workspace 的 MCP server 状态。
+- project 级 MCP 状态只映射到当前 managed workspace key，不会把无关 source
+  project 记录复制进 agent home。
+- source-home Claude Code hooks 会与 CCB-managed finish/activity hooks 合并，
+  用户安装的 hook 工具在 agent restart 后仍可见。
+- managed Claude `.claude.json` 现在按 secret provider state 处理，因为 MCP
+  定义可能包含环境变量或接近认证材料的启动配置。
+
+</details>
+
+<details>
+<summary><b>v7.6.11</b> - Layout Percent 与 Codex MCP Overlay</summary>
+
+- 新增显式 pane split 比例 layout token，例如 `agent1:codex@30`；没有
+  `@N` 后缀时继续保持原有 sibling panes 均分行为。
+- 新增通过 `provider_profile.mcp_servers` 配置 per-agent Codex MCP overlay；
+  同名 MCP server 覆盖继承配置，不同名 additive。
+- managed Codex home projection 现在会保留可信 Codex command hook，并改进
+  sidebar Comms/Tips 的滚动和拖拽调整，同时在 `ccb trace` 暴露更多 reply
+  artifact 证据。
+
+</details>
+
+<details>
+<summary><b>v7.6.10</b> - Z.ai Provider 支持</summary>
+
+- 新增 Z.ai CLI optional provider：支持 `provider = "zai"`、可见
+  `zai --directory` pane，以及 per-job `zai --prompt` 执行。
+- 使用 Z.ai 原生 subprocess 完成边界：进程退出加 JSONL stdout 中的
+  assistant 内容提取，不要求模型打印 `CCB_DONE`。
+- 新增 `ZAI_START_CMD`、provider session/pathing、deterministic stub、
+  focused execution 测试，并同步 README provider 支持列表。
+
+</details>
+
+<details>
+<summary><b>v7.6.9</b> - Kimi / AGY Provider 可靠性</summary>
+
+- Kimi execution 现在记录 receipt、无捕获输出诊断、trace 和 resume
+  metadata，便于定位缺失回复和恢复 turn。
+- AGY prompt delivery 现在等待 ready evidence，处理 pane fallback 和
+  ambiguous tmux send 结果，并更清楚地报告合并请求诊断。
+- dispatcher、mailbox trace 和 text artifact 诊断现在会暴露排查 Kimi/AGY
+  delivery 与 completion 边界所需的 provider 细节。
+
+</details>
+
+<details>
+<summary><b>v7.6.8</b> - Role Pack Current Store</summary>
+
+- Role Pack 运行时现在跟随 `.roles/installed/<role-id>/current` 下的当前安装包；
+  旧的多版本 store 只作为兼容输入，不再是运行时主权。
+- 项目 `.ccb/role-lock.json` 现在是 legacy diagnostic：CCB 不再写入、不再从
+  lock adopt，也不会因为旧 lock 残留而 suppress role memory/skills。
+- provider 启动 session 会记录 role id、version 和 digest；当启动 digest 与
+  installed current 不一致时，restart 会明确失败，而不是静默恢复旧 provider
+  会话并假装采用了新 role。
+- release artifact 元数据 patch 现在指向 bash launcher 拆分后的 `ccb.py`，
+  确保构建出的 tarball 携带正确版本。
+
+</details>
+
+<details>
+<summary><b>v7.6.7</b> - Rich Workbench 闭环</summary>
+
+- 普通 `ccb` 和 `ccb rich` 现在会启动 CCB 托管的 rich WezTerm；只有已经在该
+  CCB 托管 rich 会话内时才跳过自动启动，普通外部 WezTerm 不再误判为 rich。
+- 运行入口统一走 `_ccb-python` launcher，让安装版和源码版命令都固定到预期
+  Python 解释器。
+- 内置默认配置继续把 `ccb_self` 放在独立 `claude` window，同时普通默认启动
+  不恢复 standalone Neovim tool window。
+
+</details>
+
+<details>
+<summary><b>v7.6.6</b> - Role Store Home Pinning</summary>
+
+- role store lookup 现在会固定在 managed provider home 之外，provider session
+  改写 `HOME` 时不再误查 provider-local `.roles` 目录。
+- CCB 启动边界会保留 `AGENT_ROLES_STORE`；未显式设置时回退到真实
+  source/account home 下的 role store。
+- 缺失 role 的诊断会打印解析后的 role store 路径，便于定位 provider-home
+  漂移问题。
+
+</details>
+
+<details>
+<summary><b>v7.6.5</b> - Rich WezTerm 输入法</summary>
+
+- 生成的 rich WezTerm 配置现在会启用 IME，并把 `XMODIFIERS=@im=...`
+  映射为 WezTerm 的 XIM 名称，修复 X11 下 fcitx/ibus 中文输入连接问题。
+- 生成的 `ccb-workbench` wrapper 会在启动 WezTerm 前探测运行中或已安装的
+  `fcitx5`、`fcitx`、`ibus-daemon`，只在用户未设置时补齐输入法环境变量。
+- 保留 v7.6.4 已绿发布面，以及 v7.6.2 的 rich/tmux 修复，供 npm latest
+  安装实测。
+
+</details>
+
+<details>
+<summary><b>v7.6.4</b> - macOS Release Install Smoke</summary>
+
+- 保留 7.6.3 的 macOS temporary-root 加固，同时让 CI release install smoke
+  对隔离的 sibling `CODEX_BIN_DIR` 显式设置临时 bin override。
+- 不放宽用户侧 installer 安全规则，但允许 release workflow 从临时 smoke root
+  验证 macOS 包安装。
+- 保留 v7.6.2 已发布的 rich workbench 与 tmux 单行 status 修复，供用户安装
+  实测。
+
+</details>
+
+<details>
+<summary><b>v7.6.3</b> - macOS CI 绿灯补丁</summary>
+
+- install guard 现在会识别 GitHub Actions macOS runner 使用的
+  `${TMPDIR:-/tmp}` canonical parent，避免 `/private/var/folders/...` 临时
+  路径被误放行。
+- doctor 的 temporary implementation 检测同步兼容 macOS `/tmp` symlink
+  行为，避免 `/private/tmp` 和 `/private/var/folders/...` 路径导致 CI 误红。
+- 保留 v7.6.2 已发布的 rich workbench 与 tmux 单行 status 修复，供用户安装
+  实测。
+
+</details>
+
+<details>
+<summary><b>v7.6.2</b> - Rich Workbench 热修复</summary>
+
+- `.ccb/ccb.config` 现在可以把 `rich` 当作工具/layout alias 使用，不需要
+  provider runtime；它会 materialize 成托管工具 pane/window，不会成为 `ask`
+  目标。
+- `ccb update rich` 启用 bundle 后，普通 `ccb` 在既有 rich/WezTerm 会话外可
+  自动走 rich launcher，同时避免递归重复拉起 WezTerm。
+- 新增 `ccb uninstall rich`、`ccb rich uninstall` 和 `ccb rich disable`，
+  可回到普通 CCB 启动；完整 `ccb uninstall` 语义保持不变。
+- rich 更新只清理 CCB-owned legacy editor roots 和链接，不会碰用户自己的
+  editor 安装和个人配置。
+
+</details>
+
+<details>
+<summary><b>v7.6.1</b> - Rich Workbench 二进制封装</summary>
+
+- `ccb update rich` 会优先封装并验证 Yazi/ya 二进制，再让包管理器兜底。
+- Linux rich 安装优先使用官方 Yazi musl 构建，再回退 GNU 构建，避免旧稳定
+  发行版遇到较新的 glibc 要求。
+- 下载的 Yazi 二进制必须通过 `--version` 验证才会启用；无效的 managed
+  二进制会被移除，保证后续 fallback 仍可工作。
+- WSL 下 rich launcher 可使用 Windows 原生 `wezterm.exe`，同时让 CCB、Yazi
+  和 preview helpers 继续运行在当前 Linux 发行版内。
+
+</details>
+
+<details>
+<summary><b>v7.6.0</b> - Rich Workbench 生命周期</summary>
+
+- Rich workbench 变为显式可选 bundle，统一通过 `ccb update rich` 安装和更新。
+- 普通 `install.sh install` 和 `ccb update` 只处理 CCB 本体，不再自动
+  provision standalone Neovim。
+- 公开 `ccb tools ... neovim` 路由会拒绝 standalone provisioning 并提示
+  `ccb update rich`；`ccb rich` 只启动已经安装并启用的 rich bundle。
+- CCB tmux 状态栏恢复为单行，移除旧的第二行复制提示。
+
+</details>
+
+<details>
+<summary><b>v7.5.3</b> - Kimi 运行可靠性与 Hindsight 兼容性</summary>
+
+- 增强 Kimi 运行路径，但不改变其他 provider 的执行路径：当 native turn
+  log 没有及时暴露完成回复时，Kimi 可对 K2.7 Code 使用稳定 pane 证据兜底。
+- Kimi Hindsight 记忆改为 CCB 执行边界上的显式 opt-in：只有配置
+  `.hindsight/kimi.json`、`.hindsight/codex.json`、`HINDSIGHT_API_URL` 或
+  `HINDSIGHT_BANK_ID` 时才启用，失败时只记录 provider diagnostics，不阻塞任务。
+- CCB 物化 managed Codex home 时会保留可信 Codex command hook，包括
+  Hindsight Codex hooks。运维可通过 `CCB_CODEX_INHERITED_HOOK_EVENTS` 和
+  `CCB_CODEX_INHERITED_COMMAND_HOOK_MARKERS` 扩展 allowlist；任意 root hook
+  仍会被过滤。
+- Kimi bridge 和 `scripts/hindsight` helper 同时兼容 `HINDSIGHT_API_KEY` 与
+  `HINDSIGHT_API_TOKEN`。
+- README 更明确展示支持的 provider surface，同时保持无关 provider 行为不变。
+
+</details>
+
+<details>
+<summary><b>v7.5.2</b> - Native CLI Provider Wave</summary>
+
+- 新增 Qwen Code（`qwen`）、Cursor Agent（`cursor`）、GitHub
+  Copilot CLI（`copilot`）、Crush（`crush`）、Kiro CLI（`kiro`）、Pi（`pi`）和 Z.ai CLI（`zai`）
+  作为内置 optional provider。
+- 使用原生 per-job CLI 执行和 provider 自有完成信号：Qwen、Cursor、
+  Copilot 和 Pi 解析 stream-json / JSON result 事件；Crush、Kiro 和 Z.ai CLI 使用进程退出
+  加 stdout。新增适配器不要求模型打印 `CCB_DONE`；Pi 以原生 `turn_end`
+  作为结束点。
+- 新增 `QWEN_START_CMD`、`CURSOR_START_CMD`、`COPILOT_START_CMD`、
+  `CRUSH_START_CMD`、`KIRO_START_CMD`、`PI_START_CMD`、`ZAI_START_CMD` 命令覆盖，以及 provider session
+  binding、runtime launcher、deterministic stub 和 focused execution 测试。
+
+</details>
+
+<details>
+<summary><b>v7.5.1</b> - MiMo Provider 发布面</summary>
+
+- 在 README 公开 provider strip 增加带 Xiaomi 标识的 MiMo 徽标，并把
+  首页定位更新为 8 个 CLI family。
+- 将已提交的 MiMo native provider 集成纳入 7.5 线发布：managed `mimo`
+  pane、`MIMO_START_CMD`、生成式 MiMo instructions，以及
+  `mimo run --pure --format json` 完成解析。
+- 同步 npm package metadata 和 release workflow 默认 tag 到新的 patch
+  release。
+
+</details>
+
+<details>
+<summary><b>v7.5.0</b> - 原生 CLI Provider 与首页同步</summary>
+
+- 新增 Kimi managed native CLI provider 支持，并补齐更通用的 native CLI
+  runtime 基础能力，覆盖 runtime spec、session binding、启动命令覆盖和清理路径。
+- Kimi 和 Antigravity 的完成判定改为读取 provider 自有 session 或
+  transcript 证据，不再要求模型打印 `CCB_DONE`。
+- CCB auto-permission 对 Kimi 默认注入当前版本支持的 `--auto-approve`，
+  同时识别 `--auto`、`--yes`、`-y`、`--yolo` 等旧版或别名标识，避免重复注入。
+- 同步英文和中文 README 首页，刷新 hero assets，并统一为 7 个公开 CLI
+  family 的定位。
+
+</details>
+
+<details>
+<summary><b>v7.4.4</b> - Claude end_turn 与 npm 发布面修复</summary>
+
+- Claude pane-backed ask 在 primary assistant response 带
+  `stop_reason=end_turn`、已看到请求 anchor 且回复非空时，会立即产生
+  `TURN_BOUNDARY(reason=assistant_end_turn)` 并正常完成，不再等到 900 秒
+  reliability timeout。
+- 空的 session-boundary terminal event 如果之前没有 assistant 回复证据，会
+  终止为 `incomplete/task_complete_empty_reply`，并带
+  `empty_provider_reply` 诊断。
+- 恢复 `@seemseam/ccb` npm 发布面：补回 package metadata、CLI runner
+  wrappers，以及等待 GitHub release assets 后再发布 npm 包的 Trusted
+  Publishing workflow。
+- 刷新 v7 README 首页：使用 canonical hero assets，默认 npm-first 安装，并
+  更明确说明 `ccb_self` 是 CCB 内置的使用、配置、诊断和恢复专家。
+
+</details>
+
+<details>
+<summary><b>v7.4.3</b> - PR #225 可靠性跟进修复</summary>
 
 - 恢复 Claude launcher contract：inline `--settings` 只反映 materialized
   settings overlay，不再把 provider env 注入 settings JSON。
@@ -813,7 +1206,7 @@ v7 线重点：
 - 新增 Role Pack 体验面，内置 `ccb.archi` 架构师 role，包含 role memory、Codex/Claude skill 投影和项目 role lock。
 - `ccb roles add ccb.archi:codex` 成为主要接入命令；config 保留 shorthand，运行时解析为本地 agent `archi`。
 - `ccb roles install/update ccb.archi` 默认刷新 role 资产和依赖；安装/更新时交互提示，非交互场景会给出后续运行命令。
-- 新增 `[tool_windows.neovim]` 这类托管工具 window，以及 `ccb tools install/doctor neovim`、sidebar 行和安全的 reload add/remove 行为。
+- 新增托管工具 window、sidebar 行和安全的 reload add/remove 行为。
 - 包含 main 上已合入的 `agy` / Google Antigravity provider 支持。
 
 </details>
@@ -866,6 +1259,8 @@ v7 线重点：
 - 新增 `assets/readme_v7/` 真实 v7 终端截图，用于 README 演示。
 - 保留 README 重设计计划和辅助资料到 `docs/plantree/`。
 - 保持 v7.0.8 的 runtime、`ccb clear`、config overlay 和 sidebar 修复不变，只刷新 GitHub 面向用户的文档包。
+
+</details>
 
 </details>
 

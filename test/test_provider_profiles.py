@@ -46,6 +46,19 @@ def _write_project_memory(project_root: Path, text: str) -> None:
     path.write_text(text, encoding='utf-8')
 
 
+def _latest_agent_event(layout: PathLayout, agent_name: str, event_type: str) -> dict:
+    events_path = layout.agent_events_path(agent_name)
+    events = [
+        json.loads(line)
+        for line in events_path.read_text(encoding='utf-8').splitlines()
+        if line.strip()
+    ]
+    for event in reversed(events):
+        if event.get('event_type') == event_type:
+            return event
+    raise AssertionError(f'{event_type} event not found: {events}')
+
+
 def _write_codex_plugin_source(
     home: Path,
     *,
@@ -224,6 +237,148 @@ def test_materialize_codex_profile_preserves_inline_table_arrays(
     config_text = (Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8')
     assert 'mcp_servers = [{ name = "puppeteer", enabled = true, args = ["-y", "pkg"] }]' in config_text
     assert 'external_migration = false' in config_text
+
+
+def test_materialize_codex_profile_merges_agent_mcp_server_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[mcp_servers.shared]',
+                'command = "old-shared"',
+                '',
+                '[mcp_servers.keep]',
+                'command = "keep-cmd"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                mcp_servers={
+                    'codegraph': {'command': '/usr/local/bin/codegraph', 'args': ['serve', '--mcp']},
+                    'shared': {'command': 'new-shared', 'env': {'MODE': 'agent'}},
+                },
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8'))
+
+    assert config['mcp_servers']['keep']['command'] == 'keep-cmd'
+    assert config['mcp_servers']['shared']['command'] == 'new-shared'
+    assert config['mcp_servers']['shared']['env'] == {'MODE': 'agent'}
+    assert config['mcp_servers']['codegraph']['command'] == '/usr/local/bin/codegraph'
+    assert config['mcp_servers']['codegraph']['args'] == ['serve', '--mcp']
+    assert config['features']['external_migration'] is False
+
+
+def test_materialize_codex_profile_merges_agent_plugin_overrides(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[plugins."github@openai-curated"]',
+                'enabled = true',
+                '',
+                '[plugins."superpowers@openai-curated"]',
+                'enabled = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                plugins={
+                    'github@openai-curated': {'enabled': False},
+                    'agentmemory@agentmemory': {'enabled': True},
+                },
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8'))
+
+    assert config['plugins']['github@openai-curated']['enabled'] is False
+    assert config['plugins']['superpowers@openai-curated']['enabled'] is True
+    assert config['plugins']['agentmemory@agentmemory']['enabled'] is True
+    assert config['features']['external_migration'] is False
+
+
+def test_materialize_codex_profile_merges_plugin_overrides_from_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5.5"',
+                '',
+                '[plugins."github@openai-curated"]',
+                'enabled = true',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+
+    profile = materialize_provider_profile(
+        layout=PathLayout(project_root),
+        spec=_spec(
+            'agent1',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                env={
+                    'CCB_CODEX_PLUGIN_OVERRIDES_JSON': json.dumps(
+                        {
+                            'github@openai-curated': {'enabled': False},
+                            'agentmemory@agentmemory': {'enabled': True},
+                        }
+                    )
+                },
+            ),
+        ),
+        workspace_path=project_root,
+    )
+
+    config = tomllib.loads((Path(profile.runtime_home or '') / 'config.toml').read_text(encoding='utf-8'))
+
+    assert config['plugins']['github@openai-curated']['enabled'] is False
+    assert config['plugins']['agentmemory@agentmemory']['enabled'] is True
 
 
 def test_materialize_codex_profile_preserves_nested_inline_table_arrays(
@@ -673,14 +828,9 @@ def test_materialize_codex_profile_migrates_legacy_profile_runtime_home(tmp_path
     assert f'CODEX_SESSION_ROOT={runtime_home / "sessions"}' in payload['start_cmd']
     assert str(legacy_home) not in payload['codex_start_cmd']
     assert f'UNCHANGED={legacy_home}-suffix' in payload['start_cmd']
-    events = [
-        json.loads(line)
-        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
-        if line.strip()
-    ]
-    assert events[-1]['event_type'] == 'codex_profile_migration'
-    assert events[-1]['status'] == 'migrated'
-    assert events[-1]['reason'] == 'legacy_profile_runtime_home_migrated'
+    event = _latest_agent_event(layout, 'agent1', 'codex_profile_migration')
+    assert event['status'] == 'migrated'
+    assert event['reason'] == 'legacy_profile_runtime_home_migrated'
 
 
 def test_materialize_codex_profile_migration_respects_inherit_auth_false(tmp_path: Path, monkeypatch) -> None:
@@ -780,14 +930,9 @@ def test_materialize_codex_profile_does_not_migrate_when_session_authority_is_ma
     runtime_home = Path(profile.runtime_home or '')
     assert legacy_session.is_file()
     assert not (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').exists()
-    events = [
-        json.loads(line)
-        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
-        if line.strip()
-    ]
-    assert events[-1]['event_type'] == 'codex_profile_migration'
-    assert events[-1]['status'] == 'skipped'
-    assert events[-1]['reason'] == 'session_authority_preflight_failed'
+    event = _latest_agent_event(layout, 'agent1', 'codex_profile_migration')
+    assert event['status'] == 'skipped'
+    assert event['reason'] == 'session_authority_preflight_failed'
     assert session_file.read_text(encoding='utf-8') == '{not json}\n'
 
 
@@ -837,14 +982,9 @@ def test_materialize_codex_profile_migrates_legacy_sessions_with_unrelated_tmp_s
     assert not legacy_session.exists()
     assert (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').is_file()
     assert (tmp_dir / 'linked-outside').is_symlink()
-    events = [
-        json.loads(line)
-        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
-        if line.strip()
-    ]
-    assert events[-1]['event_type'] == 'codex_profile_migration'
-    assert events[-1]['status'] == 'migrated'
-    assert events[-1]['reason'] == 'legacy_profile_runtime_home_migrated'
+    event = _latest_agent_event(layout, 'agent1', 'codex_profile_migration')
+    assert event['status'] == 'migrated'
+    assert event['reason'] == 'legacy_profile_runtime_home_migrated'
 
 
 def test_materialize_codex_profile_does_not_migrate_session_material_with_symlink(
@@ -891,14 +1031,9 @@ def test_materialize_codex_profile_does_not_migrate_session_material_with_symlin
     runtime_home = Path(profile.runtime_home or '')
     assert legacy_session.is_file()
     assert not (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').exists()
-    events = [
-        json.loads(line)
-        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
-        if line.strip()
-    ]
-    assert events[-1]['event_type'] == 'codex_profile_migration'
-    assert events[-1]['status'] == 'skipped'
-    assert events[-1]['reason'] == 'legacy_home_contains_symlink'
+    event = _latest_agent_event(layout, 'agent1', 'codex_profile_migration')
+    assert event['status'] == 'skipped'
+    assert event['reason'] == 'legacy_home_contains_symlink'
 
 
 def test_materialize_codex_profile_does_not_migrate_when_agent_runtime_is_active(
@@ -944,14 +1079,9 @@ def test_materialize_codex_profile_does_not_migrate_when_agent_runtime_is_active
     runtime_home = Path(profile.runtime_home or '')
     assert legacy_session.is_file()
     assert not (runtime_home / 'sessions' / '2026' / '05' / '10' / 'legacy.jsonl').exists()
-    events = [
-        json.loads(line)
-        for line in layout.agent_events_path('agent1').read_text(encoding='utf-8').splitlines()
-        if line.strip()
-    ]
-    assert events[-1]['event_type'] == 'codex_profile_migration'
-    assert events[-1]['status'] == 'skipped'
-    assert events[-1]['reason'] == 'agent_runtime_active'
+    event = _latest_agent_event(layout, 'agent1', 'codex_profile_migration')
+    assert event['status'] == 'skipped'
+    assert event['reason'] == 'agent_runtime_active'
 
 
 def test_materialize_codex_profile_migrates_with_stale_idle_runtime_record(
@@ -1514,6 +1644,166 @@ def test_materialize_claude_home_config_refreshes_login_metadata_without_replaci
     assert 'primaryApiKey' not in payload
 
 
+def test_materialize_claude_home_config_projects_mcp_config_into_managed_workspace(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    project_root = tmp_path / 'repo'
+    workspace = project_root / '.ccb' / 'workspaces' / 'clauder'
+    source_trust = source_home / '.claude.json'
+    target_trust = target_home / '.claude.json'
+    source_trust.parent.mkdir(parents=True, exist_ok=True)
+    target_trust.parent.mkdir(parents=True, exist_ok=True)
+    project_root.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
+    source_project_key = str(project_root.resolve())
+    target_project_key = str(workspace.resolve())
+    source_trust.write_text(
+        json.dumps(
+            {
+                'mcpServers': {
+                    'global-tool': {
+                        'command': 'global-mcp',
+                        'args': ['serve'],
+                        'env': {'GLOBAL_TOKEN': 'secret-value'},
+                    },
+                },
+                'projects': {
+                    source_project_key: {
+                        'mcpServers': {
+                            'project-tool': {
+                                'command': 'project-mcp',
+                                'args': ['--stdio'],
+                            },
+                        },
+                        'enabledMcpjsonServers': ['project-tool'],
+                        'disabledMcpjsonServers': ['disabled-json-tool'],
+                        'disabledMcpServers': ['disabled-native-tool'],
+                        'mcpContextUris': ['mcp://project-context'],
+                        'allowedTools': ['must-not-project'],
+                    },
+                    '/unrelated/workspace': {
+                        'mcpServers': {
+                            'unrelated-tool': {'command': 'must-not-project'},
+                        },
+                    },
+                },
+                'primaryApiKey': 'must-not-project',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_trust.write_text(
+        json.dumps(
+            {
+                target_project_key: {
+                    'hasTrustDialogAccepted': True,
+                    'mcpServers': {'stale-tool': {'command': 'stale'}},
+                },
+                'projects': {
+                    target_project_key: {
+                        'hasTrustDialogAccepted': True,
+                        'mcpServers': {'stale-tool': {'command': 'stale'}},
+                    },
+                },
+                'primaryApiKey': 'stale-key',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        source_home=source_home,
+        project_root=project_root,
+        workspace_path=workspace,
+    )
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert payload['mcpServers']['global-tool']['command'] == 'global-mcp'
+    assert payload['mcpServers']['global-tool']['env'] == {'GLOBAL_TOKEN': 'secret-value'}
+    assert payload['projects'][target_project_key]['hasTrustDialogAccepted'] is True
+    assert payload['projects'][target_project_key]['mcpServers']['project-tool']['command'] == 'project-mcp'
+    assert payload['projects'][target_project_key]['enabledMcpjsonServers'] == ['project-tool']
+    assert payload['projects'][target_project_key]['disabledMcpjsonServers'] == ['disabled-json-tool']
+    assert payload['projects'][target_project_key]['disabledMcpServers'] == ['disabled-native-tool']
+    assert payload['projects'][target_project_key]['mcpContextUris'] == ['mcp://project-context']
+    assert payload[target_project_key]['mcpServers']['project-tool']['command'] == 'project-mcp'
+    assert 'allowedTools' not in payload['projects'][target_project_key]
+    assert 'stale-tool' not in payload['projects'][target_project_key]['mcpServers']
+    assert source_project_key not in payload['projects']
+    assert '/unrelated/workspace' not in payload['projects']
+    assert 'primaryApiKey' not in payload
+
+
+def test_materialize_claude_home_config_strips_mcp_config_when_config_not_inherited(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    workspace = tmp_path / 'repo' / '.ccb' / 'workspaces' / 'clauder'
+    source_trust = source_home / '.claude.json'
+    target_trust = target_home / '.claude.json'
+    source_trust.parent.mkdir(parents=True, exist_ok=True)
+    target_trust.parent.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
+    target_project_key = str(workspace.resolve())
+    source_trust.write_text(
+        json.dumps(
+            {
+                'mcpServers': {'global-tool': {'command': 'global-mcp'}},
+                'projects': {
+                    target_project_key: {
+                        'mcpServers': {'project-tool': {'command': 'project-mcp'}},
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_trust.write_text(
+        json.dumps(
+            {
+                'mcpServers': {'stale-global': {'command': 'stale'}},
+                target_project_key: {
+                    'hasTrustDialogAccepted': True,
+                    'mcpServers': {'stale-project': {'command': 'stale'}},
+                },
+                'projects': {
+                    target_project_key: {
+                        'hasTrustDialogAccepted': True,
+                        'mcpServers': {'stale-project': {'command': 'stale'}},
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_config=False),
+        source_home=source_home,
+        workspace_path=workspace,
+    )
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert 'mcpServers' not in payload
+    assert payload[target_project_key]['hasTrustDialogAccepted'] is True
+    assert 'mcpServers' not in payload[target_project_key]
+    assert payload['projects'][target_project_key]['hasTrustDialogAccepted'] is True
+    assert 'mcpServers' not in payload['projects'][target_project_key]
+
+
 def test_materialize_claude_home_config_strips_login_metadata_when_auth_not_inherited(
     tmp_path: Path,
 ) -> None:
@@ -1824,6 +2114,63 @@ def test_materialize_claude_home_config_preserves_runtime_hooks_and_permissions(
     assert payload['permissions']['allow'] == ['Bash(ls)']
 
 
+def test_materialize_claude_home_config_merges_source_and_managed_hooks(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'Stop': [
+                        {'hooks': [{'type': 'command', 'command': 'echo source-stop'}]},
+                    ],
+                    'UserPromptSubmit': [
+                        {'hooks': [{'type': 'command', 'command': 'echo source-prompt'}]},
+                    ],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'Stop': [
+                        {'hooks': [{'type': 'command', 'command': 'echo source-stop'}]},
+                        {'hooks': [{'type': 'command', 'command': 'echo managed-stop'}]},
+                    ],
+                    'PostToolUse': [
+                        {'hooks': [{'type': 'command', 'command': 'echo managed-post'}]},
+                    ],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    stop_commands = [
+        hook['command']
+        for group in payload['hooks']['Stop']
+        for hook in group.get('hooks', [])
+        if isinstance(hook, dict)
+    ]
+    assert stop_commands == ['echo source-stop', 'echo managed-stop']
+    assert payload['hooks']['UserPromptSubmit'][0]['hooks'][0]['command'] == 'echo source-prompt'
+    assert payload['hooks']['PostToolUse'][0]['hooks'][0]['command'] == 'echo managed-post'
+
+
 def test_materialize_claude_home_config_refreshes_ccb_only_permissions_for_auto_permission(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
@@ -1996,6 +2343,49 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
 
 
+def test_materialize_claude_home_config_merges_profile_mcp_server_overrides(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / '.claude.json').write_text(
+        json.dumps(
+            {
+                'mcpServers': {
+                    'agentmemory': {'command': 'agentmemory-old'},
+                    'browser-use': {'command': 'browser-use'},
+                    'playwright': {'command': 'playwright'},
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(
+            inherit_memory=False,
+            mcp_servers={
+                'agentmemory': {'command': 'agentmemory-new', 'env': {'AGENTMEMORY_URL': 'http://localhost:3111'}},
+                'browser-use': {'enabled': False},
+                'codegraph': {'command': 'codegraph-mcp'},
+                'playwright': {'enabled': False},
+            },
+        ),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    servers = payload['mcpServers']
+    assert sorted(servers) == ['agentmemory', 'codegraph']
+    assert servers['agentmemory'] == {
+        'command': 'agentmemory-new',
+        'env': {'AGENTMEMORY_URL': 'http://localhost:3111'},
+    }
+    assert servers['codegraph'] == {'command': 'codegraph-mcp'}
+
+
 def test_materialize_claude_home_config_skips_memory_without_project_context(tmp_path: Path) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
@@ -2064,6 +2454,39 @@ def test_materialize_codex_home_config_writes_project_memory_bundle(tmp_path: Pa
     assert 'project codex memory' not in text
     assert '## Agent Private Memory' in text
     assert 'agent1 private memory' in text
+
+
+def test_materialize_codex_provider_profile_writes_project_memory_bundle(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    source_home = tmp_path / 'system-codex-home'
+    source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'AGENTS.md').write_text('user codex memory\n', encoding='utf-8')
+    monkeypatch.setenv('CODEX_HOME', str(source_home))
+    _write_project_memory(project_root, 'shared profile memory\n')
+
+    layout = PathLayout(project_root)
+    profile = materialize_provider_profile(
+        layout=layout,
+        spec=_spec('agent1'),
+        workspace_path=project_root,
+    )
+
+    target_home = Path(str(profile.runtime_home))
+    text = (target_home / 'AGENTS.md').read_text(encoding='utf-8')
+    assert 'agent: agent1' in text
+    assert 'user codex memory' in text
+    assert 'shared profile memory' in text
+    marker = json.loads(
+        (layout.agent_provider_runtime_dir('agent1', 'codex') / 'codex-memory-projection.json').read_text(
+            encoding='utf-8'
+        )
+    )
+    assert marker['status'] == 'ok'
+    assert marker['reason'] == 'written'
+    assert marker['sha256']
 
 
 def test_materialize_codex_home_config_respects_inherit_memory_flag(tmp_path: Path) -> None:
@@ -2234,6 +2657,54 @@ def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_lo
     assert payload['theme'] == 'light'
     assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
     assert payload['permissions']['allow'] == ['Bash(ls)']
+
+
+def test_materialize_claude_home_config_preserves_existing_enabled_plugins(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'enabledPlugins': {
+                    'source-plugin@marketplace': True,
+                    'typescript-lsp@claude-plugins-official': False,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    target_settings = target_home / '.claude' / 'settings.json'
+    target_settings.parent.mkdir(parents=True, exist_ok=True)
+    target_settings.write_text(
+        json.dumps(
+            {
+                'enabledPlugins': {
+                    'local-only@marketplace': True,
+                    'typescript-lsp@claude-plugins-official': True,
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(
+        target_home,
+        profile=ProviderProfileSpec(inherit_memory=False),
+        source_home=source_home,
+    )
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['enabledPlugins'] == {
+        'local-only@marketplace': True,
+        'source-plugin@marketplace': True,
+        'typescript-lsp@claude-plugins-official': False,
+    }
 
 
 def test_materialize_claude_home_config_refreshes_source_auth_over_managed_auth(tmp_path: Path) -> None:

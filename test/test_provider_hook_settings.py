@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -201,6 +202,116 @@ def test_prepare_provider_workspace_materializes_claude_settings_before_hooks(tm
     assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
     assert payload['theme'] == 'light'
     assert payload['hooks']['Stop'][0]['hooks'][0]['command']
+    assert not (workspace / '.claude').exists()
+
+
+def test_prepare_provider_workspace_materializes_claude_mcp_from_source_home(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / '.ccb' / 'workspaces' / 'clauder'
+    system_home = tmp_path / 'system-home'
+    system_settings = system_home / '.claude' / 'settings.json'
+    system_trust = system_home / '.claude.json'
+    system_settings.parent.mkdir(parents=True, exist_ok=True)
+    system_settings.write_text(json.dumps({'theme': 'light'}, ensure_ascii=False, indent=2), encoding='utf-8')
+    project_root.mkdir(parents=True, exist_ok=True)
+    workspace.mkdir(parents=True, exist_ok=True)
+    source_project_key = str(project_root.resolve())
+    target_project_key = str(workspace.resolve())
+    system_trust.write_text(
+        json.dumps(
+            {
+                'mcpServers': {'global-tool': {'command': 'global-mcp'}},
+                'projects': {
+                    source_project_key: {
+                        'mcpServers': {'project-tool': {'command': 'project-mcp'}},
+                        'enabledMcpjsonServers': ['project-tool'],
+                    },
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+
+    prepare_provider_workspace(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1'),
+        workspace_path=workspace,
+        completion_dir=project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'claude' / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    trust_path = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'claude' / 'home' / '.claude.json'
+    payload = json.loads(trust_path.read_text(encoding='utf-8'))
+    assert payload['mcpServers']['global-tool']['command'] == 'global-mcp'
+    assert payload['projects'][target_project_key]['mcpServers']['project-tool']['command'] == 'project-mcp'
+    assert payload['projects'][target_project_key]['enabledMcpjsonServers'] == ['project-tool']
+    assert source_project_key not in payload['projects']
+    assert not (workspace / '.claude').exists()
+
+
+def test_prepare_provider_workspace_inherits_claude_hooks_from_source_home(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    system_settings = system_home / '.claude' / 'settings.json'
+    system_settings.parent.mkdir(parents=True, exist_ok=True)
+    system_settings.write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'Stop': [
+                        {'hooks': [{'type': 'command', 'command': 'echo source-stop-hook'}]},
+                    ],
+                    'UserPromptSubmit': [
+                        {'hooks': [{'type': 'command', 'command': 'echo source-prompt-hook'}]},
+                    ],
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    monkeypatch.setenv('HOME', str(system_home))
+
+    prepare_provider_workspace(
+        layout=PathLayout(project_root),
+        spec=_spec('agent1'),
+        workspace_path=workspace,
+        completion_dir=project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'claude' / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    settings_path = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'claude' / 'home' / '.claude' / 'settings.json'
+    payload = json.loads(settings_path.read_text(encoding='utf-8'))
+    stop_commands = [
+        hook['command']
+        for group in payload['hooks']['Stop']
+        for hook in group.get('hooks', [])
+        if isinstance(hook, dict)
+    ]
+    prompt_commands = [
+        hook['command']
+        for group in payload['hooks']['UserPromptSubmit']
+        for hook in group.get('hooks', [])
+        if isinstance(hook, dict)
+    ]
+    assert 'echo source-stop-hook' in stop_commands
+    assert any('ccb-provider-finish-hook' in command for command in stop_commands)
+    assert any('ccb-provider-activity-hook' in command for command in stop_commands)
+    assert 'echo source-prompt-hook' in prompt_commands
+    assert any('ccb-provider-activity-hook' in command for command in prompt_commands)
     assert not (workspace / '.claude').exists()
 
 
@@ -566,11 +677,199 @@ def test_prepare_provider_workspace_preserves_allowed_codex_hindsight_hooks(
     assert any('ccb-provider-activity-hook' in command for command in user_prompt_commands)
     assert any('.hindsight/codex/scripts/recall.py' in command for command in user_prompt_commands)
     assert not any('unmanaged-root-hook' in command for commands in hooks_payload['hooks'].values() for group in commands for command in [group['hooks'][0]['command']])
+    session_start_handlers = [
+        hook
+        for group in hooks_payload['hooks']['SessionStart']
+        for hook in group['hooks']
+        if '.hindsight/codex/scripts/session_start.py' in str(hook.get('command') or '')
+    ]
+    stop_handlers = [
+        hook
+        for group in hooks_payload['hooks']['Stop']
+        for hook in group['hooks']
+        if '.hindsight/codex/scripts/retain.py' in str(hook.get('command') or '')
+    ]
+    assert session_start_handlers[0]['timeout'] == 5
+    assert stop_handlers[0]['timeout'] == 30
 
     config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
     state = config['hooks']['state']
     assert any(key.endswith(':user_prompt_submit:1:0') for key in state)
     assert len(state) == 9
+
+
+def test_prepare_provider_workspace_preserves_omx_native_codex_hooks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    system_codex = system_home / '.codex'
+    system_codex.mkdir(parents=True, exist_ok=True)
+    (system_codex / 'AGENTS.md').write_text('system codex memory\n', encoding='utf-8')
+    (system_codex / 'config.toml').write_text('model = "gpt-test"\n', encoding='utf-8')
+    omx_command = '"/usr/bin/node" "/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js"'
+    (system_codex / 'hooks.json').write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'SessionStart': [{'matcher': 'startup|resume|clear', 'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PreToolUse': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PostToolUse': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PreCompact': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PostCompact': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'Stop': [{'hooks': [{'type': 'command', 'command': omx_command, 'timeout': 30}]}],
+                    'Notification': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                }
+            },
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    project_root.mkdir(parents=True, exist_ok=True)
+    _write_project_memory(project_root, 'shared ccb memory\n')
+    monkeypatch.setenv('CODEX_HOME', str(system_codex))
+    layout = PathLayout(project_root)
+    runtime_dir = layout.agent_provider_runtime_dir('agent1', 'codex')
+
+    prepare_provider_workspace(
+        layout=layout,
+        spec=_spec('agent1', provider='codex'),
+        workspace_path=workspace,
+        completion_dir=runtime_dir / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    codex_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    hooks_payload = json.loads((codex_home / 'hooks.json').read_text(encoding='utf-8'))
+    all_commands = [
+        str(hook.get('command') or '')
+        for commands in hooks_payload['hooks'].values()
+        for group in commands
+        for hook in group.get('hooks', [])
+    ]
+
+    assert any('ccb-provider-activity-hook' in command for command in all_commands)
+    assert sum('codex-native-hook.js' in command for command in all_commands) == 7
+    assert 'Notification' not in hooks_payload['hooks']
+
+    config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
+    state = config['hooks']['state']
+    hooks_path = codex_home / 'hooks.json'
+    assert f'{hooks_path}:session_start:1:0' in state
+    assert f'{hooks_path}:user_prompt_submit:1:0' in state
+    assert f'{hooks_path}:pre_tool_use:1:0' in state
+    assert f'{hooks_path}:post_tool_use:1:0' in state
+    assert f'{hooks_path}:pre_compact:0:0' in state
+    assert f'{hooks_path}:post_compact:0:0' in state
+    assert f'{hooks_path}:stop:1:0' in state
+    assert len(state) == 13
+
+    identity = {
+        'event_name': 'user_prompt_submit',
+        'hooks': [
+            {
+                'async': False,
+                'command': omx_command,
+                'timeout': 600,
+                'type': 'command',
+            }
+        ],
+    }
+    expected_hash = 'sha256:' + hashlib.sha256(
+        json.dumps(identity, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode('utf-8')
+    ).hexdigest()
+    assert state[f'{hooks_path}:user_prompt_submit:1:0']['trusted_hash'] == expected_hash
+
+
+def test_prepare_provider_workspace_preserves_configured_codex_command_hooks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    workspace = project_root / 'workspace'
+    system_home = tmp_path / 'system-home'
+    system_codex = system_home / '.codex'
+    generic_hook_root = tmp_path / 'generic-hooks'
+    system_codex.mkdir(parents=True, exist_ok=True)
+    generic_hook_root.mkdir(parents=True, exist_ok=True)
+    (system_codex / 'AGENTS.md').write_text('system codex memory\n', encoding='utf-8')
+    (system_codex / 'config.toml').write_text('model = "gpt-test"\n', encoding='utf-8')
+    (system_codex / 'hooks.json').write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'UserPromptSubmit': [
+                        {'hooks': [{'type': 'command', 'command': f'{generic_hook_root / "recall.sh"}', 'timeout': 19}]},
+                        {'hooks': [{'type': 'command', 'command': 'echo unmanaged-root-hook'}]},
+                    ],
+                    'Stop': [
+                        {'hooks': [{'type': 'command', 'command': f'{generic_hook_root / "retain.sh"}', 'timeout': 31}]}
+                    ],
+                    'PreToolUse': [
+                        {'hooks': [{'type': 'command', 'command': f'{generic_hook_root / "pre.sh"}', 'timeout': 7}]}
+                    ],
+                }
+            },
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    project_root.mkdir(parents=True, exist_ok=True)
+    _write_project_memory(project_root, 'shared ccb memory\n')
+    monkeypatch.setenv('CODEX_HOME', str(system_codex))
+    monkeypatch.setenv('CCB_CODEX_INHERITED_COMMAND_HOOK_MARKERS', str(generic_hook_root))
+    layout = PathLayout(project_root)
+    runtime_dir = layout.agent_provider_runtime_dir('agent1', 'codex')
+
+    prepare_provider_workspace(
+        layout=layout,
+        spec=_spec('agent1', provider='codex'),
+        workspace_path=workspace,
+        completion_dir=runtime_dir / 'completion',
+        agent_name='agent1',
+        refresh_profile=True,
+    )
+
+    codex_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
+    hooks_payload = json.loads((codex_home / 'hooks.json').read_text(encoding='utf-8'))
+    user_prompt_handlers = [
+        hook
+        for group in hooks_payload['hooks']['UserPromptSubmit']
+        for hook in group['hooks']
+    ]
+    stop_handlers = [
+        hook
+        for group in hooks_payload['hooks']['Stop']
+        for hook in group['hooks']
+    ]
+    all_commands = [
+        str(hook.get('command') or '')
+        for commands in hooks_payload['hooks'].values()
+        for group in commands
+        for hook in group.get('hooks', [])
+    ]
+
+    assert any('ccb-provider-activity-hook' in command for command in all_commands)
+    assert any(
+        str(generic_hook_root / 'recall.sh') == str(hook.get('command') or '') and hook['timeout'] == 19
+        for hook in user_prompt_handlers
+    )
+    assert any(
+        str(generic_hook_root / 'retain.sh') == str(hook.get('command') or '') and hook['timeout'] == 31
+        for hook in stop_handlers
+    )
+    assert 'echo unmanaged-root-hook' not in all_commands
+    assert str(generic_hook_root / 'pre.sh') not in all_commands
+
+    config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
+    state = config['hooks']['state']
+    assert any(key.endswith(':user_prompt_submit:1:0') for key in state)
+    assert any(key.endswith(':stop:1:0') for key in state)
+    assert len(state) == 8
 
 
 def test_prepare_provider_workspace_respects_codex_explicit_runtime_home(

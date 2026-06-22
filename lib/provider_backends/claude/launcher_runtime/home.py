@@ -29,7 +29,7 @@ from storage.atomic import atomic_write_text
 from ..home_layout import ClaudeHomeLayout, claude_layout_for_home, claude_layout_from_session_data
 from .session_paths import read_session_payload, session_file_for_runtime_dir, state_dir_for_runtime_dir
 
-_CLAUDE_RUNTIME_SETTINGS_KEYS = ('hooks', 'permissions')
+_CLAUDE_RUNTIME_SETTINGS_KEYS = ('enabledPlugins', 'hooks', 'permissions')
 _CLAUDE_CCB_PERMISSION_PREFIX = 'Bash(ccb '
 _CLAUDE_AUTH_ENV_KEYS = ('ANTHROPIC_AUTH_TOKEN',)
 _CLAUDE_API_AUTH_ENV_KEYS = ('ANTHROPIC_API_KEY',)
@@ -42,6 +42,14 @@ _CLAUDE_JSON_AUTH_COMPANION_KEYS = (
     'lastOnboardingVersion',
     'hasAvailableSubscription',
     'subscriptionNoticeCount',
+)
+_CLAUDE_JSON_MCP_ROOT_KEYS = ('mcpServers',)
+_CLAUDE_JSON_MCP_PROJECT_KEYS = (
+    'mcpServers',
+    'enabledMcpjsonServers',
+    'disabledMcpjsonServers',
+    'disabledMcpServers',
+    'mcpContextUris',
 )
 _MACOS_KEYCHAIN_CLAUDE_SERVICES = ('Claude Code-credentials', 'Claude Code-custom-oauth', 'Claude Code')
 _CLAUDE_SKILLS_PROJECTION_LABEL = 'claude-inherited-skills'
@@ -216,7 +224,13 @@ def _prepare_managed_home(
     _materialize_settings(source_home, target_layout, profile=profile, auto_permission=auto_permission)
     _materialize_macos_keychain_preferences(source_home, target_layout, profile=profile)
     _materialize_auth(source_home, target_layout, profile=profile)
-    _materialize_trust(source_home, target_layout, profile=profile)
+    _materialize_trust(
+        source_home,
+        target_layout,
+        profile=profile,
+        project_root=project_root,
+        workspace_path=workspace_path,
+    )
     return _materialize_inherited_assets(
         source_home,
         target_layout,
@@ -379,13 +393,22 @@ def _materialize_settings(
     )
 
 
-def _materialize_trust(source_home: Path, target_layout: ClaudeHomeLayout, *, profile) -> None:
+def _materialize_trust(
+    source_home: Path,
+    target_layout: ClaudeHomeLayout,
+    *,
+    profile,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> None:
     source_trust = source_home / '.claude.json'
     if source_trust.is_file():
         merged = _projected_claude_json_payload(
             _read_json_object(source_trust),
             existing=_read_json_object(target_layout.trust_path),
             profile=profile,
+            project_root=project_root,
+            workspace_path=workspace_path,
         )
         _write_json_object(target_layout.trust_path, merged)
     _ensure_trust_file(target_layout.trust_path)
@@ -450,10 +473,29 @@ def _projected_claude_json_payload(
     *,
     existing: dict[str, object],
     profile=None,
+    project_root: Path | None = None,
+    workspace_path: Path | None = None,
 ) -> dict[str, object]:
     merged = dict(existing or {})
     for key in _CLAUDE_JSON_AUTH_SECRET_KEYS:
         merged.pop(key, None)
+
+    if _inherits_config(profile):
+        _project_claude_mcp_config(
+            source_payload,
+            merged,
+            project_root=project_root,
+            workspace_path=workspace_path,
+        )
+    else:
+        _strip_claude_mcp_config(
+            merged,
+            project_root=project_root,
+            workspace_path=workspace_path,
+        )
+
+    _merge_profile_mcp_servers(merged, profile=profile)
+
     if not _inherits_auth(profile):
         for key in _CLAUDE_JSON_AUTH_METADATA_KEYS:
             merged.pop(key, None)
@@ -461,8 +503,211 @@ def _projected_claude_json_payload(
 
     for key in (*_CLAUDE_JSON_AUTH_METADATA_KEYS, *_CLAUDE_JSON_AUTH_COMPANION_KEYS):
         if key in source_payload:
-            merged[key] = source_payload[key]
+            merged[key] = _clone_jsonish(source_payload[key])
     return merged
+
+
+def _project_claude_mcp_config(
+    source_payload: dict[str, object],
+    merged: dict[str, object],
+    *,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> None:
+    for key in _CLAUDE_JSON_MCP_ROOT_KEYS:
+        value = source_payload.get(key)
+        if isinstance(value, dict):
+            merged[key] = _clone_jsonish(value)
+        else:
+            merged.pop(key, None)
+
+    target_key = _claude_project_target_key(project_root=project_root, workspace_path=workspace_path)
+    if not target_key:
+        return
+
+    selected = _selected_source_project_mcp_config(
+        source_payload,
+        project_root=project_root,
+        workspace_path=workspace_path,
+    )
+    _refresh_project_mcp_record(merged, target_key=target_key, selected=selected)
+
+
+def _merge_profile_mcp_servers(merged: dict[str, object], *, profile) -> None:
+    profile_servers = _profile_mcp_servers(profile)
+    if not profile_servers:
+        return
+
+    existing = merged.get('mcpServers')
+    servers = dict(existing) if isinstance(existing, dict) else {}
+    for raw_name, raw_config in profile_servers.items():
+        name = str(raw_name or '').strip()
+        if not name:
+            continue
+        if _mcp_server_disabled(raw_config):
+            servers.pop(name, None)
+            continue
+        payload = _clone_jsonish(raw_config)
+        if not isinstance(payload, dict):
+            continue
+        payload.pop('enabled', None)
+        servers[name] = payload
+
+    if servers:
+        merged['mcpServers'] = servers
+    else:
+        merged.pop('mcpServers', None)
+
+
+def _profile_mcp_servers(profile) -> dict[str, object]:
+    if profile is None:
+        return {}
+    raw = getattr(profile, 'mcp_servers', None)
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _mcp_server_disabled(value: object) -> bool:
+    return isinstance(value, dict) and value.get('enabled') is False
+
+
+def _strip_claude_mcp_config(
+    merged: dict[str, object],
+    *,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> None:
+    for key in _CLAUDE_JSON_MCP_ROOT_KEYS:
+        merged.pop(key, None)
+    target_key = _claude_project_target_key(project_root=project_root, workspace_path=workspace_path)
+    if target_key:
+        _refresh_project_mcp_record(merged, target_key=target_key, selected={})
+
+
+def _selected_source_project_mcp_config(
+    source_payload: dict[str, object],
+    *,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> dict[str, object]:
+    for key in _claude_project_source_keys(project_root=project_root, workspace_path=workspace_path):
+        selected: dict[str, object] = {}
+        for record in _source_project_records(source_payload, key):
+            for mcp_key in _CLAUDE_JSON_MCP_PROJECT_KEYS:
+                if mcp_key in record:
+                    selected[mcp_key] = _clone_jsonish(record[mcp_key])
+        if selected:
+            return selected
+    return {}
+
+
+def _refresh_project_mcp_record(
+    merged: dict[str, object],
+    *,
+    target_key: str,
+    selected: dict[str, object],
+) -> None:
+    projects = merged.get('projects')
+    if not isinstance(projects, dict):
+        projects = {}
+    else:
+        projects = dict(projects)
+
+    project_record = _project_record_copy(projects.get(target_key))
+    top_record = _project_record_copy(merged.get(target_key))
+    _strip_project_mcp_keys(project_record)
+    _strip_project_mcp_keys(top_record)
+
+    for key, value in selected.items():
+        project_record[key] = _clone_jsonish(value)
+        top_record[key] = _clone_jsonish(value)
+
+    if project_record:
+        projects[target_key] = project_record
+    else:
+        projects.pop(target_key, None)
+
+    if projects:
+        merged['projects'] = projects
+    else:
+        merged.pop('projects', None)
+
+    if top_record:
+        merged[target_key] = top_record
+    else:
+        merged.pop(target_key, None)
+
+
+def _project_record_copy(value: object) -> dict[str, object]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _strip_project_mcp_keys(record: dict[str, object]) -> None:
+    for key in _CLAUDE_JSON_MCP_PROJECT_KEYS:
+        record.pop(key, None)
+
+
+def _source_project_records(source_payload: dict[str, object], key: str) -> tuple[dict[str, object], ...]:
+    records: list[dict[str, object]] = []
+    top_record = source_payload.get(key)
+    if isinstance(top_record, dict):
+        records.append(top_record)
+    projects = source_payload.get('projects')
+    if isinstance(projects, dict):
+        project_record = projects.get(key)
+        if isinstance(project_record, dict):
+            records.append(project_record)
+    return tuple(records)
+
+
+def _claude_project_target_key(
+    *,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> str | None:
+    for candidate in (workspace_path, project_root):
+        key = _claude_path_key(candidate)
+        if key:
+            return key
+    return None
+
+
+def _claude_project_source_keys(
+    *,
+    project_root: Path | None,
+    workspace_path: Path | None,
+) -> tuple[str, ...]:
+    keys: list[str] = []
+    for candidate in (workspace_path, project_root):
+        for key in _claude_path_key_candidates(candidate):
+            if key and key not in keys:
+                keys.append(key)
+    return tuple(keys)
+
+
+def _claude_path_key_candidates(value: Path | None) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    keys: list[str] = []
+    path = Path(value).expanduser()
+    for candidate in (path, _normalize_path(path)):
+        if candidate is None:
+            continue
+        key = str(candidate)
+        if key and key not in keys:
+            keys.append(key)
+    return tuple(keys)
+
+
+def _claude_path_key(value: Path | None) -> str | None:
+    candidates = _claude_path_key_candidates(value)
+    return candidates[-1] if candidates else None
+
+
+def _clone_jsonish(value: object) -> object:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    except Exception:
+        return value
 
 
 def _materialize_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None:
@@ -564,6 +809,20 @@ def _merge_settings_payload(
     for key in _CLAUDE_RUNTIME_SETTINGS_KEYS:
         value = existing_payload.get(key)
         if value is not None:
+            if key == 'enabledPlugins':
+                enabled_plugins = _merge_enabled_plugins_payload(projected_payload.get('enabledPlugins'), value)
+                if enabled_plugins:
+                    merged[key] = enabled_plugins
+                else:
+                    merged.pop(key, None)
+                continue
+            if key == 'hooks':
+                hooks = _merge_hooks_payload(projected_payload.get('hooks'), value)
+                if hooks:
+                    merged[key] = hooks
+                else:
+                    merged.pop(key, None)
+                continue
             if key == 'permissions' and auto_permission and _is_ccb_only_permission_payload(value):
                 continue
             merged[key] = value
@@ -573,6 +832,61 @@ def _merge_settings_payload(
     if projected is not None:
         return {}
     return None
+
+
+def _merge_enabled_plugins_payload(projected: object, existing: object) -> dict[str, object]:
+    existing_plugins = _settings_mapping_copy(existing)
+    projected_plugins = _settings_mapping_copy(projected)
+    if not existing_plugins:
+        return projected_plugins
+    if not projected_plugins:
+        return existing_plugins
+    merged = dict(existing_plugins)
+    merged.update(projected_plugins)
+    return merged
+
+
+def _merge_hooks_payload(projected: object, existing: object) -> dict[str, object]:
+    projected_hooks = _settings_mapping_copy(projected)
+    existing_hooks = _settings_mapping_copy(existing)
+    if not projected_hooks:
+        return existing_hooks
+    if not existing_hooks:
+        return projected_hooks
+
+    merged = dict(projected_hooks)
+    for event_name, existing_groups in existing_hooks.items():
+        projected_groups = merged.get(event_name)
+        if not isinstance(existing_groups, list):
+            if event_name not in merged:
+                merged[event_name] = _clone_jsonish(existing_groups)
+            continue
+        if not isinstance(projected_groups, list):
+            if event_name in merged:
+                continue
+            merged[event_name] = [_clone_jsonish(group) for group in existing_groups]
+            continue
+        fingerprints = {_json_fingerprint(group) for group in projected_groups}
+        groups = list(projected_groups)
+        for group in existing_groups:
+            fingerprint = _json_fingerprint(group)
+            if fingerprint in fingerprints:
+                continue
+            groups.append(_clone_jsonish(group))
+            fingerprints.add(fingerprint)
+        merged[event_name] = groups
+    return merged
+
+
+def _settings_mapping_copy(value: object) -> dict[str, object]:
+    return dict(_clone_jsonish(value)) if isinstance(value, dict) else {}
+
+
+def _json_fingerprint(value: object) -> str:
+    try:
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':'))
+    except Exception:
+        return repr(value)
 
 
 def _is_ccb_only_permission_payload(value: object) -> bool:

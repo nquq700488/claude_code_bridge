@@ -148,7 +148,16 @@ def _classify_claude_home(
 ) -> StorageEntry:
     name = remainder[-1]
     if name == '.claude.json':
-        return _entry(path, relative_path, StorageClass.SESSION, size, provider=provider, agent=agent, reason='claude_trust_authority', root_kind=root_kind)
+        return _entry(
+            path,
+            relative_path,
+            StorageClass.SECRET,
+            size,
+            provider=provider,
+            agent=agent,
+            reason='claude_trust_mcp_authority',
+            root_kind=root_kind,
+        )
     if remainder[:2] == ('Library', 'Keychains'):
         return _entry(path, relative_path, StorageClass.SECRET, size, provider=provider, agent=agent, reason='macos_keychain_link', root_kind=root_kind)
     if remainder[:3] == ('.local', 'share', 'claude') and len(remainder) >= 4 and remainder[3] == 'versions':

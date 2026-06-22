@@ -296,7 +296,8 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     )
     assert records['agents/agent1/provider-state/codex/home/.tmp/plugins.sha']['storage_class'] == 'startup_authority_bundle'
 
-    assert records['agents/agent2/provider-state/claude/home/.claude.json']['storage_class'] == 'session'
+    assert records['agents/agent2/provider-state/claude/home/.claude.json']['storage_class'] == 'secret'
+    assert records['agents/agent2/provider-state/claude/home/.claude.json']['reason'] == 'claude_trust_mcp_authority'
     assert records['agents/agent2/provider-state/claude/home/.claude/.credentials.json']['storage_class'] == 'secret'
     assert records['agents/agent2/provider-state/claude/home/.config/claude-code/auth.json']['storage_class'] == 'secret'
     if hasattr(os, 'symlink'):
