@@ -6,7 +6,7 @@
 **可见、可控的多 Agent 合作TUI工作台**
 
 <p>
-  <img src="https://img.shields.io/badge/version-7.6.12-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-7.6.15-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -31,7 +31,7 @@
 
 **中文** | [English](README.md)
 
-[快速开始](#快速开始) · [v7 界面](#v7-界面速览) · [Rich 模式](#rich-mode-new) · [配置团队](#配置-agent-团队) · [使用文档](docs/manuals/user-guide/) · [开发文档](docs/manuals/developer-guide/)
+[快速开始](#快速开始) · [v7 界面](#v7-界面速览) · [Rich 模式](#rich-mode-new) · [配置团队](#配置-agent-团队) · [Mobile Gateway Alpha](docs/mobile-cloudflare-alpha.zh.md) · [使用文档](docs/manuals/user-guide/) · [开发文档](docs/manuals/developer-guide/)
 
 <p align="center">
   <img src="assets/readme_v7/ccb-hero-zh.png" alt="CCB v7 可见多 Agent CLI 工作台" width="960">
@@ -148,8 +148,6 @@ review = "reviewer:claude, qa:gemini"
 mode = "every_window"
 width = "15%"
 bottom_height = 20
-
-[ui.sidebar.view]
 agents_height = "50%"
 comms_height = "15%"
 tips_height = "35%"
@@ -391,7 +389,7 @@ CCB 配置有三层，优先级从低到高：
 | window 分组 | `[windows]` | 把 agent 分到 `main`、`work`、`review`、`research` 等 tmux window。 |
 | agent 名称和 provider | `main:codex`、`reviewer:claude` | 名称用于界面、ask 路由和记忆文件；provider 决定启动哪家 CLI。 |
 | 工作区隔离 | `worker1:codex(worktree)` | 给实现类 agent 独立 git worktree，降低互相覆盖的风险。 |
-| sidebar 行为 | `[ui.sidebar]` | 控制 sidebar 是否每个 window 都显示、宽度和 Comms 高度。 |
+| sidebar 行为 | `[ui.sidebar]` | 控制 sidebar 是否每个 window 都显示、左右位置、宽度和 Comms 高度。 |
 | 工具 window | `[tool_windows.<name>]` | 添加 rich 富媒体工作台这类非 agent 托管 window；sidebar 只显示一行，不是 `ask` 目标。 |
 | 单 agent 模型/API | `[agents.<name>]` | 可为不同 agent 配 `model`、`key`、`url` 等。 |
 | Role Pack 绑定 | `agentroles.archi:codex` | 通过 window leaf 绑定可复用角色包；role 资产统一安装，再投影到解析出的 agent。 |
@@ -488,8 +486,6 @@ review = "reviewer:claude, qa:gemini"
 mode = "every_window"
 width = "15%"
 bottom_height = 20
-
-[ui.sidebar.view]
 agents_height = "50%"
 comms_height = "15%"
 tips_height = "35%"
@@ -698,6 +694,49 @@ v7 线重点：
 - 加固 tmux、Ghostty、release helper、Codex trust 和 provider 会话恢复路径。
 
 <details open>
+<summary><b>v7.6.15</b> - Codex 诊断与 Sidebar Focus 修复</summary>
+
+- managed Codex 默认把 `logs_2.sqlite` 诊断写入重定向到临时存储，并阻断
+  diagnostic log insert；diagnostics 模式可恢复原始数据库路径用于排查。
+- 如果临时 SQLite symlink 无法安装，会回退到 in-place diagnostic trigger
+  路径，避免启动失败。
+- 修复 sidebar 点击其他 tmux window 中 agent 的聚焦路径：先选择目标
+  window，再选择 pane；缺少 window 元数据时继续保留 pane id 兜底。
+
+</details>
+
+<details>
+<summary><b>v7.6.14</b> - Mobile Gateway Alpha 与 Codex 诊断治理</summary>
+
+- 新增 Mobile Gateway Alpha 能力：认证 pairing、focus routes、terminal
+  open/resume/history routes、websocket terminal frames、public route metadata
+  和设备撤销命令。
+- 新增 sidebar 右侧放置能力，并把 canonical `[ui.sidebar]` 渲染扁平化；
+  legacy `[ui.sidebar.view]` 输入继续兼容。
+- 支持多个本地 agent 共用同一个 Role Pack role id，不再被折叠成单一运行时身份。
+- 降低 Codex diagnostic SQLite 写盘抖动：默认过滤 TRACE/DEBUG 日志行并保留
+  INFO/ERROR；设置 `CCB_CODEX_DIAGNOSTIC_LOGS=1` 可关闭过滤。
+
+</details>
+
+<details>
+<summary><b>v7.6.13</b> - Provider Profile Overlay 修复</summary>
+
+- Codex plugin override 现在按预期顺序解析：继承的 source config、
+  `provider_profile.plugins`，最后是
+  `CCB_CODEX_PLUGIN_OVERRIDES_JSON` / `CCB_CODEX_PLUGIN_OVERRIDES` 环境覆盖。
+- 没有继承 `config.toml` 的 Codex agent 现在也会把
+  `provider_profile.plugins` 写入 managed `config.toml`。
+- Claude `provider_profile.mcp_servers` 现在即使 source `.claude.json`
+  不存在也会生效，`enabled = false` 会清理 agent trust file 里的 stale
+  managed MCP server。
+- callback continuation 现在会保留明确的 upstream finalization target；
+  继承的 ask skills 也会提醒 agent 在 upstream 结果可用前不要提前回答
+  callback continuation。
+
+</details>
+
+<details>
 <summary><b>v7.6.12</b> - Claude MCP 与 Hook 继承</summary>
 
 - managed Claude agent 现在会从 source `.claude.json` 继承 Claude Code MCP
