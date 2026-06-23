@@ -15,7 +15,7 @@
 | **Kimi** | ❌ | ✅ |
 
 - **安装目录**：`~/.local/share/ccb`（官方默认是 `codex-dual`，已改为 `ccb`）
-- **源码位置**：`/Users/zhangtao/Documents/study/claude_code_bridge-6`
+- **源码位置**：`/Users/zhangtao/Documents/study/claude_code_bridge`
 
 ---
 
@@ -60,7 +60,7 @@ ccb
 
 ```bash
 # 进入当前项目（脚本模板所在位置）
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd /Users/zhangtao/Documents/study/claude_code_bridge
 
 # 安装脚本到目标项目（复制 start.sh / stop.sh / restart.sh）
 ./.ccb/install.sh /path/to/your-project --links
@@ -289,7 +289,7 @@ ccb ask claude "根据以下设计实现核心模块：\n[paste design]"
 ### 3.1 首次安装
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd /Users/zhangtao/Documents/study/claude_code_bridge
 bash install.sh install
 ```
 
@@ -298,7 +298,7 @@ bash install.sh install
 当你在源码目录修改了代码（如 `lib/provider_backends/mmx/`），不需要重新运行 `install.sh`，用同步脚本即可：
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd /Users/zhangtao/Documents/study/claude_code_bridge
 bash sync-to-install.sh
 ```
 
@@ -307,7 +307,7 @@ bash sync-to-install.sh
 ### 3.3 完全重装
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd /Users/zhangtao/Documents/study/claude_code_bridge
 bash install.sh uninstall
 CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 ```
@@ -384,7 +384,7 @@ mmx text chat --message "hello" --output json
 
 说明安装被官方版本覆盖了。重新安装此 Fork：
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd /Users/zhangtao/Documents/study/claude_code_bridge
 bash install.sh uninstall
 CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 ```
