@@ -11,6 +11,7 @@ from provider_execution.common import build_item, request_anchor_from_runtime_st
 
 from .event_reading import is_turn_boundary_event, read_events, terminal_api_error_payload
 from .hook_results import poll_exact_hook
+from .start import looks_claude_interrupted, looks_ready, send_prompt, state_session_path
 from .state_machine import (
     apply_session_rotation,
     build_poll_state,
@@ -19,7 +20,6 @@ from .state_machine import (
     handle_system_event,
     handle_user_event,
 )
-from .start import looks_ready, send_prompt, state_session_path
 
 
 def poll_submission(
@@ -57,10 +57,54 @@ def poll_submission(
     state = _poll_event_batches(submission, prepared.reader, poll, state=state, now=now)
     if isinstance(state, ProviderPollResult):
         return _merge_poll_result_items(state, prefix_items=dispatch_items)
+
+    # If the session event log produced no turn boundary, scan the tmux pane
+    # for a Claude content-safety interruption.  This interruption is NOT
+    # reflected in the event log — it only shows as pane text.
+    if not poll.reached_turn_boundary and poll.anchor_seen and not submission.runtime_state.get('claude_interruption_detected'):
+        _check_claude_pane_interruption(submission, poll, backend=prepared.backend, pane_id=prepared.pane_id, now=now)
+
     return _merge_poll_result_items(
         finalize_poll_result(submission, poll, state=state),
         prefix_items=dispatch_items,
     )
+
+
+def _check_claude_pane_interruption(
+    submission: ProviderSubmission,
+    poll,
+    *,
+    backend: object,
+    pane_id: str,
+    now: str,
+) -> None:
+    get_pane_content = getattr(backend, 'get_pane_content', None)
+    if not callable(get_pane_content) or not pane_id:
+        return
+    try:
+        text = str(get_pane_content(pane_id, lines=80) or '')
+    except Exception:
+        return
+    if not looks_claude_interrupted(text):
+        return
+
+    poll.items.append(
+        build_item(
+            submission,
+            kind=CompletionItemKind.TURN_ABORTED,
+            timestamp=now,
+            seq=poll.next_seq,
+            payload={
+                'reason': 'conversation_interrupted',
+                'status': 'cancelled',
+                'error_message': 'Claude content-safety guard interrupted the conversation.',
+                'last_agent_message': poll.reply_buffer or '',
+            },
+        )
+    )
+    poll.next_seq += 1
+    poll.reached_turn_boundary = True
+    submission.runtime_state['claude_interruption_detected'] = True
 
 
 def _prepare_submission_poll(

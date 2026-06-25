@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import time
 from pathlib import Path
 
@@ -78,6 +79,30 @@ def _has_prompt_line(text: str) -> bool:
         if not tail or tail.isspace():
             return True
     return False
+
+# Patterns that indicate Claude's conversation was interrupted by a content-
+# safety guard (most commonly via DeepSeek's Anthropic-compatible API).  The
+# guard drops Claude into an interactive prompt that CCB / tmux automation
+# cannot answer.  This is NOT controlled by --permission-mode.
+_CLAUDE_INTERRUPTED_PATTERNS = (
+    re.compile(r'Interrupted', re.IGNORECASE),
+    re.compile(r'What should Claude do instead', re.IGNORECASE),
+)
+
+
+def looks_claude_interrupted(text: str) -> bool:
+    """Check whether the Claude pane shows a content-safety interruption.
+
+    Typical banner::
+
+        ⎿ Interrupted · What should Claude do instead?
+    """
+    normalized = str(text or '')
+    if not normalized.strip():
+        return False
+    matches = sum(1 for p in _CLAUDE_INTERRUPTED_PATTERNS if p.search(normalized))
+    return matches >= 2
+
 
 def wait_for_runtime_ready(backend: object, pane_id: str, *, timeout_s: float = 8.0) -> None:
     get_pane_content = getattr(backend, "get_pane_content", None)
