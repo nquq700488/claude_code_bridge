@@ -1,0 +1,116 @@
+import 'package:flutter/material.dart';
+
+import '../../models/ccb_agent.dart';
+import '../../models/ccb_project_view.dart';
+import 'project_view_selection.dart';
+
+class WideAgentColumn extends StatelessWidget {
+  const WideAgentColumn({
+    required this.view,
+    required this.selectedAgentName,
+    this.onShowProjects,
+    required this.onAgentSelected,
+    super.key,
+  });
+
+  final CcbProjectView view;
+  final String? selectedAgentName;
+  final VoidCallback? onShowProjects;
+  final ValueChanged<CcbAgent> onAgentSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final windows = orderedWindowsForView(view);
+    return Padding(
+      key: const ValueKey('agent-secondary-list'),
+      padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          SizedBox(
+            height: 56,
+            child: Row(
+              children: [
+                Expanded(child: Text('Agents', style: textTheme.titleMedium)),
+                if (onShowProjects != null)
+                  IconButton(
+                    key: const ValueKey('wide-project-expand-action'),
+                    tooltip: 'Show projects',
+                    onPressed: onShowProjects,
+                    icon: const Icon(Icons.view_sidebar),
+                  ),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              children: [
+                for (final window in windows) ...[
+                  Padding(
+                    key: ValueKey('wide-window-group-${window.name}'),
+                    padding: const EdgeInsets.fromLTRB(12, 12, 12, 4),
+                    child: Text(
+                      window.label,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: textTheme.labelMedium?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                  for (final agent in agentsForWindow(view, window.name))
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 4),
+                      child: _WideAgentTile(
+                        agent: agent,
+                        selected: agent.name == selectedAgentName,
+                        onTap: () {
+                          onAgentSelected(agent);
+                        },
+                      ),
+                    ),
+                ],
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _WideAgentTile extends StatelessWidget {
+  const _WideAgentTile({
+    required this.agent,
+    required this.selected,
+    required this.onTap,
+  });
+
+  final CcbAgent agent;
+  final bool selected;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      key: ValueKey('agent-${agent.name}'),
+      selected: selected,
+      selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+      leading: Icon(
+        agent.active ? Icons.radio_button_checked : Icons.smart_toy,
+        size: 18,
+      ),
+      title: Text(agent.name, maxLines: 1, overflow: TextOverflow.ellipsis),
+      trailing:
+          agent.queueDepth <= 0
+              ? null
+              : Badge(
+                label: Text(agent.queueDepth.toString()),
+                child: const SizedBox.square(dimension: 18),
+              ),
+      onTap: onTap,
+    );
+  }
+}

@@ -2,8 +2,47 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .common import render_tmux_cleanup_summaries
+from .common import cleanup_csv, render_tmux_cleanup_summaries
 from .ops_views_common import binding_line
+
+
+def render_agent_lifecycle(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    lines = [
+        f'agent_lifecycle_status: {payload.get("agent_lifecycle_status", "unknown")}',
+        f'action: {payload.get("action", "")}',
+        f'project_id: {payload.get("project_id", "")}',
+    ]
+    agent = payload.get('agent')
+    if agent is not None:
+        lines.append(f'agent: {agent}')
+        lines.append(f'role: {payload.get("role", "")}')
+        lines.append(f'provider: {payload.get("provider", "")}')
+        lines.append(f'lifecycle_state: {payload.get("lifecycle_state", "")}')
+        lines.append(f'visibility_state: {payload.get("visibility_state", "")}')
+        if payload.get('resolved_window_name') is not None:
+            lines.append(f'resolved_window_name: {payload.get("resolved_window_name", "")}')
+        if payload.get('requested_policy') is not None:
+            lines.append(f'requested_policy: {payload.get("requested_policy", "")}')
+        if payload.get('resolved_policy') is not None:
+            lines.append(f'resolved_policy: {payload.get("resolved_policy", "")}')
+        if payload.get('state_path') is not None:
+            lines.append(f'state_path: {payload.get("state_path", "")}')
+        return tuple(lines)
+    lines.append(f'agent_count: {payload.get("agent_count", 0)}')
+    for record in tuple(payload.get('agents') or ()):
+        if not isinstance(record, Mapping):
+            continue
+        lines.append(
+            'agent: '
+            f'name={record.get("agent", "")} '
+            f'source={record.get("source", "")} '
+            f'role={record.get("role", "")} '
+            f'provider={record.get("provider", "")} '
+            f'lifecycle_state={record.get("lifecycle_state", "")} '
+            f'window={record.get("resolved_window_name", "")}'
+        )
+    return tuple(lines)
 
 
 def render_config_validate(summary) -> tuple[str, ...]:
@@ -49,8 +88,77 @@ def render_start(summary) -> tuple[str, ...]:
         reason = str(heartbeat.get('reason') or '').strip()
         if reason:
             lines.append(f'maintenance_heartbeat_reason: {reason}')
+    layout_summary = getattr(summary, 'layout_summary', None)
+    if isinstance(layout_summary, Mapping):
+        lines.extend(_render_start_layout_summary(layout_summary))
     lines.extend(render_tmux_cleanup_summaries(getattr(summary, 'cleanup_summaries', ()) or ()))
     return tuple(lines)
+
+
+def _render_start_layout_summary(payload: Mapping[str, object]) -> list[str]:
+    status = str(payload.get('layout_summary_status') or payload.get('layout_status') or 'unknown')
+    lines = [f'layout_summary_status: {status}']
+    if status == 'unavailable':
+        error_type = str(payload.get('error_type') or '').strip()
+        error = str(payload.get('error') or '').strip()
+        if error_type:
+            lines.append(f'layout_summary_error_type: {error_type}')
+        if error:
+            lines.append(f'layout_summary_error: {error}')
+        return lines
+    details = [
+        f'windows={_text(payload.get("window_count"), default="0")}',
+        f'panes={_text(payload.get("pane_count"), default="0")}',
+        f'runtime_panes={_text(payload.get("observed_pane_count"), default="0")}',
+        f'dynamic={_text(payload.get("dynamic_agent_count"), default="0")}',
+        f'loop={_text(payload.get("loop_agent_count"), default="0")}',
+        f'runtime={_text(payload.get("runtime_agent_count"), default="0")}',
+        f'explicit={str(bool(payload.get("windows_explicit"))).lower()}',
+        f'entry_window={_text(payload.get("entry_window"), default="-")}',
+        f'ccbd_state={_text(payload.get("ccbd_state"), default="unknown")}',
+        f'observe_status={_text(payload.get("observe_status"), default="unknown")}',
+    ]
+    observe_reason = str(payload.get('observe_reason') or '').strip()
+    if observe_reason:
+        details.append(f'observe_reason={observe_reason}')
+    lines.append('layout: ' + ' '.join(details))
+    for window in tuple(payload.get('windows') or ()):
+        if not isinstance(window, Mapping):
+            continue
+        lines.append(
+            'layout_window: '
+            f'name={_text(window.get("name"), default="-")} '
+            f'index={_text(window.get("index"), default="-")} '
+            f'panes={_text(window.get("pane_count"), default="0")} '
+            f'runtime_panes={_text(window.get("runtime_pane_count"), default="0")} '
+            f'agents={cleanup_csv(tuple(window.get("agent_names") or ()))}'
+        )
+        for agent in tuple(window.get('agents') or ()):
+            if isinstance(agent, Mapping):
+                lines.append(_render_start_layout_agent(agent))
+    return lines
+
+
+def _render_start_layout_agent(agent: Mapping[str, object]) -> str:
+    return (
+        'layout_agent: '
+        f'name={_text(agent.get("agent"), default="-")} '
+        f'kind={_text(agent.get("agent_kind"), default="-")} '
+        f'source={_text(agent.get("source"), default="-")} '
+        f'ownership={_text(agent.get("ownership_class"), default="-")} '
+        f'dispatch={_text(agent.get("dispatch_state"), default="-")} '
+        f'window={_text(agent.get("window_name"), default="-")} '
+        f'pane={_text(agent.get("pane_id"), default="-")} '
+        f'pane_identity={_text(agent.get("pane_identity_source"), default="-")} '
+        f'runtime_state={_text(agent.get("runtime_state"), default="-")} '
+        f'apply_status={_text(agent.get("apply_status"), default="-")} '
+        f'failed_apply={str(bool(agent.get("failed_apply"))).lower()}'
+    )
+
+
+def _text(value: object, *, default: str) -> str:
+    text = str(value or '').strip()
+    return text or default
 
 
 def render_logs(summary) -> tuple[str, ...]:
@@ -70,6 +178,276 @@ def render_logs(summary) -> tuple[str, ...]:
         lines.append(f'log: {entry.source} {entry.path}')
         for line in entry.lines:
             lines.append(f'log_line: {line}')
+    return tuple(lines)
+
+
+def render_loop_capacity(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    status = str(payload.get('loop_capacity_status') or 'unknown')
+    lines = [
+        f'loop_capacity_status: {status}',
+        f'loop_id: {payload.get("loop_id", "")}',
+        f'project_id: {payload.get("project_id", "")}',
+        f'agent_count: {payload.get("agent_count", 0)}',
+        f'state_path: {payload.get("state_path", "")}',
+        f'events_path: {payload.get("events_path", "")}',
+    ]
+    released_count = payload.get('released_count')
+    if released_count is not None:
+        lines.append(f'released_count: {released_count}')
+    for request in tuple(payload.get('requests') or ()):
+        if isinstance(request, Mapping):
+            lines.append(f'loop_capacity_request: profile={request.get("profile", "")} count={request.get("count", 0)}')
+    for agent in tuple(payload.get('agents') or ()):
+        if not isinstance(agent, Mapping):
+            continue
+        lines.append(
+            'loop_capacity_agent: '
+            f'name={agent.get("name", "")} '
+            f'profile={agent.get("profile", "")} '
+            f'role={agent.get("role", "")} '
+            f'provider={agent.get("provider", "")} '
+            f'state={agent.get("state", "")} '
+            f'node={agent.get("node_id", "")} '
+            f'window={agent.get("window_name", "")}'
+        )
+    return tuple(lines)
+
+
+def render_loop_run_once(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    agents = payload.get('agents') if isinstance(payload.get('agents'), Mapping) else {}
+    paths = payload.get('paths') if isinstance(payload.get('paths'), Mapping) else {}
+    capacity = payload.get('capacity') if isinstance(payload.get('capacity'), Mapping) else {}
+    release = capacity.get('release') if isinstance(capacity.get('release'), Mapping) else {}
+    lines = [
+        f'loop_run_status: {payload.get("loop_run_status", "unknown")}',
+        f'loop_id: {payload.get("loop_id", "")}',
+        f'project_id: {payload.get("project_id", "")}',
+        f'worker_agent: {agents.get("worker", "")}',
+        f'reviewer_agent: {agents.get("reviewer", "")}',
+        f'orchestrator: {agents.get("orchestrator", "")}',
+        f'round_checker: {agents.get("round_checker", "")}',
+    ]
+    for key, label in (
+        ('worker', 'worker_job'),
+        ('reviewer', 'reviewer_job'),
+        ('aggregation', 'aggregate_job'),
+        ('round_checker', 'round_checker_job'),
+    ):
+        item = payload.get(key)
+        if isinstance(item, Mapping):
+            lines.append(
+                f'{label}: {item.get("job_id", "")} '
+                f'target={item.get("target", "")} '
+                f'status={item.get("status", "")}'
+            )
+    lines.extend(
+        [
+            f'release_status: {release.get("loop_capacity_status", "")}',
+            f'retained_count: {release.get("retained_count", 0)}',
+            f'round_path: {paths.get("round", "")}',
+            f'asks_path: {paths.get("asks", "")}',
+            f'events_path: {paths.get("events", "")}',
+            f'breadcrumb_path: {paths.get("breadcrumb", "")}',
+        ]
+    )
+    return tuple(lines)
+
+
+def render_loop_runner(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    lines = [
+        f'loop_runner_status: {payload.get("loop_runner_status", "unknown")}',
+        f'action: {payload.get("action", "")}',
+        f'project_id: {payload.get("project_id", "")}',
+    ]
+    task_id = str(payload.get('task_id') or '').strip()
+    if task_id:
+        lines.extend(
+            [
+                f'task_id: {task_id}',
+                f'loop_id: {payload.get("loop_id", "")}',
+                f'round_result: {payload.get("round_result", "")}',
+                f'round_result_source: {payload.get("round_result_source", "")}',
+                f'task_status: {payload.get("task_status", "")}',
+                f'next_activation: {payload.get("next_activation", "")}',
+            ]
+        )
+    reason = str(payload.get('reason') or '').strip()
+    if reason:
+        lines.append(f'reason: {reason}')
+    return tuple(lines)
+
+
+def render_layout(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    lines = [
+        f'layout_status: {payload.get("layout_status", "unknown")}',
+        f'action: {payload.get("action", "")}',
+        f'project_id: {payload.get("project_id", "")}',
+        f'pane_count: {payload.get("pane_count", 0)}',
+        f'window_count: {payload.get("window_count", 0)}',
+    ]
+    if str(payload.get('action') or '') == 'resolve':
+        lines.extend(
+            [
+                f'agent: {payload.get("agent", "")}',
+                f'placement_mode: {payload.get("placement_mode", "")}',
+                f'resolved_window_name: {payload.get("resolved_window_name", "")}',
+                f'target_surface: {payload.get("target_surface", "")}',
+                f'target_window_exists: {payload.get("target_window_exists", "")}',
+                f'will_create_window: {payload.get("will_create_window", "")}',
+                f'target_window_pane_count: {payload.get("target_window_pane_count", 0)}',
+                f'addable: {payload.get("addable", "")}',
+            ]
+        )
+    if str(payload.get('action') or '') == 'move-plan':
+        lines.extend(
+            [
+                f'move_plan_status: {payload.get("move_plan_status", "")}',
+                f'agent: {payload.get("agent", "")}',
+                f'agent_source: {payload.get("agent_source", "")}',
+                f'placement_mode: {payload.get("placement_mode", "")}',
+                f'source_window_name: {payload.get("source_window_name", "")}',
+                f'target_window_name: {payload.get("target_window_name", "")}',
+                f'same_window: {payload.get("same_window", "")}',
+                f'will_create_window: {payload.get("will_create_window", "")}',
+                f'read_only: {payload.get("read_only", "")}',
+                f'mutation_performed: {payload.get("mutation_performed", "")}',
+                f'apply_command_supported: {payload.get("apply_command_supported", "")}',
+            ]
+        )
+    if str(payload.get('action') or '') == 'arrange':
+        lines.extend(
+            [
+                f'arrange_status: {payload.get("arrange_status", "")}',
+                f'window_name: {payload.get("window_name", "")}',
+                f'reflowed_windows: {", ".join(str(item) for item in tuple(payload.get("reflowed_windows") or ()))}',
+            ]
+        )
+        reflow_errors = payload.get('reflow_errors') if isinstance(payload.get('reflow_errors'), Mapping) else {}
+        for window_name, error in reflow_errors.items():
+            lines.append(f'reflow_error: window={window_name} error={error}')
+    if str(payload.get('action') or '') == 'status':
+        lines.extend(
+            [
+                f'ccbd_state: {payload.get("ccbd_state", "")}',
+                f'windows_explicit: {payload.get("windows_explicit", "")}',
+                f'entry_window: {payload.get("entry_window", "")}',
+                f'dynamic_agent_count: {payload.get("dynamic_agent_count", 0)}',
+                f'loop_agent_count: {payload.get("loop_agent_count", 0)}',
+                f'runtime_agent_count: {payload.get("runtime_agent_count", 0)}',
+            ]
+        )
+        namespace = payload.get('namespace') if isinstance(payload.get('namespace'), Mapping) else {}
+        if namespace:
+            lines.append(
+                'namespace: '
+                f'status={namespace.get("status", "")} '
+                f'state={namespace.get("state_load_status", "")} '
+                f'session={namespace.get("tmux_session_name", "")} '
+                f'workspace={namespace.get("workspace_window_name", "")}'
+            )
+    for window in tuple(payload.get('windows') or ()):
+        if not isinstance(window, Mapping):
+            continue
+        lines.append(
+            'layout_window: '
+            f'name={window.get("name", "")} '
+            f'index={window.get("index", "")} '
+            f'panes={len(tuple(window.get("agent_names") or ()))} '
+            f'layout={window.get("layout_spec", "")}'
+        )
+        if str(payload.get('action') or '') == 'status':
+            for agent in tuple(window.get('agents') or ()):
+                if not isinstance(agent, Mapping):
+                    continue
+                lines.append(
+                    'layout_agent: '
+                    f'window={window.get("name", "")} '
+                    f'agent={agent.get("agent", "")} '
+                    f'source={agent.get("source", "")} '
+                    f'state={agent.get("runtime_state", "")} '
+                    f'lifecycle={agent.get("lifecycle_state", "")} '
+                    f'pane={agent.get("pane_id", "")}'
+                )
+    smoke_status = str(payload.get('smoke_status') or '').strip()
+    if smoke_status:
+        lines.extend(
+            [
+                f'smoke_status: {smoke_status}',
+                f'dynamic_status: {payload.get("dynamic_status", "")}',
+                f'event_count: {payload.get("event_count", "")}',
+                f'session_name: {payload.get("session_name", "")}',
+                f'socket_path: {payload.get("socket_path", "")}',
+                f'cleanup_status: {payload.get("cleanup_status", "")}',
+            ]
+        )
+    for observed in tuple(payload.get('observed_windows') or ()):
+        if not isinstance(observed, Mapping):
+            continue
+        lines.append(
+            'observed_window: '
+            f'name={observed.get("name", "")} '
+            f'pane_count={observed.get("pane_count", 0)}'
+        )
+    for event in tuple(payload.get('dynamic_events') or ())[:20]:
+        if not isinstance(event, Mapping):
+            continue
+        lines.append(
+            'dynamic_event: '
+            f'phase={event.get("phase", "")} '
+            f'operation={event.get("operation", "")} '
+            f'agent={event.get("agent", "")} '
+            f'target_count={event.get("target_count", 0)} '
+            f'window_count={event.get("window_count", 0)} '
+            f'all_retained_alive={_render_value(event.get("all_retained_alive"))}'
+        )
+    reason = str(payload.get('reason') or '').strip()
+    if reason:
+        lines.append(f'reason: {reason}')
+    error = str(payload.get('error') or '').strip()
+    if error:
+        lines.append(f'error: {error}')
+    return tuple(lines)
+
+
+def render_plan_task(summary) -> tuple[str, ...]:
+    payload = summary if isinstance(summary, Mapping) else {}
+    task = payload.get('task') if isinstance(payload.get('task'), Mapping) else {}
+    lines = [
+        f'plan_task_status: {payload.get("plan_task_status", "unknown")}',
+        f'action: {payload.get("action", "")}',
+        f'task_id: {payload.get("task_id", "")}',
+        f'status: {payload.get("status", "")}',
+        f'plan_slug: {payload.get("plan_slug", "")}',
+        f'task_root: {payload.get("task_root", "")}',
+        f'readme_path: {payload.get("readme_path", "")}',
+    ]
+    title = str(task.get('title') or '').strip()
+    if title:
+        lines.append(f'title: {title}')
+    artifact = payload.get('artifact')
+    if isinstance(artifact, Mapping):
+        lines.append(
+            'artifact: '
+            f'kind={artifact.get("kind", "")} '
+            f'path={artifact.get("path", "")} '
+            f'sha256={artifact.get("sha256", "")}'
+        )
+    tasks = payload.get('tasks')
+    if isinstance(tasks, tuple) or isinstance(tasks, list):
+        lines.append(f'task_count: {len(tasks)}')
+        for item in tasks:
+            if not isinstance(item, Mapping):
+                continue
+            lines.append(
+                'task: '
+                f'id={item.get("task_id", "")} '
+                f'status={item.get("status", "")} '
+                f'title={item.get("title", "")}'
+            )
     return tuple(lines)
 
 
@@ -312,6 +690,24 @@ def render_mobile_serve(summary) -> tuple[str, ...]:
         f'project_root: {payload.get("project_root", "")}',
         f'mode: {payload.get("mode", "")}',
     ]
+    if payload.get('host_id'):
+        lines.insert(4, f'host_id: {payload.get("host_id", "")}')
+    if payload.get('mobile_state_dir'):
+        lines.append(f'mobile_state_dir: {payload.get("mobile_state_dir", "")}')
+    if 'project_count' in payload:
+        lines.append(f'project_count: {payload.get("project_count", 0)}')
+    projects = payload.get('projects')
+    if isinstance(projects, (list, tuple)):
+        for project in projects:
+            if not isinstance(project, Mapping):
+                continue
+            lines.append(
+                'project: '
+                f'id={project.get("id", "")} '
+                f'name={project.get("display_name", "")} '
+                f'health={project.get("health", "")} '
+                f'root={project.get("root", "")}'
+            )
     endpoints = payload.get('endpoints')
     if isinstance(endpoints, (list, tuple)):
         lines.append(f'endpoints: {", ".join(str(item) for item in endpoints)}')
@@ -528,8 +924,13 @@ __all__ = [
     'render_doctor_bundle',
     'render_kill',
     'render_logs',
+    'render_layout',
+    'render_loop_capacity',
+    'render_loop_run_once',
+    'render_loop_runner',
     'render_maintenance',
     'render_mobile_serve',
+    'render_plan_task',
     'render_ps',
     'render_restart',
     'render_start',

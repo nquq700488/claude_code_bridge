@@ -69,6 +69,17 @@ class TerminalHistoryTarget:
         ]
 
 
+@dataclass(frozen=True)
+class PaneMessageTarget:
+    project_id: str
+    namespace_epoch: int
+    agent: str
+    window: str
+    pane_id: str
+    socket_path: str
+    session_name: str
+
+
 def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, object]:
     cp = subprocess.run(
         target.command,
@@ -89,6 +100,37 @@ def create_tmux_terminal_history(target: TerminalHistoryTarget) -> dict[str, obj
         'stale': False,
         'blocks': _readable_history_blocks(text),
     }
+
+
+def send_tmux_pane_message(target: PaneMessageTarget, text: str) -> dict[str, object]:
+    message = str(text or '')
+    _tmux_run(target, ['send-keys', '-t', target.pane_id, 'C-u'])
+    _tmux_run(target, ['send-keys', '-t', target.pane_id, '-l', message])
+    _tmux_run(target, ['send-keys', '-t', target.pane_id, 'Enter'])
+    return {
+        'project_id': target.project_id,
+        'agent': target.agent,
+        'window': target.window,
+        'pane_id': target.pane_id,
+        'namespace_epoch': target.namespace_epoch,
+    }
+
+
+def _tmux_run(
+    target: PaneMessageTarget,
+    args: list[str],
+) -> None:
+    cp = subprocess.run(
+        ['tmux', '-S', target.socket_path, *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=2.0,
+    )
+    if cp.returncode != 0:
+        message = (cp.stderr or '').strip() or 'tmux send failed'
+        raise RuntimeError(message)
 
 
 class TmuxTerminalSession:

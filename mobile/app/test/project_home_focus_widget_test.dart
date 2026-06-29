@@ -1,0 +1,389 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:xterm/xterm.dart';
+
+import 'package:ccb_mobile/ccb_mobile.dart';
+
+import 'support/project_home_test_driver.dart';
+import 'support/project_home_test_fakes.dart';
+
+void main() {
+  testWidgets('fake window switch filters locally without focusWindow', (
+    tester,
+  ) async {
+    final repository = _FocusWidgetRepository(
+      initialPayload: demoPayloadWithReviewWindow(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ProjectHomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await openCurrentProject(tester);
+
+    await tester.tap(find.byKey(const ValueKey('window-tab-review')));
+    await tester.pumpAndSettle();
+
+    expect(repository.focusWindowCalls, isEmpty);
+    expectWindowSelected(tester, 'review');
+    expectAgentSelected(tester, 'reviewer');
+  });
+
+  testWidgets('paired window switch calls focusWindow with epoch', (
+    tester,
+  ) async {
+    final profileStore = await _profileStoreWithHost();
+    final gatewayRepository = _FocusWidgetRepository(
+      initialPayload: demoPayloadWithReviewWindow(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository(
+            projectViewPayload: demoPayloadWithReviewWindow(),
+          ),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('window-tab-review')));
+    await tester.pumpAndSettle();
+
+    expect(gatewayRepository.focusWindowCalls, [('proj-demo', 'review', 4)]);
+    expectWindowSelected(tester, 'review');
+    expectAgentSelected(tester, 'reviewer');
+  });
+
+  testWidgets('paired stale window switch does not focus or change selection', (
+    tester,
+  ) async {
+    final profileStore = await _profileStoreWithHost();
+    final gatewayRepository = _FocusWidgetRepository(
+      initialPayload: _payloadWithoutNamespaceEpoch(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository(
+            projectViewPayload: demoPayloadWithReviewWindow(),
+          ),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('window-tab-review')));
+    await tester.pumpAndSettle();
+
+    expect(gatewayRepository.focusWindowCalls, isEmpty);
+    expectWindowSelected(tester, 'main');
+    expectAgentSelected(tester, 'mobile');
+    expect(find.byKey(const ValueKey('agent-reviewer')), findsNothing);
+    expect(find.text('Project view is stale'), findsOneWidget);
+  });
+
+  testWidgets('paired open terminal focuses agent before navigation', (
+    tester,
+  ) async {
+    final profileStore = await _profileStoreWithHost();
+    final focusedPayload = _payloadWithProjectId('proj-focused');
+    final gatewayRepository = _FocusWidgetRepository(
+      initialPayload: demoPayloadWithReviewWindow(),
+      focusedPayload: focusedPayload,
+    );
+    final terminalTransport = RecordingTerminalTransport();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository(
+            projectViewPayload: demoPayloadWithReviewWindow(),
+          ),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('agent-lead')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
+    await tester.pumpAndSettle();
+
+    expect(gatewayRepository.focusAgentCalls, [('proj-demo', 'lead', 4)]);
+    expect(find.byType(TerminalView), findsOneWidget);
+    expect(terminalTransport.requests, hasLength(1));
+    expect(terminalTransport.requests.single.target.projectId, 'proj-focused');
+    expect(terminalTransport.requests.single.target.agent, 'lead');
+  });
+
+  testWidgets('paired stale terminal open does not focus or navigate', (
+    tester,
+  ) async {
+    final profileStore = await _profileStoreWithHost();
+    final gatewayRepository = _FocusWidgetRepository(
+      initialPayload: _payloadWithoutNamespaceEpoch(),
+    );
+    final terminalTransport = RecordingTerminalTransport();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository(
+            projectViewPayload: demoPayloadWithReviewWindow(),
+          ),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
+    await tester.pumpAndSettle();
+
+    expect(gatewayRepository.focusAgentCalls, isEmpty);
+    expect(find.byType(TerminalView), findsNothing);
+    expect(terminalTransport.requests, isEmpty);
+    expect(find.text('Project view is stale'), findsOneWidget);
+  });
+
+  testWidgets('fake open terminal opens without focus', (tester) async {
+    final repository = _FocusWidgetRepository(
+      initialPayload: demoPayloadWithReviewWindow(),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ProjectHomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await openCurrentProject(tester);
+
+    await tester.tap(find.byKey(const ValueKey('agent-lead')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
+    await tester.pumpAndSettle();
+
+    expect(repository.focusAgentCalls, isEmpty);
+    expect(find.byType(TerminalView), findsOneWidget);
+    expect(find.text('demo / lead'), findsNWidgets(2));
+  });
+
+  testWidgets('focus failure preserves previous view and shows error', (
+    tester,
+  ) async {
+    final profileStore = await _profileStoreWithHost();
+    final gatewayRepository = _FocusWidgetRepository(
+      initialPayload: demoPayloadWithReviewWindow(),
+      focusError: StateError('focus failed'),
+    );
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository(
+            projectViewPayload: demoPayloadWithReviewWindow(),
+          ),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => gatewayRepository,
+          gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('window-tab-review')));
+    await tester.pumpAndSettle();
+
+    expect(gatewayRepository.focusWindowCalls, [('proj-demo', 'review', 4)]);
+    expect(find.byKey(const ValueKey('agent-lead')), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-mobile')), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-reviewer')), findsNothing);
+    expectAgentSelected(tester, 'mobile');
+    expect(find.text('Bad state: focus failed'), findsOneWidget);
+  });
+}
+
+Future<GatewayHostProfileStore> _profileStoreWithHost() async {
+  final store = GatewayHostProfileStore(secureStore: MemorySecureStore());
+  await store.save(
+    GatewayPairedHost(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev-cloudflare',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.cloudflareTunnel,
+          gatewayUrl: Uri.parse('https://mobile.example.com'),
+        ),
+        scopes: const {'view', 'focus', 'terminal_input'},
+      ),
+      deviceToken: 'device-secret',
+      projectId: 'proj-demo',
+    ),
+  );
+  return store;
+}
+
+Map<String, Object?> _payloadWithProjectId(String projectId) {
+  final payload =
+      jsonDecode(jsonEncode(demoPayloadWithReviewWindow()))
+          as Map<String, Object?>;
+  final view = payload['view']! as Map<String, Object?>;
+  final project = view['project']! as Map<String, Object?>;
+  project['id'] = projectId;
+  return payload;
+}
+
+Map<String, Object?> _payloadWithoutNamespaceEpoch() {
+  final payload =
+      jsonDecode(jsonEncode(demoPayloadWithReviewWindow()))
+          as Map<String, Object?>;
+  final view = payload['view']! as Map<String, Object?>;
+  final namespace = view['namespace']! as Map<String, Object?>;
+  namespace.remove('epoch');
+  return payload;
+}
+
+class _FocusWidgetRepository implements MobileCcbRepository {
+  _FocusWidgetRepository({
+    required Map<String, Object?> initialPayload,
+    Map<String, Object?>? focusedPayload,
+    this.focusError,
+  }) : _initial = FakeMobileCcbRepository(projectViewPayload: initialPayload),
+       _focused = FakeMobileCcbRepository(
+         projectViewPayload: focusedPayload ?? initialPayload,
+       );
+
+  final FakeMobileCcbRepository _initial;
+  final FakeMobileCcbRepository _focused;
+  final Object? focusError;
+  final focusAgentCalls = <(String, String, int)>[];
+  final focusWindowCalls = <(String, String, int)>[];
+  var _focusedOnce = false;
+
+  FakeMobileCcbRepository get _current => _focusedOnce ? _focused : _initial;
+
+  @override
+  Future<CcbProjectView> focusAgent({
+    required String projectId,
+    required String agent,
+    required int namespaceEpoch,
+  }) async {
+    focusAgentCalls.add((projectId, agent, namespaceEpoch));
+    final error = focusError;
+    if (error != null) {
+      throw error;
+    }
+    _focusedOnce = true;
+    return _focusedProjectView();
+  }
+
+  @override
+  Future<CcbProjectView> focusWindow({
+    required String projectId,
+    required String window,
+    required int namespaceEpoch,
+  }) async {
+    focusWindowCalls.add((projectId, window, namespaceEpoch));
+    final error = focusError;
+    if (error != null) {
+      throw error;
+    }
+    _focusedOnce = true;
+    return _focusedProjectView();
+  }
+
+  Future<CcbProjectView> _focusedProjectView() async {
+    final project = (await _focused.listProjects()).single;
+    return _focused.getProjectView(project.id);
+  }
+
+  @override
+  Future<CcbProjectView> getProjectView(String projectId) {
+    return _current.getProjectView(projectId);
+  }
+
+  @override
+  Future<List<CcbProject>> listProjects() {
+    return _current.listProjects();
+  }
+
+  @override
+  Future<CcbAgentConversation> getAgentConversation({
+    required String projectId,
+    required String agent,
+    required int namespaceEpoch,
+    int limit = 50,
+    String? cursor,
+  }) {
+    return _current.getAgentConversation(
+      projectId: projectId,
+      agent: agent,
+      namespaceEpoch: namespaceEpoch,
+      limit: limit,
+      cursor: cursor,
+    );
+  }
+
+  @override
+  Future<ReadableTerminalHistory?> getReadableTerminalHistory({
+    required String projectId,
+    required String agent,
+    required int namespaceEpoch,
+    int maxLines = 200,
+  }) {
+    return _current.getReadableTerminalHistory(
+      projectId: projectId,
+      agent: agent,
+      namespaceEpoch: namespaceEpoch,
+      maxLines: maxLines,
+    );
+  }
+
+  @override
+  Future<CcbProjectLifecycleResult> requestLifecycle({
+    required String projectId,
+    required CcbLifecycleAction action,
+  }) {
+    return _current.requestLifecycle(projectId: projectId, action: action);
+  }
+
+  @override
+  Future<GatewayFileUploadResult> uploadFile({
+    required String projectId,
+    required String agentName,
+    required String fileName,
+    required String mimeType,
+    required List<int> bytes,
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<List<int>> downloadFile({
+    required String projectId,
+    required String agentName,
+    required String fileId,
+  }) async {
+    throw UnimplementedError();
+  }
+
+  @override
+  Future<CcbAgentMessageSubmitResult> submitAgentMessage(
+    CcbAgentMessageSubmitRequest request,
+  ) {
+    return _current.submitAgentMessage(request);
+  }
+}

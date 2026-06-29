@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import shlex
+from types import SimpleNamespace
 from typing import Any
 
 from cli.services.tmux_ui import apply_project_tmux_ui
 from agents.models import layout_tool_alias_command, layout_tool_alias_label, parse_layout_spec
 from terminal_runtime.placeholders import pane_placeholder_cmd
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+from terminal_runtime.tmux_theme import tmux_theme_profile
 
 from .backend import (
     create_session,
@@ -44,6 +46,18 @@ def refresh_topology_ui_for_project(
         tmux_session_name=context.desired_session_name,
         backend=context.backend,
     )
+    _sync_topology_sidebar_widths(controller, context, topology_plan=topology_plan, timeout_s=timeout_s)
+
+
+def sync_topology_sidebar_widths(
+    controller,
+    backend,
+    *,
+    session_name: str,
+    topology_plan,
+    timeout_s: float | None = None,
+) -> None:
+    context = SimpleNamespace(backend=backend, desired_session_name=session_name)
     _sync_topology_sidebar_widths(controller, context, topology_plan=topology_plan, timeout_s=timeout_s)
 
 
@@ -807,6 +821,7 @@ def _sidebar_pane_percent_for_sidebar(width: object, pane_width: int = 0) -> int
 def _respawn_sidebar(backend, pane_id: str, launch_args: tuple[str, ...], *, cwd: str) -> None:
     args = sidebar_respawn_args(tuple(launch_args or ()))
     command = ' '.join(shlex.quote(str(part)) for part in args) if args else pane_placeholder_cmd()
+    command = f'CCB_SIDEBAR_THEME_PROFILE={shlex.quote(tmux_theme_profile())} {command}'
     respawn = getattr(backend, 'respawn_pane', None)
     if callable(respawn):
         respawn(pane_id, cmd=command, cwd=cwd, remain_on_exit=True)
@@ -819,6 +834,7 @@ __all__ = [
     'materialize_topology',
     'refresh_topology_ui',
     'refresh_topology_ui_for_project',
+    'sync_topology_sidebar_widths',
     'topology_active_panes',
     'topology_recreate_reason',
 ]

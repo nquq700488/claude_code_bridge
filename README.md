@@ -6,7 +6,7 @@
 **Visible, controllable multi-agent cooperative TUI workspace**
 
 <p>
-  <img src="https://img.shields.io/badge/version-7.6.16-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.0.4-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -31,7 +31,7 @@
 
 **English** | [中文](README_zh.md)
 
-[Quick Start](#quick-start) · [v7 UI](#v7-ui-tour) · [Rich Mode](#rich-mode-new) · [Configure Agents](#configure-your-agent-team) · [Mobile Gateway Alpha](docs/mobile-cloudflare-alpha.md) · [User Guide](docs/manuals/user-guide/) · [Developer Guide](docs/manuals/developer-guide/)
+[Quick Start](#quick-start) · [v7 UI](#v7-ui-tour) · [Rich Mode](#rich-mode-new) · [Mobile App](#mobile-app) · [Configure Agents](#configure-your-agent-team) · [User Guide](docs/manuals/user-guide/) · [Developer Guide](docs/manuals/developer-guide/)
 
 <p align="center">
   <img src="assets/readme_v7/ccb-hero-en.png" alt="CCB v7 visible multi-agent CLI workspace" width="960">
@@ -79,6 +79,18 @@ Mix CLIs per agent in `.ccb/ccb.config`; actual availability depends on the loca
 
 ## Quick Start
 
+## Repository Layout
+
+This repository now carries both the CCB core and the mobile controller source:
+
+- core CLI, ccbd, mobile gateway, and Python tests live at the repository root;
+- Flutter mobile app source, mobile tools, and mobile planning docs live under
+  [`mobile/`](mobile/).
+
+The mobile app remains a separate build surface inside the monorepo. Core
+commands such as `ccb update mobile` should consume released mobile artifacts
+or the mobile release manifest, not Android build outputs checked into source.
+
 ### 1. Install or update
 
 New installs should use the npm package:
@@ -101,10 +113,20 @@ ccb update rich
 
 After rich is enabled, plain `ccb` opens the rich WezTerm launcher unless it is already running inside a CCB-managed rich WezTerm; use `ccb uninstall rich` to return to the normal terminal startup.
 
+Install or refresh the optional mobile controller setup:
+
+```bash
+ccb update mobile
+```
+
+This command checks the local mobile gateway prerequisites, guides Tailscale
+login/Serve setup when needed, keeps the gateway loopback-only, and prints the
+current Android APK download link plus pairing steps.
+
 <details>
 <summary><b>GitHub release package and source install fallbacks</b></summary>
 
-If npm is not available in your environment, download the matching package from [Releases](https://github.com/SeemSeam/claude_codex_bridge/releases):
+If npm is not available in your environment, download the matching package from [Releases](https://github.com/bfly123/claude_code_bridge/releases):
 
 ```bash
 tar -xzf ccb-*.tar.gz
@@ -115,8 +137,8 @@ cd ccb-*
 Source install is for development or temporary fallback use:
 
 ```bash
-git clone https://github.com/SeemSeam/claude_codex_bridge.git
-cd claude_codex_bridge
+git clone https://github.com/bfly123/claude_code_bridge.git
+cd claude_code_bridge
 ./install.sh install
 ```
 
@@ -195,6 +217,45 @@ Run `ccb update rich` to install the optional rich workbench; it bundles Yazi wh
 <p align="center">
   <img src="assets/readme_v7/rich-workbench.png" alt="CCB rich workbench with Yazi preview in WezTerm" width="860">
 </p>
+
+<a id="mobile-app"></a>
+
+### Mobile App (Android Alpha)
+
+CCB 8.0.4 includes the Flutter CCB Mobile source under [`mobile/`](mobile/)
+and publishes an Android APK as a GitHub Release asset:
+
+- [Download CCB Mobile v8.0.4 APK](https://github.com/bfly123/claude_code_bridge/releases/download/v8.0.4/ccb-mobile-v8.0.4.apk)
+- App source: [`mobile/app`](mobile/app)
+- Server/gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
+
+The mobile app is a remote controller for real server-side CCB projects. It can
+discover all mounted CCB projects exposed by the server-wide mobile gateway,
+switch windows and agents, render the agent transcript, send text as pane-native
+input, open terminal views, and upload/download image or document attachments
+through the authenticated gateway.
+
+Recommended first-time setup:
+
+```bash
+ccb update mobile
+```
+
+Then follow the printed steps:
+
+1. Install and sign in to Tailscale on the desktop/server and the phone.
+2. Install the APK on Android.
+3. Run `ccb update mobile` on the desktop/server.
+4. Open CCB Mobile and scan the QR printed by the terminal.
+
+Security boundaries:
+
+- The CCB gateway remains bound to loopback, such as `127.0.0.1:8787`.
+- Tailscale Serve is used for tailnet access; Tailscale Funnel is not enabled.
+- CCB does not store Tailscale passwords, OAuth tokens, admin API tokens, or
+  alter tailnet ACLs/grants.
+- The phone only receives the scopes granted by the pairing profile, such as
+  view, content, terminal, file upload, and file download.
 
 ### Agent Roles Spec And Role Catalog
 
@@ -644,7 +705,7 @@ For later updates:
 ccb update
 ```
 
-[GitHub Releases](https://github.com/SeemSeam/claude_codex_bridge/releases) remain available for environments where npm is unavailable. Source checkout install is for development, fix validation, or temporary fallback.
+[GitHub Releases](https://github.com/bfly123/claude_code_bridge/releases) remain available for environments where npm is unavailable. Source checkout install is for development, fix validation, or temporary fallback.
 
 #### Uninstall
 
@@ -709,6 +770,116 @@ v7 highlights:
 - Hardened tmux, Ghostty, release helper, Codex trust, and provider session restore paths.
 
 <details open>
+<summary><b>v8.0.4</b> - CCB Mobile Project List Stability</summary>
+
+- Accelerates `/v1/projects` for server-wide mobile gateways by checking
+  mounted project health concurrently while preserving registry order.
+- Reduces noisy BrokenPipe/connection-reset tracebacks when a phone disconnects
+  or times out while a response is being written.
+
+</details>
+
+<details>
+<summary><b>v8.0.3</b> - npm Release Metadata Fix</summary>
+
+- Fixes npm provenance metadata so `@seemseam/ccb` publishes from the canonical
+  GitHub repository used by GitHub Actions.
+- Synchronizes VERSION, package metadata, mobile app version metadata, README
+  links, workflow defaults, and APK download URLs for 8.0.3.
+
+</details>
+
+<details>
+<summary><b>v8.0.2</b> - Mobile Tailnet Onboarding Fixes</summary>
+
+- Handles the Tailscale Serve one-time approval flow without exposing raw
+  timeout errors.
+- Reuses an existing correct Tailscale Serve proxy for `:8787`, so users who
+  already approved or started Serve can immediately get the pairing QR.
+- Fixes source worktree installs so installed `ccb` is not mistaken for a source
+  checkout.
+
+</details>
+
+<details>
+<summary><b>v8.0.1</b> - Simplified CCB Mobile Pairing</summary>
+
+- Makes `ccb update mobile` the single user-facing setup command: it checks
+  Tailscale, guides login/install, starts the server-wide loopback gateway plus
+  Tailscale Serve, and prints a pairing QR directly in the terminal.
+- Updates CCB Mobile first launch to show pairing instructions, Tailscale
+  download guidance, and a scan button instead of opening the fake/demo project.
+- Automatically opens the server-wide mounted project list after a stored
+  pairing profile is found, reducing setup friction for normal phone use.
+
+</details>
+
+<details>
+<summary><b>v8.0.0</b> - CCB Mobile Monorepo Release</summary>
+
+- Ships the Flutter CCB Mobile source inside this repository and publishes the
+  Android APK as a GitHub Release asset.
+- Adds server-wide mobile project discovery, pairing, authenticated gateway
+  routes, pane-native message input, transcript rendering, terminal access, and
+  image/document upload and download support.
+- Promotes `ccb update mobile` as the guided setup entry for Tailscale Tailnet
+  onboarding while preserving loopback-only gateway binding and avoiding Funnel,
+  token storage, or ACL/grant automation.
+
+</details>
+
+<details>
+<summary><b>v7.7.0</b> - Runtime Accelerator Release Hardening</summary>
+
+- Ships the optional Rust `ccb-runtime-accelerator` in release artifacts, so
+  installed Codex agents can use the sidecar hotpath instead of falling back to
+  Python when the binary is expected.
+- Adds short runtime socket fallback for long project paths that would exceed
+  Unix socket path limits.
+- Hardens callback repair and Codex binding cache invalidation, then records
+  full regression, long-idle Codex soak, Claude callback, and mixed-provider
+  integration evidence.
+
+</details>
+
+<details>
+<summary><b>v7.6.19</b> - Long-Running Ask Wait Policy</summary>
+
+- Keeps ordinary long-running `ask` jobs waiting by default instead of
+  terminalizing them as `incomplete/heartbeat_timeout` from heartbeat
+  diagnostics alone.
+- Makes Codex, Claude, and Gemini pane-backed no-terminal timeouts opt-in by
+  default while preserving explicit reliability timeout policies.
+- Validated with a 32-minute source-runtime ask smoke: the job stayed running
+  past 30 minutes, then completed with `result_message` and no
+  `heartbeat_timeout`/`incomplete` evidence.
+
+</details>
+
+<details>
+<summary><b>v7.6.18</b> - CCB UI Theme Preference</summary>
+
+- Adds `ccb theme` as the top-level theme switch for CCB-owned tmux/sidebar UI,
+  with `+` and `-` cycling across dark and light palettes.
+- Adds readable light-mode tmux status, pane border, sidebar, activity, and
+  comms status colors for light terminal backgrounds.
+- Makes generated rich WezTerm profiles follow the same global CCB theme
+  preference on the next launch/reload.
+
+</details>
+
+<details>
+<summary><b>v7.6.17</b> - Codex Log Symlink Target Repair</summary>
+
+- Repairs managed Codex `logs_2.sqlite` temp symlink targets when
+  `/tmp/ccb-codex-logs-*` cleanup removes the target directory between starts.
+- Falls back by removing an unrecoverable broken symlink and restoring the local
+  backup before Codex initializes its SQLite databases.
+- Adds regression coverage for the missing symlink target parent startup path.
+
+</details>
+
+<details>
 <summary><b>v7.6.16</b> - Codex SQLite Migration Recovery</summary>
 
 - Fixes the managed Codex `logs_2.sqlite` redirect so CCB no longer

@@ -4,6 +4,155 @@
 
 ## Unreleased
 
+## v8.0.4 (2026-06-28)
+
+### CCB Mobile Project List Stability
+
+- **Server-Wide Project Listing Accelerated**: `/v1/projects` now checks
+  mounted project health concurrently while preserving registry order, avoiding
+  phone-side aborts when many CCB projects are registered.
+- **Client Disconnect Noise Reduced**: mobile gateway responses now quietly
+  ignore ordinary BrokenPipe/connection-reset writes after a phone disconnects
+  or times out.
+- **Release Surface Synchronized**: VERSION, package metadata, mobile app
+  version metadata, README links, workflow defaults, and APK download URLs are
+  aligned for 8.0.4.
+
+## v8.0.3 (2026-06-28)
+
+### npm Release Metadata Fix
+
+- **npm Provenance Metadata Fixed**: package metadata now points to the
+  canonical GitHub repository used by GitHub Actions, allowing npm provenance
+  validation to match the release workflow source.
+- **Release Surface Synchronized**: VERSION, package metadata, mobile app
+  version metadata, README links, workflow defaults, and APK download URLs are
+  aligned for 8.0.3.
+
+## v8.0.2 (2026-06-28)
+
+### CCB Mobile Tailnet Onboarding Fixes
+
+- **Tailscale Serve Approval Flow Fixed**: `ccb update mobile` now recognizes
+  the one-time Tailscale Serve enable URL and prints actionable next steps
+  instead of surfacing a raw timeout.
+- **Existing Serve Config Reused**: if the correct tailnet HTTPS proxy already
+  points to the loopback mobile gateway, `ccb update mobile` reuses it and
+  proceeds directly to the pairing QR instead of requiring operator privileges
+  on every run.
+- **Worktree Install Guard Fixed**: source worktree installs no longer copy the
+  `.git` worktree marker into the release install prefix, preventing installed
+  `ccb` from being mistaken for a source checkout.
+- **Release Surface Synchronized**: VERSION, package metadata, mobile app
+  version metadata, README links, workflow defaults, and APK download URLs are
+  aligned for 8.0.2.
+
+## v8.0.1 (2026-06-28)
+
+### Simplified CCB Mobile Onboarding
+
+- **One-Command Mobile Setup**: `ccb update mobile` now checks Tailscale,
+  optionally guides install/login, starts the server-wide loopback mobile
+  gateway, starts Tailscale Serve, and prints a terminal pairing QR directly.
+- **Phone First Launch Simplified**: CCB Mobile now opens to setup guidance,
+  Tailscale download instructions, and a QR scan action when no pairing profile
+  is stored, instead of defaulting ordinary users into the demo project.
+- **Stored Pairing Auto-Activation**: when a saved gateway profile exists, the
+  app activates it on launch and opens the server-wide mounted project list.
+- **Release Surface Synchronized**: VERSION, package metadata, mobile app
+  version metadata, README links, workflow defaults, and APK download URLs are
+  aligned for 8.0.1.
+
+## v8.0.0 (2026-06-27)
+
+### CCB Mobile Monorepo Release
+
+- **Mobile Source Joined The Main Repository**: the Flutter CCB Mobile app now
+  lives under `mobile/` alongside the core CLI, ccbd, and mobile gateway
+  source.
+- **Android APK Published**: the release includes
+  `ccb-mobile-v8.0.0.apk` plus SHA256 and manifest assets for Android Alpha
+  installation and validation.
+- **Server-Wide Mobile Gateway Promoted**: mobile setup now targets
+  server-wide project discovery, authenticated pairing, route diagnostics,
+  pane-native text input, transcript rendering, terminal access, and
+  image/document upload and download.
+- **Tailnet Onboarding Unified**: `ccb update mobile` guides Tailscale setup,
+  keeps the gateway loopback-only, uses Tailscale Serve instead of Funnel, and
+  avoids storing Tailscale tokens or modifying ACL/grants.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, mobile app version metadata, README release notes, mobile
+  documentation, launcher icon assets, and npm packaging metadata are aligned
+  for 8.0.0.
+
+## v7.7.0 (2026-06-27)
+
+### Runtime Accelerator Release Hardening
+
+- **Runtime Accelerator Sidecar Shipped**: release artifacts now build and
+  package `bin/ccb-runtime-accelerator`, so the default Codex accelerator path
+  is available to installed users instead of silently falling back to Python.
+- **Short Socket Fallback Added**: accelerator sockets now relocate to the
+  per-user runtime socket root when a project-local Unix socket path would
+  exceed platform limits.
+- **Callback And Binding Stability Hardened**: pending callback edges keep the
+  dispatcher in the hot loop, and Codex binding scan signatures now follow the
+  managed session root.
+- **Regression Evidence Expanded**: full Python regression, Rust sidecar gates,
+  release preview, Codex soak, Claude callback, and mixed-provider integration
+  evidence are recorded in the runtime accelerator review notes.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, Rust crate metadata, release workflow defaults, README release
+  notes, and npm packaging metadata are aligned for 7.7.0.
+
+## v7.6.19 (2026-06-26)
+
+### Long-Running Ask Wait Policy
+
+- **Ask Heartbeat Timeout Disabled By Default**: running-job heartbeat
+  observations now remain internal diagnostics by default instead of
+  terminalizing ordinary `ask` jobs as `incomplete/heartbeat_timeout`.
+- **Pane-Backed Provider Timeouts Made Opt-In**: Codex, Claude, and Gemini
+  default `no_terminal_timeout_s` values are now `0.0`; explicit reliability
+  timeout policies remain supported.
+- **Long Runtime Evidence Recorded**: a source-runtime ask smoke ran beyond 30
+  minutes, stayed running at 1800s and 1860s, then completed at 1980s with
+  `result_message` and no `heartbeat_timeout`/`incomplete` evidence.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.19.
+
+## v7.6.18 (2026-06-26)
+
+### CCB UI Theme Preference
+
+- **Global Theme Command Added**: `ccb theme` now shows or changes the global
+  CCB UI theme, including `+` and `-` cycling across dark and light palettes.
+- **Light Tmux And Sidebar Themes Added**: CCB-owned tmux status, pane borders,
+  sidebar colors, and activity/status indicators now have readable light-mode
+  styling for light terminal backgrounds.
+- **Rich WezTerm Theme Sync Added**: generated rich WezTerm profiles read the
+  same CCB theme preference and export matching tmux/sidebar theme variables.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.18.
+
+## v7.6.17 (2026-06-25)
+
+### Codex Log Symlink Target Repair
+
+- **Codex Temp Log Symlink Repaired**: managed Codex startup now recreates the
+  `logs_2.sqlite` symlink target parent when `/tmp/ccb-codex-logs-*` cleanup
+  removes it between launches.
+- **Bad Symlink Fallback Hardened**: if the symlink target cannot be repaired,
+  CCB removes the broken symlink and restores the local backup before Codex
+  starts, avoiding startup failures in Codex-owned SQLite initialization.
+- **Regression Coverage Added**: focused tests cover missing temp target
+  parents and preserve the existing diagnostic-log redirect and restore paths.
+- **Release Surface Synchronized**: VERSION, CLI version constants,
+  package.json, release workflow defaults, README release notes, and npm
+  packaging metadata are aligned for 7.6.17.
+
 ## v7.6.16 (2026-06-23)
 
 ### Codex SQLite Migration Recovery

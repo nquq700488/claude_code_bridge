@@ -26,6 +26,7 @@ from ccbd.socket_server import CcbdSocketServer
 from ccbd.services.webhook import load_webhook_config_from_env, WebhookSender
 from fault_injection import FaultInjectionService
 from heartbeat import HeartbeatPolicy, HeartbeatStateStore
+from mobile_gateway.project_registry import publish_mobile_gateway_project
 from project.ids import compute_project_id
 from provider_core.catalog import build_default_provider_catalog
 from provider_execution.registry import build_default_execution_registry
@@ -46,6 +47,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     app.project_id = compute_project_id(app.project_root)
     app.paths = PathLayout(app.project_root)
     app.paths.ensure_runtime_state_root()
+    _publish_mobile_gateway_project(app.project_id, app.project_root, app.paths.ccbd_socket_path, clock=clock)
     sweep_expired_text_artifacts(app.paths)
     app.clock = clock
     app.pid = pid or os.getpid()
@@ -80,6 +82,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     )
     app.control_plane_metrics = ControlPlaneMetrics()
     app.lease = None
+    app.runtime_accelerator = None
     service_graph = build_ccbd_service_graph(
         CcbdServiceGraphDependencies(
             project_root=app.project_root,
@@ -159,6 +162,19 @@ def _safe_load_lifecycle(app):
         return app.lifecycle_store.load()
     except Exception:
         return None
+
+
+def _publish_mobile_gateway_project(project_id: str, project_root: Path, ccbd_socket_path: Path, *, clock) -> None:
+    try:
+        publish_mobile_gateway_project(
+            project_id=project_id,
+            project_root=project_root,
+            ccbd_socket_path=ccbd_socket_path,
+            display_name=project_root.name,
+            updated_at=clock(),
+        )
+    except Exception:
+        pass
 
 
 __all__ = ['initialize_app']

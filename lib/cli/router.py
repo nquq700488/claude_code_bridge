@@ -8,7 +8,7 @@ from textwrap import dedent
 AuxiliaryHandler = Callable[[Sequence[str]], int]
 ManagementHandler = Callable[[argparse.Namespace], int]
 
-_MANAGEMENT_COMMANDS = {"update", "version", "uninstall", "reinstall"}
+_MANAGEMENT_COMMANDS = {"install", "update", "version", "uninstall", "reinstall"}
 
 
 def dispatch_auxiliary_command(
@@ -25,6 +25,7 @@ def dispatch_auxiliary_command(
 def dispatch_management_command(
     argv: Sequence[str],
     *,
+    install_handler: ManagementHandler,
     update_handler: ManagementHandler,
     version_handler: ManagementHandler,
     uninstall_handler: ManagementHandler,
@@ -36,6 +37,8 @@ def dispatch_management_command(
 
     parser = _build_management_parser()
     args = parser.parse_args(tokens)
+    if args.command == "install":
+        return install_handler(args)
     if args.command == "update":
         return update_handler(args)
     if args.command == "version":
@@ -71,9 +74,25 @@ def print_start_help(*, file=None) -> None:
               ccb mobile serve       Start the loopback CCB Mobile gateway for the current project.
               ccb mobile devices     List paired mobile devices for the current project.
               ccb mobile revoke <id> Revoke one paired mobile device locally.
+              ccb agent add NAME:PROVIDER --role ROLE [--window NAME|--window-class CLASS] --hidden --json
+                                    Hot-load one runtime dynamic agent without rewriting ccb.config.
+              ccb agent remove NAME|--agents a,b --policy park|unload --json
+                                    Park or unload runtime dynamic agents.
+              ccb agent park NAME|--agents a,b --json
+                                    Disable dispatch for dynamic agents while preserving panes.
+              ccb agent resume NAME|--agents a,b --json
+                                    Re-enable dispatch for parked dynamic agents.
+              ccb agent release NAME --idle-only --json
+                                    Safely release one dynamic agent through role policy.
+              ccb loop capacity ensure --loop-id ID --profile worker=1 --profile code_reviewer=1 --json
+                                    Plan dynamic loop workers from configured loop.role_profiles.
+              ccb loop run-once --loop-id ID --task TEXT --json
+                                    Run one worker/reviewer/orchestrator/round-checker round and write loop artifacts.
               ccb kill             Stop the current project's background runtime.
               ccb kill -f          Force cleanup project-owned runtime residue.
               ccb cleanup          Prune safe provider rebuildable caches after ccbd is stopped.
+              ccb theme [light|dark|+|-]
+                                    Set or show the global CCB UI theme.
 
             Core commands:
               ccb ask <agent> [from <sender>] <message>
@@ -96,12 +115,14 @@ def print_start_help(*, file=None) -> None:
               ccb repair <ack|retry|resubmit> ...
 
             Management:
-              ccb version | ccb update [rich|VERSION] | ccb uninstall [rich] | ccb reinstall
+              ccb install mobile    Start the server-wide CCB Mobile gateway and pairing QR.
+              ccb version | ccb update [rich|mobile|VERSION] | ccb uninstall [rich] | ccb reinstall
 
             Tools:
               ccb rich
               ccb rich uninstall
               ccb update rich
+              ccb update mobile
 
             Roles:
               ccb roles list
@@ -197,6 +218,69 @@ _COMMAND_HELP = {
 
         Advanced lineage view:
           ccb trace <id>   Show the full job/message/reply lineage for one id.
+    """,
+    "theme": """
+        usage: ccb theme [dark|light|+|-|solarized|tokyo|gruvbox|rose-pine]
+
+        CCB UI theme:
+          ccb theme          Show current CCB theme preference.
+          ccb theme +        Switch to the next CCB theme.
+          ccb theme -        Switch to the previous CCB theme.
+          ccb theme light    Use a light CCB tmux/sidebar theme.
+          ccb theme dark     Use the dark CCB tmux/sidebar theme.
+
+        Notes:
+          - Ordinary terminals keep their own terminal theme; CCB only updates
+            CCB-owned tmux/sidebar colors.
+          - CCB-owned rich WezTerm follows this preference through its
+            generated config.
+    """,
+    "agent": """
+        usage:
+          ccb agent status [--class CLASS] [--json]
+          ccb agent show <agent> [--json]
+          ccb agent add <name[:provider]> (--profile PROFILE | --role ROLE) [--window NAME|--window-class CLASS] [--hidden|--visible|--parked] [--json]
+          ccb agent move <agent>|--agents a,b (--window NAME|--window-class CLASS|--loop-id LOOP --node-id NODE) [--json]
+          ccb agent hide <agent>|--agents a,b [--json]
+          ccb agent park <agent>|--agents a,b [--json]
+          ccb agent resume <agent>|--agents a,b [--visible|--hidden] [--json]
+          ccb agent remove <agent>|--agents a,b [--policy auto|hide|park|unload|kill] [--idle-only] [--force --reason TEXT] [--json]
+          ccb agent release <agent>|--agents a,b [--policy auto|hide|park|unload] [--idle-only] [--reason TEXT] [--json]
+
+        Dynamic agent lifecycle:
+          ccb agent add helper:codex --role agentroles.general --hidden --json
+              Write a runtime lifecycle record and project the agent into the active config overlay.
+          ccb agent add reviewer --profile code_reviewer --hidden --json
+              Add from [loop.role_profiles.<profile>] in ccb.config.
+          ccb agent add planner2:codex --role agentroles.planner --window-class plan-orchestrate --hidden --json
+              Hot-load into an existing class window or create that window through reload.
+          ccb agent add worker1:codex --profile worker --loop-id round1 --node-id node1 --hidden --json
+              Place execution agents in node-<loop-id>-<node-id> windows.
+          ccb agent move planner2 --window review --json
+              Move a dynamic session agent to an existing target window when mounted.
+          ccb agent move --agents worker1,checker1 --window archive --json
+          ccb agent move --agents worker1,checker1 --window-class execution-node --json
+              Move multiple dynamic session agents through one reload transaction.
+          ccb agent park planner2 --json
+              Keep the pane and context but reject new dispatches until resumed.
+          ccb agent park --agents planner2,broker1 --json
+              Park a long-lived group through one config-only reload transaction.
+          ccb agent resume planner2 --hidden --json
+              Re-enable dispatch without changing pane ownership.
+          ccb agent resume --agents planner2,broker1 --hidden --json
+              Resume a parked group while preserving pane ownership.
+          ccb agent remove helper --policy park --json
+              Keep long-lived context discoverable while removing it from visible active work.
+          ccb agent remove helper --policy unload --idle-only --json
+              Remove the dynamic overlay when the agent is idle.
+          ccb agent remove --agents worker1,checker1 --policy unload --idle-only --json
+              Unload a dynamic worker/checker group through one reload transaction.
+          ccb agent release reviewer --idle-only --json
+              Apply role policy without exposing the destructive kill path.
+          ccb agent release --agents worker1,checker1 --idle-only --json
+              Apply role policies to a dynamic group as one all-or-nothing lifecycle update.
+          ccb agent remove helper --policy kill --force --reason "operator reset" --json
+              Force destructive removal; requires an explicit reason.
     """,
     "inbox": """
         usage: ccb inbox [--detail] <agent_name>
@@ -354,6 +438,25 @@ _COMMAND_HELP = {
             multi-project registry.
           - Stopping the gateway does not stop ccbd, provider panes, or tmux.
     """,
+    "loop": """
+        usage:
+          ccb loop capacity <ensure|status|release> ...
+          ccb loop run-once --loop-id ID --task TEXT [--json]
+
+        Loop capacity:
+          ccb loop capacity ensure --loop-id round1 --profile worker=1 --profile code_reviewer=1 --json
+              Write a deterministic dynamic-node plan from configured loop.role_profiles.
+          ccb loop capacity status --loop-id round1 --json
+              Read the stored loop capacity plan.
+          ccb loop capacity release --loop-id round1 --policy auto --json
+              Release idle loop-owned dynamic nodes and retain busy nodes.
+
+        One-round execution:
+          ccb loop run-once --loop-id round1 --task "Implement task" --json
+              Ensure one worker and one code_reviewer, submit work, collect review,
+              ask orchestrator for aggregation, release idle dynamic nodes, and
+              write `.ccb/runtime/loops/<loop-id>/` artifacts.
+    """,
     "doctor": """
         usage: ccb doctor [ps|logs <agent>|storage] [--output [PATH]]
 
@@ -476,8 +579,18 @@ def _build_management_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ccb", description="Claude AI unified launcher", add_help=True)
     subparsers = parser.add_subparsers(dest="command", help="Subcommands")
 
-    update_parser = subparsers.add_parser("update", help="Update CCB or the optional rich bundle")
-    update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or 'rich'")
+    install_parser = subparsers.add_parser("install", help="Install or activate optional CCB capabilities")
+    install_parser.add_argument("target", nargs="?", help="'mobile' to start the server-wide CCB Mobile gateway")
+    install_parser.add_argument("--listen", default="127.0.0.1:8787")
+    install_parser.add_argument("--public-url", default=None)
+    install_parser.add_argument(
+        "--route-provider",
+        default="lan",
+        choices=("lan", "tailnet", "cloudflare_tunnel", "relay"),
+    )
+
+    update_parser = subparsers.add_parser("update", help="Update CCB or an optional bundle")
+    update_parser.add_argument("target", nargs="?", help="version like '4', '4.1', '4.1.3', or optional bundle 'rich'/'mobile'")
 
     subparsers.add_parser("version", help="Show version and check for updates")
     uninstall_parser = subparsers.add_parser("uninstall", help="Uninstall ccb, or uninstall the optional rich bundle")

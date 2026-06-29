@@ -7,6 +7,7 @@ from typing import Any
 from agents.models import layout_tool_alias_command, layout_tool_alias_label, parse_layout_spec
 from terminal_runtime.placeholders import pane_placeholder_cmd
 from terminal_runtime.tmux_identity import apply_ccb_pane_identity
+from terminal_runtime.tmux_theme import tmux_theme_profile
 
 from .backend import create_window, session_window_target, split_pane, window_root_pane
 
@@ -20,6 +21,11 @@ class WindowPatchResult:
     removed_windows: list[str] = field(default_factory=list)
     removed_panes: list[str] = field(default_factory=list)
     removed_agents: dict[str, str] = field(default_factory=dict)
+    moved_agents: dict[str, str] = field(default_factory=dict)
+    moved_agent_windows: dict[str, str] = field(default_factory=dict)
+    move_anchor_panes: dict[str, str] = field(default_factory=dict)
+    reflowed_windows: list[str] = field(default_factory=list)
+    reflow_errors: dict[str, str] = field(default_factory=dict)
     tool_panes: dict[str, str] = field(default_factory=dict)
 
 
@@ -31,11 +37,20 @@ def create_new_windows(
     old_topology,
     new_topology,
     result: WindowPatchResult | None = None,
+    excluded_agents: tuple[str, ...] | set[str] = (),
     timeout_s: float | None,
 ) -> WindowPatchResult:
     result = result or WindowPatchResult()
     for window in _new_windows(old_topology, new_topology):
-        _create_single_window(controller, backend, current=current, window=window, result=result, timeout_s=timeout_s)
+        _create_single_window(
+            controller,
+            backend,
+            current=current,
+            window=window,
+            result=result,
+            timeout_s=timeout_s,
+            excluded_agents=excluded_agents,
+        )
     return result
 
 
@@ -47,6 +62,7 @@ def _create_single_window(
     window,
     result: WindowPatchResult,
     timeout_s: float | None,
+    excluded_agents: tuple[str, ...] | set[str],
 ) -> None:
     window_name = str(window.name)
     record = create_window(
@@ -65,6 +81,7 @@ def _create_single_window(
     )
     _append_unique(result.created_panes, root_pane)
     user_root = _maybe_create_sidebar(controller, backend, current=current, window=window, root_pane=root_pane, result=result, timeout_s=timeout_s)
+    result.move_anchor_panes[window_name] = user_root
     result.agent_panes.update(
         _materialize_new_window_agents(
             controller,
@@ -75,6 +92,7 @@ def _create_single_window(
             created_panes=result.created_panes,
             result=result,
             timeout_s=timeout_s,
+            excluded_agents=excluded_agents,
         )
     )
     _materialize_new_tool_window(
@@ -144,11 +162,17 @@ def _materialize_new_window_agents(
     created_panes: list[str],
     result: WindowPatchResult,
     timeout_s: float | None,
+    excluded_agents: tuple[str, ...] | set[str],
 ) -> dict[str, str]:
     if str(getattr(window, 'kind', '') or '') == 'tool':
         return {}
-    layout = parse_layout_spec(window.user_layout)
+    excluded = {str(agent) for agent in tuple(excluded_agents or ())}
     agent_names = tuple(str(name) for name in getattr(window, 'agent_names', ()) or ())
+    if excluded and all(name in excluded for name in agent_names):
+        return {}
+    if excluded and any(name in excluded for name in agent_names):
+        return {}
+    layout = parse_layout_spec(window.user_layout)
     tool_names = set(str(name) for name in tuple(getattr(window, 'tool_names', ()) or ()))
     style_index_by_agent = {name: index for index, name in enumerate(agent_names)}
     agent_panes: dict[str, str] = {}
@@ -333,6 +357,7 @@ def _user_pane_percent_for_sidebar(width: object) -> int:
 def _respawn_sidebar(backend, pane_id: str, launch_args: tuple[str, ...], *, cwd: str) -> None:
     args = tuple(launch_args or ())
     command = ' '.join(shlex.quote(str(part)) for part in args) if args else pane_placeholder_cmd()
+    command = f'CCB_SIDEBAR_THEME_PROFILE={shlex.quote(tmux_theme_profile())} {command}'
     respawn = getattr(backend, 'respawn_pane', None)
     if callable(respawn):
         respawn(pane_id, cmd=command, cwd=cwd, remain_on_exit=True)

@@ -2,8 +2,9 @@ from __future__ import annotations
 
 from typing import Iterable
 
-from agents.models import AgentState, QueuePolicy, normalize_agent_name
+from agents.models import QueuePolicy, normalize_agent_name
 from ccbd.api_models import DeliveryScope
+from ccbd.reload_drain import DrainQueueStore
 from mailbox_runtime.targets import NON_AGENT_ACTORS
 
 from .records import get_job, latest_for_agent
@@ -25,10 +26,14 @@ def validate_sender(dispatcher, sender: str) -> None:
 
 def resolve_targets(dispatcher, request) -> tuple[str, ...]:
     if request.delivery_scope is DeliveryScope.SINGLE:
-        dispatcher._registry.spec_for(request.to_agent)
+        _ensure_dispatch_enabled(dispatcher, request.to_agent)
         return (request.to_agent,)
 
-    alive = [runtime.agent_name for runtime in dispatcher._registry.list_alive()]
+    alive = [
+        runtime.agent_name
+        for runtime in dispatcher._registry.list_alive()
+        if not _dispatch_disabled(dispatcher, runtime.agent_name)
+    ]
     if request.from_actor not in NON_AGENT_ACTORS:
         alive = [name for name in alive if name != request.from_actor]
     return tuple(sorted(alive))
@@ -37,8 +42,36 @@ def resolve_targets(dispatcher, request) -> tuple[str, ...]:
 def validate_targets_available(dispatcher, targets: Iterable[str]) -> None:
     for agent_name in targets:
         spec = dispatcher._registry.spec_for(agent_name)
+        if bool(getattr(spec, 'dispatch_disabled', False)):
+            raise dispatcher._dispatch_rejected_error(f'agent {agent_name} is dispatch-disabled')
+        if _drain_blocks_dispatch(dispatcher, agent_name):
+            raise dispatcher._dispatch_rejected_error(f'agent {agent_name} is draining and rejects new work')
         if spec.queue_policy is QueuePolicy.REJECT_WHEN_BUSY and dispatcher._has_outstanding_work(agent_name):
             raise dispatcher._dispatch_rejected_error(f'agent {agent_name} rejects new work while busy')
+
+
+def _ensure_dispatch_enabled(dispatcher, agent_name: str):
+    spec = dispatcher._registry.spec_for(agent_name)
+    if bool(getattr(spec, 'dispatch_disabled', False)):
+        raise dispatcher._dispatch_rejected_error(f'agent {agent_name} is dispatch-disabled')
+    if _drain_blocks_dispatch(dispatcher, agent_name):
+        raise dispatcher._dispatch_rejected_error(f'agent {agent_name} is draining and rejects new work')
+    return spec
+
+
+def _dispatch_disabled(dispatcher, agent_name: str) -> bool:
+    try:
+        spec = dispatcher._registry.spec_for(agent_name)
+    except Exception:
+        return True
+    return bool(getattr(spec, 'dispatch_disabled', False)) or _drain_blocks_dispatch(dispatcher, agent_name)
+
+
+def _drain_blocks_dispatch(dispatcher, agent_name: str) -> bool:
+    try:
+        return DrainQueueStore(dispatcher._layout).load().blocks_new_work_for(agent_name)
+    except Exception:
+        return False
 
 
 def resolve_watch_target(dispatcher, target: str) -> tuple[str, str]:

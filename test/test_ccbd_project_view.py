@@ -30,6 +30,7 @@ from ccbd.project_view import (
     resolve_agent_activity,
 )
 import ccbd.project_view.service as project_view_service
+from ccbd.reload_drain import DrainIntent, DrainQueueStore, plan_drain_transition
 from ccbd.services.dispatcher import JobDispatcher
 from ccbd.services.mount import MountManager
 from ccbd.services.project_namespace import ProjectNamespaceController
@@ -190,6 +191,7 @@ def _job(
     terminal_reason: str | None = None,
     body: str = 'work',
     silence_on_success: bool = False,
+    route_options: dict[str, object] | None = None,
 ) -> JobRecord:
     terminal_decision = None
     if status in {JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.INCOMPLETE}:
@@ -205,6 +207,7 @@ def _job(
             _message(project_id, sender=sender, target=target),
             body=body,
             silence_on_success=silence_on_success,
+            route_options=dict(route_options or {}),
         ),
         status=status,
         terminal_decision=terminal_decision,
@@ -335,6 +338,99 @@ def _project_view_service(
             clock=lambda: NOW,
         )
     )
+
+
+def _write_active_unload_drain(layout: PathLayout, agent_name: str):
+    store = DrainQueueStore(layout)
+    intent = DrainIntent(
+        intent_id=f'drain-test-{agent_name}',
+        intent_kind='unload',
+        agent_name=agent_name,
+        created_at_s=10.0,
+        reason='test busy unload',
+    )
+    result = store.load().enqueue(intent, now_s=10.0)
+    record = plan_drain_transition(result.record, now_s=10.0, is_busy=lambda _record: True)
+    store.save(result.queue.replace_record(record))
+    return record
+
+
+def test_project_view_exposes_active_reload_drains(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-drain-view'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    for agent_name in config.agents:
+        registry.upsert(_runtime(agent_name, project_id=project_id))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    _write_active_unload_drain(layout, 'agent2')
+
+    response = _project_view_service(
+        project_root=project_root,
+        project_id=project_id,
+        layout=layout,
+        config=config,
+        registry=registry,
+        dispatcher=dispatcher,
+    ).build_response()
+    view = response['view']
+
+    assert view['reload_drains']['active_count'] == 1
+    assert view['reload_drains']['retry_command'] == 'ccb reload'
+    assert view['reload_drains']['active_records'][0]['agent'] == 'agent2'
+    agent1 = next(agent for agent in view['agents'] if agent['name'] == 'agent1')
+    agent2 = next(agent for agent in view['agents'] if agent['name'] == 'agent2')
+    assert agent1['reload_drain'] is None
+    assert agent1['dispatch_blocked_by_reload_drain'] is False
+    assert agent2['dispatch_blocked_by_reload_drain'] is True
+    assert agent2['reload_drain']['intent_kind'] == 'unload'
+    assert agent2['reload_drain']['phase'] == 'draining'
+    assert agent2['reload_drain']['status'] == 'waiting'
+
+
+def test_project_view_cache_invalidates_when_reload_drain_file_changes(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-drain-cache'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    for agent_name in config.agents:
+        registry.upsert(_runtime(agent_name, project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(
+        project_id=project_id,
+        pid=123,
+        socket_path=layout.ccbd_socket_path,
+        generation=7,
+        started_at=NOW,
+    )
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            paths=layout,
+            clock=lambda: NOW,
+            cache_ttl_ms=60000,
+        )
+    )
+
+    first = service.build_response()
+    _write_active_unload_drain(layout, 'agent2')
+    second = service.build_response()
+
+    assert first['view']['reload_drains']['active_count'] == 0
+    assert second is not first
+    assert second['view']['reload_drains']['active_count'] == 1
+    assert second['view']['agents'][1]['dispatch_blocked_by_reload_drain'] is True
 
 
 def test_project_view_uses_provider_activity_without_ccb_job(tmp_path: Path) -> None:
@@ -1259,6 +1355,70 @@ def test_project_view_comms_includes_recent_terminal_jobs(tmp_path: Path) -> Non
     assert comms[0]['status'] == 'completed'
     assert comms[0]['short_reason'] == 'task_complete'
     assert comms[2]['status'] == 'failed'
+
+
+def test_project_view_comms_exposes_mobile_attachment_metadata(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-comms-attachments'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    for agent_name in config.agents:
+        registry.upsert(_runtime(agent_name, project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    dispatcher._append_job(
+        _job(
+            project_id,
+            job_id='job_mobile_attachment',
+            sender='user',
+            target='agent1',
+            status=JobStatus.COMPLETED,
+            body='Uploaded attachment: probe.txt',
+            route_options={
+                'source': 'mobile_gateway',
+                'attachments': [
+                    {
+                        'file_id': 'mobile-file-1',
+                        'file_name': 'probe.txt',
+                        'mime_type': 'text/plain',
+                        'size_bytes': 11,
+                        'kind': 'document',
+                        'local_path': '/tmp/should-not-leak',
+                    }
+                ],
+            },
+        )
+    )
+
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+        )
+    )
+
+    comm = service.build_response()['view']['comms'][0]
+
+    assert comm['id'] == 'job_mobile_attachment'
+    assert comm['attachments'] == [
+        {
+            'file_id': 'mobile-file-1',
+            'file_name': 'probe.txt',
+            'mime_type': 'text/plain',
+            'size_bytes': 11,
+            'kind': 'document',
+        }
+    ]
+    assert 'local_path' not in str(comm['attachments'])
 
 
 def test_project_view_filters_dismissed_comms_from_shared_state(tmp_path: Path) -> None:
@@ -2249,6 +2409,134 @@ def test_project_view_cache_hit_skips_tmux_calls(tmp_path: Path) -> None:
     assert first is second
     assert backend.calls == []
 
+
+def test_project_view_uses_longer_idle_cache_ttl(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-idle-cache-ttl'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('agent1', project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+        )
+    )
+
+    assert service.build_response()['cache']['ttl_ms'] == 5000
+
+
+def test_project_view_uses_short_cache_ttl_when_work_is_active(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-active-cache-ttl'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('agent1', project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    job = _job(project_id, job_id='job_active_ttl', sender='agent2', target='agent1', status=JobStatus.RUNNING)
+    dispatcher._append_job(job)
+    dispatcher._state.mark_active_for(TargetKind.AGENT, 'agent1', job.job_id)
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+        )
+    )
+
+    assert service.build_response()['cache']['ttl_ms'] == 1000
+
+
+def test_project_view_idle_cache_ttl_can_restore_legacy_cadence(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv('CCB_PROJECT_VIEW_IDLE_TTL_MS', '1000')
+    project_root = tmp_path / 'repo-idle-cache-ttl-env'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('agent1', project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+        )
+    )
+
+    assert service.build_response()['cache']['ttl_ms'] == 1000
+
+
+
+def test_project_view_cache_invalidates_when_dispatcher_jobs_change(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-cache-dispatcher-revision'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    for agent_name in config.agents:
+        registry.upsert(_runtime(agent_name, project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+            cache_ttl_ms=60000,
+        )
+    )
+
+    first = service.build_response()
+    dispatcher._append_job(
+        _job(
+            project_id,
+            job_id='job_cache_dirty',
+            sender='user',
+            target='agent1',
+            status=JobStatus.COMPLETED,
+            body='cache should observe this without waiting for TTL',
+        )
+    )
+    second = service.build_response()
+
+    assert second is not first
+    assert [item['id'] for item in second['view']['comms']] == ['job_cache_dirty']
 
 def test_project_view_updates_build_cache_and_tmux_metrics(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-project-view-metrics'

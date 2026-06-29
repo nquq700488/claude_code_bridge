@@ -242,11 +242,22 @@ def _build_operations(current_config, new_config) -> list[dict[str, object]]:
         old_record = _agent_record(current_config.agents[agent_name])
         new_record = _agent_record(new_config.agents[agent_name])
         if old_record != new_record:
+            changed_fields = _changed_fields(old_record, new_record)
+            if changed_fields == ['dispatch_disabled']:
+                operations.append(
+                    {
+                        'op': 'view_only_change',
+                        'agent': agent_name,
+                        'fields': changed_fields,
+                        'reason': 'existing agent dispatch availability changed without runtime replacement',
+                    }
+                )
+                continue
             operations.append(
                 {
                     'op': 'replace_agent',
                     'agent': agent_name,
-                    'fields': _changed_fields(old_record, new_record),
+                    'fields': changed_fields,
                     'reason': 'existing agent spec changed',
                 }
             )
@@ -330,6 +341,8 @@ def _future_safe_to_apply(plan_class: str, operations: list[dict[str, object]]) 
         return not any(str(item.get('op') or '') in unsafe_tool_ops | unsafe_agent_ops for item in operations)
     if plan_class == 'remove_agent':
         return _remove_agent_operations_are_safe(operations)
+    if plan_class == 'move_agent':
+        return _move_agent_operations_are_safe(operations)
     unsafe_ops = {'replace_agent', 'move_agent', 'layout_change', 'change_tool_window'}
     if any(str(item.get('op') or '') in unsafe_ops for item in operations):
         return False
@@ -347,6 +360,62 @@ def _remove_agent_operations_are_safe(operations: list[dict[str, object]]) -> bo
             continue
         return False
     return any(str(item.get('op') or '') == 'remove_agent' for item in operations)
+
+
+def _move_agent_operations_are_safe(operations: list[dict[str, object]]) -> bool:
+    if not operations:
+        return False
+    moved_targets = {
+        str(item.get('agent') or ''): str(item.get('to_window') or '')
+        for item in operations
+        if str(item.get('op') or '') == 'move_agent' and str(item.get('agent') or '')
+    }
+    moved_source_windows = {
+        str(item.get('from_window') or '')
+        for item in operations
+        if str(item.get('op') or '') == 'move_agent' and str(item.get('from_window') or '')
+    }
+    moved_target_windows = set(moved_targets.values())
+    added_agents_by_window: dict[str, set[str]] = {}
+    for item in operations:
+        if str(item.get('op') or '') != 'add_agent':
+            continue
+        agent = str(item.get('agent') or '')
+        window = str(item.get('window') or '')
+        if agent and window:
+            added_agents_by_window.setdefault(window, set()).add(agent)
+    if not moved_targets:
+        return False
+    for item in operations:
+        op = str(item.get('op') or '')
+        if op == 'move_agent':
+            continue
+        if op == 'add_agent':
+            window = str(item.get('window') or '')
+            if window not in moved_target_windows:
+                return False
+            continue
+        if op == 'add_window':
+            window = str(item.get('window') or '')
+            agents = tuple(str(agent) for agent in tuple(item.get('agents') or ()))
+            if not agents:
+                return False
+            moved_for_window = {agent for agent, target in moved_targets.items() if target == window}
+            added_for_window = added_agents_by_window.get(window, set())
+            if not moved_for_window:
+                return False
+            if set(agents[: len(moved_for_window)]) != moved_for_window:
+                return False
+            if set(agents) != set(moved_for_window) | added_for_window:
+                return False
+            continue
+        if op == 'layout_change' and str(item.get('change') or '') == 'remove_window':
+            window = str(item.get('window') or '')
+            if window not in moved_source_windows:
+                return False
+            continue
+        return False
+    return True
 
 
 def _tool_window_operations(

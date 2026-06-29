@@ -30,6 +30,14 @@ def test_install_script_links_rs_helper() -> None:
     assert 'ERROR: ccb-rs-helper binary not available' in text
 
 
+def test_install_script_links_runtime_accelerator_when_packaged() -> None:
+    text = Path('install.sh').read_text(encoding='utf-8')
+
+    assert 'bin/ccb-runtime-accelerator' in text
+    assert 'bin/build-ccb-runtime-accelerator' in text
+    assert 'bin/build-ccb-runtime-accelerator|bin/ccb-runtime-accelerator' in text
+
+
 def test_install_script_does_not_provision_standalone_neovim_tool() -> None:
     text = Path('install.sh').read_text(encoding='utf-8')
 
@@ -101,6 +109,14 @@ def test_rs_helper_build_script_copies_release_binary() -> None:
     text = Path('bin/build-ccb-rs-helper').read_text(encoding='utf-8')
 
     assert 'cargo build --release --manifest-path "$CRATE_DIR/Cargo.toml"' in text
+    assert 'cp -f "$TARGET_BIN" "$OUT_BIN"' in text
+    assert 'Built $OUT_BIN' in text
+
+
+def test_runtime_accelerator_build_script_copies_release_binary() -> None:
+    text = Path('bin/build-ccb-runtime-accelerator').read_text(encoding='utf-8')
+
+    assert 'cargo build --release --manifest-path "$WORKSPACE/Cargo.toml" -p ccb-runtime-accelerator' in text
     assert 'cp -f "$TARGET_BIN" "$OUT_BIN"' in text
     assert 'Built $OUT_BIN' in text
 
@@ -550,3 +566,31 @@ def test_release_artifacts_workflow_sets_up_rust_for_sidebar_build() -> None:
     assert "grep -F 'universal binary'" in text
     assert '"$helper" --help' in text
     assert '"$rs_helper" --capabilities' in text
+
+
+def test_npm_publish_workflow_skips_already_published_version() -> None:
+    text = Path('.github/workflows/npm-publish.yml').read_text(encoding='utf-8')
+    version = Path('VERSION').read_text(encoding='utf-8').strip()
+
+    assert f'default: "v{version}"' in text
+    assert 'npm view "@seemseam/ccb@$version" version' in text
+    assert "steps.npm_status.outputs.published != 'true'" in text
+
+
+def test_release_artifacts_workflow_accepts_runtime_accelerator_socket_fallback() -> None:
+    text = Path('.github/workflows/release-artifacts.yml').read_text(encoding='utf-8')
+
+    assert 'accelerator_socket="$("$accelerator" socket-path --project-root "$verify_dir")"' in text
+    assert '*/.ccb/runtime-accelerator/accelerator.sock|*/ccb-runtime/accelerator-*.sock)' in text
+    assert 'Unexpected runtime accelerator socket path' in text
+
+
+def test_release_artifacts_workflow_writes_release_notes_from_changelog() -> None:
+    text = Path('.github/workflows/release-artifacts.yml').read_text(encoding='utf-8')
+
+    assert 'Checkout release notes' in text
+    assert 'changelog = Path(os.environ["GITHUB_WORKSPACE"]) / "CHANGELOG.md"' in text
+    assert 'release notes missing for {tag}' in text
+    assert 'gh release edit "$TAG_NAME"' in text
+    assert 'gh release create "$TAG_NAME"' in text
+    assert '--notes-file "$notes_file"' in text

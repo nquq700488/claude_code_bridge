@@ -1,0 +1,203 @@
+import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollCacheExtent;
+
+import '../../models/ccb_agent.dart';
+import '../../models/ccb_content_item.dart';
+import '../../models/ccb_conversation_item.dart';
+import '../../models/ccb_project_view.dart';
+import '../../models/readable_terminal_history.dart';
+import '../../repository/mobile_ccb_repository.dart';
+import 'content_reader.dart';
+import 'conversation_bubble.dart';
+import 'readable_terminal_history_panel.dart';
+
+class ConversationTimeline extends StatelessWidget {
+  const ConversationTimeline({
+    required this.repository,
+    required this.view,
+    required this.agent,
+    required this.contentItems,
+    required this.initialHistory,
+    required this.items,
+    required this.isLoading,
+    required this.controller,
+    required this.expandedItemIds,
+    required this.downloadingAttachmentIds,
+    required this.downloadedAttachmentIds,
+    required this.onRetry,
+    required this.onToggleExpanded,
+    required this.onNearEnd,
+    required this.onUserNearEnd,
+    required this.onNearStart,
+    required this.hasOlderItems,
+    required this.onDownloadAttachment,
+    super.key,
+  });
+
+  final MobileCcbRepository repository;
+  final CcbProjectView view;
+  final CcbAgent agent;
+  final List<CcbContentItem> contentItems;
+  final ReadableTerminalHistory? initialHistory;
+  final List<CcbConversationItem> items;
+  final bool isLoading;
+  final ScrollController controller;
+  final Set<String> expandedItemIds;
+  final Set<String> downloadingAttachmentIds;
+  final Set<String> downloadedAttachmentIds;
+  final ValueChanged<CcbConversationItem> onRetry;
+  final ValueChanged<String> onToggleExpanded;
+  final VoidCallback onNearEnd;
+  final VoidCallback onUserNearEnd;
+  final VoidCallback onNearStart;
+  final bool hasOlderItems;
+  final ValueChanged<CcbMessageAttachment> onDownloadAttachment;
+
+  @override
+  Widget build(BuildContext context) {
+    final contentById = {for (final item in contentItems) item.id: item};
+    final loadingOffset = isLoading ? 1 : 0;
+    return NotificationListener<ScrollNotification>(
+      onNotification: (notification) {
+        final userDriven = isUserDrivenScrollNotification(notification);
+        if (isScrollMetricsNearEnd(notification.metrics)) {
+          onNearEnd();
+          if (userDriven) {
+            onUserNearEnd();
+          }
+        }
+        if (userDriven &&
+            hasOlderItems &&
+            isScrollMetricsNearStart(notification.metrics)) {
+          onNearStart();
+        }
+        return false;
+      },
+      child: ListView.separated(
+        key: const ValueKey('agent-chat-timeline'),
+        controller: controller,
+        primary: false,
+        scrollCacheExtent: const ScrollCacheExtent.pixels(420),
+        itemCount: items.length + loadingOffset,
+        separatorBuilder: (context, index) => const SizedBox(height: 8),
+        itemBuilder: (context, index) {
+          if (isLoading && index == 0) {
+            return const LinearProgressIndicator(
+              key: ValueKey('agent-conversation-loading'),
+            );
+          }
+          final item = items[index - loadingOffset];
+          return _ConversationTimelineItem(
+            key: ValueKey('conversation-timeline-item-${item.id}'),
+            item: item,
+            content:
+                item.contentId == null ? null : contentById[item.contentId],
+            repository: repository,
+            view: view,
+            agent: agent,
+            initialHistory: initialHistory,
+            expanded: expandedItemIds.contains(item.id),
+            downloadingAttachmentIds: downloadingAttachmentIds,
+            downloadedAttachmentIds: downloadedAttachmentIds,
+            onRetry: onRetry,
+            onToggleExpanded: onToggleExpanded,
+            onDownloadAttachment: onDownloadAttachment,
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ConversationTimelineItem extends StatelessWidget {
+  const _ConversationTimelineItem({
+    required this.item,
+    required this.content,
+    required this.repository,
+    required this.view,
+    required this.agent,
+    required this.initialHistory,
+    required this.expanded,
+    required this.downloadingAttachmentIds,
+    required this.downloadedAttachmentIds,
+    required this.onRetry,
+    required this.onToggleExpanded,
+    required this.onDownloadAttachment,
+    super.key,
+  });
+
+  final CcbConversationItem item;
+  final CcbContentItem? content;
+  final MobileCcbRepository repository;
+  final CcbProjectView view;
+  final CcbAgent agent;
+  final ReadableTerminalHistory? initialHistory;
+  final bool expanded;
+  final Set<String> downloadingAttachmentIds;
+  final Set<String> downloadedAttachmentIds;
+  final ValueChanged<CcbConversationItem> onRetry;
+  final ValueChanged<String> onToggleExpanded;
+  final ValueChanged<CcbMessageAttachment> onDownloadAttachment;
+
+  @override
+  Widget build(BuildContext context) {
+    if (item.kind == CcbConversationItemKind.terminalHistoryBlock) {
+      return ConversationBubble(
+        item: item,
+        expanded: expanded,
+        onToggleExpanded: onToggleExpanded,
+        child: AgentReadableHistoryLoader(
+          repository: repository,
+          projectId: view.project.id,
+          agentName: agent.name,
+          namespaceEpoch: view.namespaceEpoch,
+          initialHistory: initialHistory,
+        ),
+        onDownloadAttachment: onDownloadAttachment,
+        downloadingAttachmentIds: downloadingAttachmentIds,
+        downloadedAttachmentIds: downloadedAttachmentIds,
+      );
+    }
+    final contentItem = content;
+    if (contentItem != null) {
+      return ConversationBubble(
+        item: item,
+        expanded: expanded,
+        onToggleExpanded: onToggleExpanded,
+        child: AgentContentReader(items: [contentItem]),
+        onDownloadAttachment: onDownloadAttachment,
+        downloadingAttachmentIds: downloadingAttachmentIds,
+        downloadedAttachmentIds: downloadedAttachmentIds,
+      );
+    }
+    return ConversationBubble(
+      item: item,
+      expanded: expanded,
+      onToggleExpanded: onToggleExpanded,
+      onRetry:
+          item.state == CcbConversationDeliveryState.failed
+              ? () {
+                onRetry(item);
+              }
+              : null,
+      onDownloadAttachment: onDownloadAttachment,
+      downloadingAttachmentIds: downloadingAttachmentIds,
+      downloadedAttachmentIds: downloadedAttachmentIds,
+    );
+  }
+}
+
+bool isUserDrivenScrollNotification(ScrollNotification notification) {
+  return (notification is ScrollUpdateNotification &&
+          notification.dragDetails != null) ||
+      (notification is OverscrollNotification &&
+          notification.dragDetails != null);
+}
+
+bool isScrollMetricsNearEnd(ScrollMetrics metrics) {
+  return metrics.maxScrollExtent - metrics.pixels <= 72;
+}
+
+bool isScrollMetricsNearStart(ScrollMetrics metrics) {
+  return metrics.pixels <= 72;
+}

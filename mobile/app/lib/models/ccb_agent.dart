@@ -1,0 +1,49 @@
+class CcbAgent {
+  const CcbAgent({
+    required this.name,
+    required this.provider,
+    required this.window,
+    required this.order,
+    required this.active,
+    required this.queueDepth,
+    this.paneId,
+    this.runtimeHealth,
+    this.activityState,
+  });
+
+  final String name;
+  final String provider;
+  final String window;
+  final int order;
+  final bool active;
+  final int queueDepth;
+  final String? paneId;
+  final String? runtimeHealth;
+  final String? activityState;
+
+  factory CcbAgent.fromJson(Map<String, Object?> json) {
+    return CcbAgent(
+      name: _text(json['name']),
+      provider: _text(json['provider']),
+      window: _text(json['window']),
+      order: _int(json['order']),
+      active: json['active'] == true,
+      queueDepth: _int(json['queue_depth']),
+      paneId: _optionalText(json['pane_id']),
+      runtimeHealth: _optionalText(json['runtime_health']),
+      activityState: _optionalText(json['state']),
+    );
+  }
+}
+
+String _text(Object? value, {String fallback = ''}) {
+  final text = (value ?? '').toString().trim();
+  return text.isEmpty ? fallback : text;
+}
+
+String? _optionalText(Object? value) {
+  final text = _text(value);
+  return text.isEmpty ? null : text;
+}
+
+int _int(Object? value) => int.tryParse((value ?? '').toString()) ?? 0;

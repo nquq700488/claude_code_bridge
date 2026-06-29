@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
 from typing import Any
@@ -11,6 +11,7 @@ from agents.config_loader import load_project_config
 from agents.models import AgentState
 from ccbd.api_models import JobStatus, TargetKind
 from ccbd.models import MountState
+from ccbd.reload_drain_status import reload_drain_revision, reload_drain_status_payload
 from ccbd.project_focus.tmux import backend_for_namespace, refresh_sidebar_panes
 from ccbd.services.dispatcher_runtime import comms_recoverability_for_job
 from ccbd.system import parse_utc_timestamp, utc_now
@@ -30,6 +31,7 @@ from .sequence import ProjectViewSequenceCache
 
 PROJECT_VIEW_SCHEMA_VERSION = 1
 PROJECT_VIEW_TTL_MS = 1000
+PROJECT_VIEW_IDLE_TTL_MS = 5000
 PROJECT_VIEW_COMMS_LIMIT = 8
 _RECENT_JOB_RESULT_LIMIT = PROJECT_VIEW_COMMS_LIMIT * 8
 _RECENT_JOB_SCAN_LIMIT_PER_AGENT = 128
@@ -240,6 +242,8 @@ class _CommsLookup:
 class _CachedProjectViewResponse:
     response: dict[str, object]
     expires_at: float
+    dispatcher_revision: int
+    drain_revision: tuple[int, int] | None
 
 
 class ProjectViewService:
@@ -265,10 +269,17 @@ class ProjectViewService:
         ttl_ms = _project_view_ttl_ms(self._deps)
         ttl_s = max(0.0, ttl_ms / 1000.0)
         now = monotonic()
+        dispatcher_revision = _dispatcher_project_view_revision(self._deps.dispatcher)
+        drain_revision = reload_drain_revision(self._deps)
         did_refresh_sidebar = False
         if ttl_s > 0:
             cached = self._cached_response
-            if cached is not None and now < cached.expires_at:
+            if (
+                cached is not None
+                and now < cached.expires_at
+                and cached.dispatcher_revision == dispatcher_revision
+                and cached.drain_revision == drain_revision
+            ):
                 did_refresh_sidebar = self._consume_sidebar_refresh_request()
                 if did_refresh_sidebar:
                     sidebar_refresh_started = monotonic()
@@ -295,6 +306,8 @@ class ProjectViewService:
             self._cached_response = _CachedProjectViewResponse(
                 response=response,
                 expires_at=monotonic() + ttl_s,
+                dispatcher_revision=dispatcher_revision,
+                drain_revision=drain_revision,
             )
         _record_project_view_cache_miss(
             self._deps.metrics,
@@ -356,6 +369,8 @@ def build_project_view(
     queued_jobs = _queued_jobs_by_agent(deps.dispatcher)
     callback_waits = _callback_waits_by_parent_agent(deps.dispatcher)
     provider_runtime_by_agent = _provider_runtime_by_agent(deps.dispatcher)
+    reload_drains = reload_drain_status_payload(deps)
+    active_drain_by_agent = _active_reload_drains_by_agent(reload_drains)
 
     agents = [
         _agent_view(
@@ -371,6 +386,7 @@ def build_project_view(
             queued_jobs=queued_jobs.get(agent_name, ()),
             callback_wait=callback_waits.get(agent_name),
             provider_runtimes=provider_runtime_by_agent.get(agent_name, ()),
+            reload_drain=active_drain_by_agent.get(agent_name),
         )
         for order, agent_name in enumerate(_agent_order(deps.config))
     ]
@@ -392,6 +408,7 @@ def build_project_view(
         ),
         'windows': _window_views(config=deps.config, focus=focus, tmux_snapshot=tmux_snapshot),
         'agents': agents,
+        'reload_drains': reload_drains,
         'comms': _comms_view(
             deps,
             context=context,
@@ -402,9 +419,61 @@ def build_project_view(
     }
 
 
+def _dispatcher_project_view_revision(dispatcher: object | None) -> int:
+    value = getattr(dispatcher, 'project_view_revision', 0)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _project_view_ttl_ms(deps: ProjectViewDependencies) -> int:
-    ttl_ms = PROJECT_VIEW_TTL_MS if deps.cache_ttl_ms is None else int(deps.cache_ttl_ms)
+    if deps.cache_ttl_ms is not None:
+        ttl_ms = int(deps.cache_ttl_ms)
+    elif _project_view_work_pending(deps):
+        ttl_ms = _env_int('CCB_PROJECT_VIEW_TTL_MS', PROJECT_VIEW_TTL_MS)
+    else:
+        ttl_ms = _env_int('CCB_PROJECT_VIEW_IDLE_TTL_MS', PROJECT_VIEW_IDLE_TTL_MS)
     return max(0, ttl_ms)
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _project_view_work_pending(deps: ProjectViewDependencies) -> bool:
+    if _reload_drain_active_count(deps) > 0:
+        return True
+    dispatcher_state = getattr(getattr(deps, 'dispatcher', None), '_state', None)
+    if dispatcher_state is not None:
+        try:
+            if dispatcher_state.active_items():
+                return True
+        except Exception:
+            return True
+        queues = getattr(dispatcher_state, '_queues', {})
+        try:
+            if any(len(queue) > 0 for queue in queues.values()):
+                return True
+        except Exception:
+            return True
+    registry = getattr(deps, 'registry', None)
+    try:
+        runtimes = registry.list_all() if registry is not None else ()
+    except Exception:
+        return True
+    return any(getattr(runtime, 'state', None) in {AgentState.STARTING, AgentState.BUSY, AgentState.DEGRADED} for runtime in runtimes)
+
+
+def _reload_drain_active_count(deps: ProjectViewDependencies) -> int:
+    payload = reload_drain_status_payload(deps)
+    try:
+        return int(payload.get('active_count') or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _record_project_view_cache_hit(metrics, *, response_started: float) -> None:
@@ -457,6 +526,7 @@ def _agent_view(
     callback_wait,
     active: bool = False,
     provider_runtimes: tuple[dict[str, object], ...] = (),
+    reload_drain: dict[str, object] | None = None,
 ) -> dict[str, object]:
     spec = deps.config.agents[agent_name]
     runtime = deps.registry.get(agent_name)
@@ -527,10 +597,23 @@ def _agent_view(
         'runtime_health': getattr(runtime, 'health', None) if runtime is not None else None,
         'reconcile_state': getattr(runtime, 'reconcile_state', None) if runtime is not None else None,
         'workspace_path': getattr(runtime, 'workspace_path', None) if runtime is not None else None,
+        'reload_drain': dict(reload_drain) if reload_drain is not None else None,
+        'dispatch_blocked_by_reload_drain': reload_drain is not None,
     }
     if provider_runtime is not None:
         record['provider_runtime'] = provider_runtime
     return record
+
+
+def _active_reload_drains_by_agent(reload_drains: dict[str, object]) -> dict[str, dict[str, object]]:
+    records: dict[str, dict[str, object]] = {}
+    for item in tuple(reload_drains.get('active_records') or ()):
+        if not isinstance(item, dict):
+            continue
+        agent_name = str(item.get('agent') or '').strip()
+        if agent_name:
+            records[agent_name] = dict(item)
+    return records
 
 
 def _provider_activity_needs_pane_error_probe(provider_activity: object | None, generated_at: str) -> bool:
@@ -1471,6 +1554,7 @@ def _comm_record(
         running_hint=running_recover_hint,
         lineage_for_job=lineage_for_recoverability,
     )
+    attachments = _comm_attachments(job)
     return {
         'id': job.job_id,
         'short_id': _short_id(job.job_id),
@@ -1486,8 +1570,44 @@ def _comm_record(
         'reply_delivery_job_id': reply_delivery.job_id if reply_delivery is not None else None,
         'callback': bool(getattr(job.request, 'reply_to', None)),
         'short_reason': _short_reason(job),
+        **({'attachments': attachments} if attachments else {}),
         **recoverability.to_record(),
     }
+
+
+def _comm_attachments(job) -> list[dict[str, object]]:
+    options = getattr(getattr(job, 'request', None), 'route_options', None)
+    if not isinstance(options, dict):
+        return []
+    raw = options.get('attachments')
+    if not isinstance(raw, (list, tuple)):
+        return []
+    attachments: list[dict[str, object]] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        file_id = str(item.get('file_id') or item.get('attachment_id') or '').strip()
+        if not file_id:
+            continue
+        file_name = str(item.get('file_name') or item.get('filename') or 'attachment').strip()
+        mime_type = str(item.get('mime_type') or 'application/octet-stream').strip()
+        try:
+            size_bytes = int(item.get('size_bytes') or 0)
+        except Exception:
+            size_bytes = 0
+        kind = str(item.get('kind') or '').strip()
+        if not kind:
+            kind = 'image' if mime_type.startswith('image/') else 'document'
+        attachments.append(
+            {
+                'file_id': file_id,
+                'file_name': file_name or 'attachment',
+                'mime_type': mime_type or 'application/octet-stream',
+                'size_bytes': max(0, size_bytes),
+                'kind': kind,
+            }
+        )
+    return attachments
 
 
 def _comm_business_status(job, *, reply_delivery, configured_agents: frozenset[str]) -> tuple[str, str]:

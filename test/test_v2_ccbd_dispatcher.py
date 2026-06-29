@@ -16,6 +16,7 @@ from agents.models import (
     WorkspaceMode,
 )
 from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope, TargetKind
+from ccbd.reload_drain import DrainIntent, DrainQueueStore
 from ccbd.services.dispatcher import JobDispatcher
 from ccbd.services.runtime import RuntimeService
 from ccbd.services.registry import AgentRegistry
@@ -93,8 +94,9 @@ def _fake_config(*, provider: str = 'fake') -> ProjectConfig:
     return ProjectConfig(version=2, default_agents=('demo',), agents={'demo': spec})
 
 
-def _provider_config(*providers: str) -> ProjectConfig:
+def _provider_config(*providers: str, dispatch_disabled: set[str] | None = None) -> ProjectConfig:
     agents: dict[str, AgentSpec] = {}
+    disabled = set(dispatch_disabled or set())
     for provider in providers:
         agents[provider] = AgentSpec(
             name=provider,
@@ -106,6 +108,7 @@ def _provider_config(*providers: str) -> ProjectConfig:
             restore_default=RestoreMode.AUTO,
             permission_default=PermissionMode.MANUAL,
             queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+            dispatch_disabled=provider in disabled,
         )
     return ProjectConfig(version=2, default_agents=tuple(providers), agents=agents)
 
@@ -470,6 +473,108 @@ def test_dispatcher_broadcast_excludes_sender_and_only_targets_alive_agents(tmp_
 
     assert receipt.submission_id is not None
     assert [job.agent_name for job in receipt.jobs] == ['claude']
+
+
+def test_dispatcher_rejects_dispatch_disabled_single_target(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-dispatch-disabled-single'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', dispatch_disabled={'codex'})
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+
+    with pytest.raises(Exception, match='agent codex is dispatch-disabled'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='codex',
+                from_actor='user',
+                body='hello',
+                task_id='task-1',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+            )
+        )
+
+
+def test_dispatcher_broadcast_skips_dispatch_disabled_agents(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-dispatch-disabled-broadcast'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', dispatch_disabled={'claude'})
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='all',
+            from_actor='user',
+            body='broadcast',
+            task_id='task-1',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.BROADCAST,
+        )
+    )
+
+    assert receipt.submission_id is not None
+    assert [job.agent_name for job in receipt.jobs] == ['codex']
+
+
+def test_dispatcher_rejects_targets_with_active_reload_drain(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-draining-target'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    store = DrainQueueStore(layout)
+    result = store.load().enqueue(
+        DrainIntent(
+            intent_id='drain-claude',
+            intent_kind='unload',
+            agent_name='claude',
+            created_at_s=1.0,
+            reason='test drain',
+        ),
+        now_s=1.0,
+    )
+    store.save(result.queue)
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+
+    with pytest.raises(Exception, match='agent claude is draining and rejects new work'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='claude',
+                from_actor='user',
+                body='hello',
+                task_id='task-1',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+            )
+        )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='all',
+            from_actor='user',
+            body='broadcast',
+            task_id='task-2',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.BROADCAST,
+        )
+    )
+    assert [job.agent_name for job in receipt.jobs] == ['codex']
 
 
 def test_dispatcher_rejects_unknown_sender_agent(tmp_path: Path) -> None:
@@ -1041,6 +1146,65 @@ def test_dispatcher_persists_completion_items_and_state_updates_for_fake_provide
     assert 'completion_terminal' in terminal_event_types
     assert terminal_event_types[-1] == 'job_completed'
     assert watch_terminal['terminal'] is True
+
+
+def test_fake_provider_can_emit_deterministic_local_markdown_reply(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-fake-md'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _fake_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('demo', project_id=ctx.project_id, layout=layout, pid=201))
+    provider_catalog = build_default_provider_catalog()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=ExecutionService(
+            build_default_execution_registry(),
+            clock=StepClock(
+                *(['2026-03-18T00:00:00Z'] * 5),
+                '2026-03-18T00:00:00.100000Z',
+                '2026-03-18T00:00:00.200000Z',
+            ),
+            state_store=ExecutionStateStore(layout),
+        ),
+        completion_tracker=CompletionTrackerService(config, provider_catalog),
+        provider_catalog=provider_catalog,
+        clock=StepClock(
+            *(['2026-03-18T00:00:00Z'] * 5),
+            '2026-03-18T00:00:00.100000Z',
+            '2026-03-18T00:00:00.200000Z',
+        ),
+    )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='ccb-local-md:matrix',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.poll_completions()
+    completed = dispatcher.poll_completions()
+
+    assert len(completed) == 1
+    snapshot = dispatcher.get_snapshot(job_id)
+    assert snapshot is not None
+    reply = snapshot.latest_decision.reply
+    assert reply is not None
+    assert reply.startswith('# CCB Local Markdown matrix')
+    assert '`ccb-local-reply:matrix`' in reply
+    assert '```text' in reply
+    assert '[blocked local link]' in reply
 
 
 def test_dispatcher_single_target_submit_keeps_stopped_agent_queued_until_tick(tmp_path: Path) -> None:

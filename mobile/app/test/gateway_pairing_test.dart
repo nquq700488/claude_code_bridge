@@ -1,0 +1,327 @@
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:ccb_mobile/ccb_mobile.dart';
+import 'package:test/test.dart';
+
+void main() {
+  late HttpServer server;
+  late GatewayPairingClient client;
+  late Uri baseUrl;
+  final requests = <Map<String, Object?>>[];
+
+  setUp(() async {
+    requests.clear();
+    server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    server.listen((request) async {
+      final body = await utf8.decodeStream(request);
+      requests.add({
+        'path': request.uri.path,
+        'authorization': request.headers.value(HttpHeaders.authorizationHeader),
+        'content_length': request.headers.contentLength,
+        'body': body,
+      });
+      final payload = _payloadForRequest(request.uri.path, body);
+      request.response.headers.contentType = ContentType.json;
+      request.response.statusCode = payload.statusCode;
+      request.response.write(jsonEncode(payload.body));
+      await request.response.close();
+    });
+    baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+    client = GatewayPairingClient();
+  });
+
+  tearDown(() async {
+    client.close(force: true);
+    await server.close(force: true);
+  });
+
+  test('claims pairing payload and stores host profile securely', () async {
+    final secureStore = _MemorySecureStore();
+    final store = GatewayHostProfileStore(secureStore: secureStore);
+    final pairing = GatewayPairingPayload.fromJson({
+      'pairing_code': 'one-time-code',
+      'claim_endpoint': '$baseUrl/v1/pairing/claim',
+      'route_provider': 'lan',
+      'gateway_url': baseUrl.toString(),
+      'project_id': 'proj-demo',
+      'scopes': ['view'],
+      'expires_at': '2026-06-18T00:10:00Z',
+    });
+
+    final paired = await client.claimAndStore(
+      pairing: pairing,
+      deviceName: 'Pixel Fold',
+      store: store,
+    );
+    final loaded = await store.read(
+      hostId: paired.profile.hostId,
+      deviceId: paired.profile.deviceId,
+    );
+
+    expect(paired.profile.hostId, 'proj-demo');
+    expect(paired.profile.deviceId, 'dev_demo');
+    expect(paired.profile.routeProvider.kind, RouteProviderKind.lan);
+    expect(paired.profile.routeProvider.gatewayUrl, baseUrl);
+    expect(paired.profile.scopes, {'view'});
+    expect(paired.deviceToken, 'device-secret');
+    expect(loaded?.deviceToken, 'device-secret');
+    expect(
+      loaded?.profile.toJson().toString(),
+      isNot(contains('device-secret')),
+    );
+    expect(secureStore.rawValues.join('\n'), isNot(contains('one-time-code')));
+    expect(requests.single['path'], '/v1/pairing/claim');
+    expect(requests.single['content_length'], greaterThan(0));
+    expect(jsonDecode(requests.single['body'] as String), {
+      'pairing_code': 'one-time-code',
+      'device_name': 'Pixel Fold',
+    });
+  });
+
+  test('injects stored device token into gateway HTTP requests', () async {
+    final transport = HttpGatewayTransport(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev_demo',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: baseUrl,
+        ),
+        scopes: {'view'},
+      ),
+      deviceToken: 'device-secret',
+    );
+    try {
+      final health = await transport.health();
+
+      expect(health.status, 'ok');
+      expect(requests.single['path'], '/v1/health');
+      expect(requests.single['authorization'], 'Bearer device-secret');
+    } finally {
+      transport.close(force: true);
+    }
+  });
+
+  test('rejects claim responses that omit the device token', () async {
+    final pairing = GatewayPairingPayload.fromJson({
+      'pairing_code': 'missing-token',
+      'claim_endpoint': '$baseUrl/v1/pairing/claim',
+      'route_provider': 'lan',
+      'gateway_url': baseUrl.toString(),
+      'scopes': ['view'],
+    });
+
+    await expectLater(
+      client.claim(pairing: pairing, deviceName: 'Pixel Fold'),
+      throwsA(isA<FormatException>()),
+    );
+  });
+
+  test('parses source pairing QR payload JSON', () {
+    final payload = GatewayPairingPayload.fromQrText(
+      jsonEncode({
+        'schema_version': 1,
+        'pairing_id': 'pair_demo',
+        'pairing_code': 'qr-code',
+        'project_id': 'proj-demo',
+        'route_provider': 'cloudflare_tunnel',
+        'gateway_url': 'https://mobile.example.com',
+        'claim_endpoint': 'https://mobile.example.com/v1/pairing/claim',
+        'scopes': ['view', 'focus', 'terminal_input'],
+        'expires_at': '2026-06-18T00:10:00Z',
+      }),
+    );
+
+    expect(payload.pairingCode, 'qr-code');
+    expect(payload.projectId, 'proj-demo');
+    expect(payload.routeProvider, RouteProviderKind.cloudflareTunnel);
+    expect(payload.gatewayUrl, Uri.parse('https://mobile.example.com'));
+    expect(
+      payload.claimEndpoint,
+      Uri.parse('https://mobile.example.com/v1/pairing/claim'),
+    );
+    expect(payload.scopes, {'view', 'focus', 'terminal_input'});
+    expect(
+      payload.expiresAt?.toUtc().toIso8601String(),
+      '2026-06-18T00:10:00.000Z',
+    );
+  });
+
+  test('claims relay pairing and stores relay route metadata', () async {
+    final secureStore = _MemorySecureStore();
+    final store = GatewayHostProfileStore(secureStore: secureStore);
+    final pairing = GatewayPairingPayload.fromJson({
+      'pairing_code': 'relay-code',
+      'claim_endpoint': '$baseUrl/v1/pairing/claim',
+      'route_provider': 'relay',
+      'gateway_url': 'https://relay.seemlab.top',
+      'project_id': 'proj-relay',
+      'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
+    });
+
+    final paired = await client.claimAndStore(
+      pairing: pairing,
+      deviceName: 'Android Emulator Relay',
+      store: store,
+    );
+    final loaded = await store.read(
+      hostId: paired.profile.hostId,
+      deviceId: paired.profile.deviceId,
+    );
+
+    expect(paired.profile.hostId, 'host-relay');
+    expect(paired.projectId, 'proj-relay');
+    expect(paired.profile.routeProvider.kind, RouteProviderKind.relay);
+    expect(
+      paired.profile.routeProvider.gatewayUrl,
+      Uri.parse('https://relay.seemlab.top'),
+    );
+    expect(
+      paired.profile.routeProvider.websocketUrl,
+      Uri.parse('wss://relay.seemlab.top'),
+    );
+    expect(paired.profile.routeProvider.hostFingerprint, 'relay-host-fp');
+    expect(paired.profile.routeProvider.capabilities, {
+      'http_json',
+      'project_view',
+      'websocket_terminal',
+      'relay_tunnel',
+    });
+    expect(paired.profile.routeProvider.diagnostics, {
+      'relay_region': 'local-test',
+      'relay_host_id': 'host-relay',
+    });
+    expect(paired.profile.scopes, {
+      'view',
+      'focus',
+      'terminal_input',
+      'lifecycle',
+    });
+    expect(loaded?.profile.routeProvider.kind, RouteProviderKind.relay);
+    expect(
+      loaded?.profile.routeProvider.websocketUrl,
+      Uri.parse('wss://relay.seemlab.top'),
+    );
+    expect(secureStore.rawValues.join('\n'), isNot(contains('relay-code')));
+  });
+
+  test('rejects malformed pairing QR payload text', () {
+    expect(
+      () => GatewayPairingPayload.fromQrText('not json'),
+      throwsA(isA<FormatException>()),
+    );
+  });
+}
+
+_GatewayResponse _payloadForRequest(String path, String body) {
+  if (path == '/v1/health') {
+    return _GatewayResponse({
+      'schema_version': 1,
+      'status': 'ok',
+      'server_time': '2026-06-18T00:00:00Z',
+      'capabilities': ['http_json', 'project_view', 'pairing'],
+    });
+  }
+  if (path == '/v1/pairing/claim') {
+    final request = jsonDecode(body) as Map<String, Object?>;
+    if (request['pairing_code'] == 'missing-token') {
+      return _GatewayResponse({
+        'schema_version': 1,
+        'status': 'ok',
+        'device': {'device_id': 'dev_demo', 'project_id': 'proj-demo'},
+        'host_profile': {
+          'host_id': 'proj-demo',
+          'project_id': 'proj-demo',
+          'device_id': 'dev_demo',
+          'route_provider': 'lan',
+          'scopes': ['view'],
+        },
+      });
+    }
+    if (request['pairing_code'] == 'relay-code') {
+      return _GatewayResponse({
+        'schema_version': 1,
+        'status': 'ok',
+        'device_token': 'device-secret',
+        'device': {
+          'device_id': 'dev_relay',
+          'name': request['device_name'],
+          'project_id': 'proj-relay',
+          'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
+          'created_at': '2026-06-21T00:00:00Z',
+          'revoked': false,
+        },
+        'host_profile': {
+          'host_id': 'host-relay',
+          'project_id': 'proj-relay',
+          'device_id': 'dev_relay',
+          'route_provider': 'relay',
+          'gateway_url': 'https://relay.seemlab.top',
+          'websocket_url': 'wss://relay.seemlab.top',
+          'server_fingerprint': 'relay-host-fp',
+          'capabilities': [
+            'http_json',
+            'project_view',
+            'websocket_terminal',
+            'relay_tunnel',
+          ],
+          'diagnostics': {
+            'relay_region': 'local-test',
+            'relay_host_id': 'host-relay',
+          },
+          'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
+        },
+      }, 201);
+    }
+    return _GatewayResponse({
+      'schema_version': 1,
+      'status': 'ok',
+      'device_token': 'device-secret',
+      'device': {
+        'device_id': 'dev_demo',
+        'name': request['device_name'],
+        'project_id': 'proj-demo',
+        'scopes': ['view'],
+        'created_at': '2026-06-18T00:00:00Z',
+        'revoked': false,
+      },
+      'host_profile': {
+        'host_id': 'proj-demo',
+        'project_id': 'proj-demo',
+        'device_id': 'dev_demo',
+        'route_provider': 'lan',
+        'scopes': ['view'],
+      },
+    }, 201);
+  }
+  return _GatewayResponse({'status': 'error', 'error': 'not found'}, 404);
+}
+
+class _GatewayResponse {
+  const _GatewayResponse(this.body, [this.statusCode = 200]);
+
+  final Map<String, Object?> body;
+  final int statusCode;
+}
+
+class _MemorySecureStore implements GatewaySecureStore {
+  final Map<String, String> values = {};
+
+  Iterable<String> get rawValues => values.values;
+
+  @override
+  Future<void> delete({required String key}) async {
+    values.remove(key);
+  }
+
+  @override
+  Future<String?> read({required String key}) async {
+    return values[key];
+  }
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    values[key] = value;
+  }
+}

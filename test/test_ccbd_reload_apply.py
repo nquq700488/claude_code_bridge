@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -234,6 +235,103 @@ def test_additive_reload_apply_add_agent_materializes_tmux_pane_before_mount(
     assert backend.pane_options['%3']['@ccb_window'] == 'main'
     assert calls[0]['namespace_agent_panes'] == {'agent3': '%3'}
     assert app.service_graph.registry.get('agent3').pane_id == '%3'
+
+
+def test_additive_reload_apply_dynamic_agent_overlay_materializes_tmux_pane_before_mount(
+    tmp_path: Path,
+) -> None:
+    app = _started_app(tmp_path / 'repo-add-dynamic-agent-real-patch', BASE_CONFIG)
+    backend = _PatchFakeBackend(socket_path=str(app.paths.ccbd_tmux_socket_path))
+    backend.add_window(app.paths.ccbd_tmux_session_name, 'main')
+    backend.sessions[app.paths.ccbd_tmux_session_name][0]['panes'].append('%2')
+    backend.pane_counter = 2
+    _seed_agent_pane(backend, '%1', project_id=app.project_id, window='main', agent='agent1')
+    _seed_agent_pane(backend, '%2', project_id=app.project_id, window='main', agent='agent2')
+    app.project_namespace = ProjectNamespaceController(
+        app.paths,
+        app.project_id,
+        clock=app.clock,
+        backend_factory=lambda socket_path=None: backend,
+    )
+    _seed_runtime(app.runtime_service, 'agent1', pane_id='%1')
+    _seed_runtime(app.runtime_service, 'agent2', pane_id='%2')
+    _write_dynamic_agent_state(
+        app.project_root,
+        agent='agent3',
+        provider='codex',
+        role='agentroles.general',
+    )
+    new_config = load_project_config(app.project_root).config
+    calls: list[dict[str, object]] = []
+
+    result = run_additive_reload_apply(
+        app,
+        new_config,
+        run_start_flow_fn=_mounting_start_flow(app, calls),
+    )
+
+    assert result.status == 'published'
+    assert result.plan_class == 'add_agent'
+    assert result.namespace_patch['agent_panes'] == {'agent3': '%3'}
+    assert result.runtime_mount['runtime_authority_written_agents'] == ['agent3']
+    assert backend.split_calls == [('%2', 'right', 50)]
+    assert backend.pane_options['%3']['@ccb_role'] == 'agent'
+    assert backend.pane_options['%3']['@ccb_slot'] == 'agent3'
+    assert backend.pane_options['%3']['@ccb_window'] == 'main'
+    assert calls[0]['namespace_agent_panes'] == {'agent3': '%3'}
+    assert app.service_graph.registry.get('agent3').pane_id == '%3'
+
+
+def test_additive_reload_apply_dynamic_agent_overlay_materializes_new_window_before_mount(
+    tmp_path: Path,
+) -> None:
+    app = _started_app(tmp_path / 'repo-add-dynamic-window-real-patch', BASE_CONFIG)
+    backend = _PatchFakeBackend(socket_path=str(app.paths.ccbd_tmux_socket_path))
+    backend.add_window(app.paths.ccbd_tmux_session_name, 'main')
+    backend.sessions[app.paths.ccbd_tmux_session_name][0]['panes'].append('%2')
+    backend.pane_counter = 2
+    _seed_agent_pane(backend, '%1', project_id=app.project_id, window='main', agent='agent1')
+    _seed_agent_pane(backend, '%2', project_id=app.project_id, window='main', agent='agent2')
+    app.project_namespace = ProjectNamespaceController(
+        app.paths,
+        app.project_id,
+        clock=app.clock,
+        backend_factory=lambda socket_path=None: backend,
+    )
+    _seed_runtime(app.runtime_service, 'agent1', pane_id='%1')
+    _seed_runtime(app.runtime_service, 'agent2', pane_id='%2')
+    before_agent1 = app.runtime_service._registry.get('agent1').to_record()
+    before_agent2 = app.runtime_service._registry.get('agent2').to_record()
+    _write_dynamic_agent_state(
+        app.project_root,
+        agent='agent3',
+        provider='codex',
+        role='agentroles.general',
+        window_name='review',
+    )
+    new_config = load_project_config(app.project_root).config
+    calls: list[dict[str, object]] = []
+
+    result = run_additive_reload_apply(
+        app,
+        new_config,
+        run_start_flow_fn=_mounting_start_flow(app, calls),
+    )
+
+    assert result.status == 'published'
+    assert result.plan_class == 'add_window'
+    assert result.namespace_patch['created_windows'] == ['review']
+    assert result.namespace_patch['sidebar_panes'] == {'review': '%3'}
+    assert result.namespace_patch['agent_panes'] == {'agent3': '%4'}
+    assert result.runtime_mount['runtime_authority_written_agents'] == ['agent3']
+    assert app.runtime_service._registry.get('agent1').to_record() == before_agent1
+    assert app.runtime_service._registry.get('agent2').to_record() == before_agent2
+    assert backend.pane_options['%1']['@ccb_slot'] == 'agent1'
+    assert backend.pane_options['%2']['@ccb_slot'] == 'agent2'
+    assert backend.pane_options['%4']['@ccb_slot'] == 'agent3'
+    assert backend.pane_options['%4']['@ccb_window'] == 'review'
+    assert calls[0]['namespace_agent_panes'] == {'agent3': '%4'}
+    assert app.service_graph.registry.get('agent3').pane_id == '%4'
 
 
 def test_additive_reload_apply_writes_bounded_handoff_during_apply_and_clears_after_success(
@@ -511,6 +609,7 @@ def test_additive_reload_apply_can_readd_same_agent_after_unload_residue(tmp_pat
 
 def test_additive_reload_apply_blocks_busy_remove_before_namespace_patch(tmp_path: Path) -> None:
     app = _started_app(tmp_path / 'repo-remove-busy', BASE_CONFIG)
+    app.reload_drain_clock_s = lambda: 10.0
     old_graph = app.service_graph
     new_config = _load_config(app.project_root, REMOVE_AGENT_CONFIG)
     _seed_runtime(app.runtime_service, 'agent2', pane_id='%2')
@@ -531,8 +630,62 @@ def test_additive_reload_apply_blocks_busy_remove_before_namespace_patch(tmp_pat
     assert result.stage == 'plan'
     assert result.plan_class == 'remove_agent'
     assert result.diagnostics['reason'] == 'agent_busy'
+    assert result.diagnostics['drain_action'] == 'enqueued'
+    assert result.diagnostics['drain_accepted'] is True
+    assert result.diagnostics['drain_record']['phase'] == 'draining'
+    assert result.diagnostics['drain_record']['status'] == 'waiting'
+    assert result.diagnostics['drain_record']['busy'] is True
+    assert result.diagnostics['drain_queue_pending_count'] == 1
     assert result.diagnostics['graph_published'] is False
     assert app.service_graph is old_graph
+    drain_records = app.reload_drain_store.load().active_records_for('agent2')
+    assert len(drain_records) == 1
+    assert drain_records[0].status == 'waiting'
+
+
+def test_additive_reload_apply_idle_retry_retires_busy_remove_drain_record(tmp_path: Path) -> None:
+    app = _started_app(tmp_path / 'repo-remove-busy-retry', BASE_CONFIG)
+    times = iter([10.0, 20.0])
+    app.reload_drain_clock_s = lambda: next(times)
+    new_config = _load_config(app.project_root, REMOVE_AGENT_CONFIG)
+    _seed_runtime(app.runtime_service, 'agent2', pane_id='%2')
+    runtime = app.service_graph.registry.get('agent2')
+    assert runtime is not None
+    app.runtime_service.patch_runtime_state(runtime, state=AgentState.BUSY)
+
+    blocked = run_additive_reload_apply(
+        app,
+        new_config,
+        current_namespace=_namespace(app),
+        apply_namespace_patch_fn=_fail_with('busy remove must not patch namespace'),
+        run_runtime_mount_fn=_fail_with('busy remove must not mutate runtime'),
+        publish_transaction_fn=_fail_with('busy remove must not publish'),
+    )
+    assert blocked.status == 'blocked'
+    assert app.reload_drain_store.load().active_records_for('agent2')
+
+    app.runtime_service.patch_runtime_state(runtime, state=AgentState.IDLE)
+    published = run_additive_reload_apply(
+        app,
+        new_config,
+        current_namespace=_namespace(app),
+        apply_namespace_patch_fn=lambda **_kwargs: _namespace_patch_result(
+            created_panes=(),
+            agent_panes={},
+            removed_agents={'agent2': '%2'},
+            removed_panes=('%2',),
+            preserved_before={'agent1': '%1'},
+            preserved_after={'agent1': '%1'},
+        ),
+    )
+
+    assert published.status == 'published'
+    assert published.plan_class == 'remove_agent'
+    assert published.runtime_mount['status'] == 'unloaded'
+    drain_queue = app.reload_drain_store.load()
+    assert drain_queue.active_records_for('agent2') == ()
+    assert drain_queue.records[0].status == 'retired'
+    assert drain_queue.records[0].phase == 'retired'
 
 
 def test_additive_reload_apply_namespace_patch_failure_stops_before_runtime_and_publish(
@@ -902,6 +1055,7 @@ def test_project_reload_non_dry_run_busy_remove_blocks_without_namespace_mutatio
     monkeypatch,
 ) -> None:
     app = _started_app(tmp_path / 'repo-remove-busy-handler', BASE_CONFIG)
+    app.reload_drain_clock_s = lambda: 10.0
     old_graph = app.service_graph
     _seed_runtime(app.runtime_service, 'agent2', pane_id='%2')
     runtime = old_graph.registry.get('agent2')
@@ -920,8 +1074,22 @@ def test_project_reload_non_dry_run_busy_remove_blocks_without_namespace_mutatio
     assert payload['plan_class'] == 'remove_agent'
     assert payload['mutation_enabled'] is False
     assert payload['diagnostics']['reason'] == 'agent_busy'
+    assert payload['diagnostics']['drain_action'] == 'enqueued'
+    assert payload['diagnostics']['drain_accepted'] is True
+    assert payload['diagnostics']['drain_record']['status'] == 'waiting'
+    assert payload['reload_drains']['active_count'] == 1
+    assert payload['reload_drains']['retry_command'] == 'ccb reload'
+    assert payload['reload_drains']['active_records'][0]['agent'] == 'agent2'
+    assert payload['reload_drains']['active_records'][0]['status'] == 'waiting'
+    assert app.reload_drain_store.load().active_records_for('agent2')
     assert payload['diagnostics']['graph_published'] is False
     assert app.service_graph is old_graph
+
+    dry_run_payload = app.socket_server._handlers['project_reload_config']({'dry_run': True})
+    assert dry_run_payload['status'] == 'ok'
+    assert dry_run_payload['dry_run'] is True
+    assert dry_run_payload['reload_drains']['active_count'] == 1
+    assert dry_run_payload['reload_drains']['active_records'][0]['agent'] == 'agent2'
 
 
 def test_project_reload_non_dry_run_namespace_failure_reports_residue_without_publish(
@@ -1224,6 +1392,37 @@ def _project(project_root: Path, config_text: str) -> Path:
 
 def _load_config(project_root: Path, config_text: str):
     return load_project_config(_project(project_root, config_text)).config
+
+
+def _write_dynamic_agent_state(
+    project_root: Path,
+    *,
+    agent: str,
+    provider: str,
+    role: str,
+    window_name: str | None = None,
+) -> None:
+    state_path = project_root / '.ccb' / 'runtime' / 'agents' / agent / 'lifecycle.json'
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_dynamic_agent_lifecycle',
+                'agent_lifecycle_status': 'active',
+                'agent': agent,
+                'role': role,
+                'provider': provider,
+                'workspace_mode': 'inplace',
+                'target': '.',
+                'lifecycle_state': 'hidden',
+                'visibility_state': 'hidden',
+                'window_name': window_name,
+            },
+            sort_keys=True,
+        ),
+        encoding='utf-8',
+    )
 
 
 class _PatchFakeBackend:

@@ -24,6 +24,9 @@ Date: 2026-05-29
   - Phase 4 dry-run payloads may include bounded `drain_intents` suggestions
     for `remove_agent` and `replace_agent`, but they remain no-mutation plans
     with `safe_to_apply=false`.
+  - dry-run payloads surface active `reload_drains` from the bounded drain
+    store when a prior busy unload is waiting, including retry guidance without
+    mutating tmux/runtime/lifecycle/service graph.
   - Phase 5 dry-run payloads include `namespace_patch_plan` for view-only and
     additive classes; the plan is `apply_deferred=true` /
     `mutation_enabled=false` and does not call tmux or publish a graph.
@@ -138,6 +141,16 @@ Date: 2026-05-29
   - busy/idle predicate is injectable;
   - state-machine and store tests do not call tmux, publish a service graph,
     patch namespace, mutate runtime authority, or start/stop providers.
+  - non-dry-run busy `remove_agent` persists an unload drain before returning
+    blocked, dispatcher rejects active-drain targets, and a later successful
+    idle retry retires the record.
+  - `project_reload_config` and CLI reload rendering expose active drain count,
+    agent, phase/status, busy state, bounded deadlines, and `ccb reload` as the
+    explicit retry path.
+  - `project_view` exposes the same active drain summary and marks affected
+    agent rows with `reload_drain` and
+    `dispatch_blocked_by_reload_drain=true`; project-view cache reuse is
+    invalidated when `reload-drain.json` appears or changes.
 - Handler graph routing:
   - after graph replacement, `submit`, `project_view`, `ping`, and focus
     handlers resolve the new graph;
@@ -166,17 +179,26 @@ Date: 2026-05-29
 - Existing agent removed from `[windows]`:
   - Phase 3 dry-run reports `remove_agent`;
   - idle unload retires runtime and removes only the target pane;
-  - busy unload returns a stable rejection before pane kill; bounded draining is
-    a follow-up;
+  - busy unload returns a stable rejection before pane kill, records an active
+    bounded unload drain, and exposes the drain record in blocked diagnostics;
+  - subsequent `ccb reload --dry-run` / `ccb reload` payloads show the active
+    drain status until a successful idle retry clears it;
+  - active unload drains reject new dispatcher work for the draining agent and
+    remove draining agents from broadcast target resolution;
+  - after the runtime becomes idle, a later successful unload retries the same
+    `remove_agent` path and retires the drain record;
   - existing unrelated processes are not killed by reload.
 - Existing agent provider/workspace/model/key/url change after replacement is
   enabled:
   - idle replace advances runtime authority epoch;
   - busy replace enters bounded `pending_replace`;
   - provider session continuity is not claimed without provider-specific proof.
-- Existing agent moved to another window:
-  - rejected as layout/ownership move;
-  - existing pane remains in place.
+- Existing agent moved to another managed window:
+  - explicit dynamic move plans `move_agent`;
+  - the target pane id is preserved while window ownership changes;
+  - source and target windows are reflowed without killing unrelated panes;
+  - ask remains reachable before move, after move, and after moving back;
+  - evacuated dynamic windows are removed only when empty.
 - Busy agent preservation:
   - fake runtime reports `BUSY`;
   - additive reload succeeds for unrelated new agent;
@@ -193,6 +215,9 @@ Date: 2026-05-29
 - Project view/sidebar:
   - successful reload invalidates cache;
   - next `project_view` includes new agents/windows;
+  - active reload drains appear in `project_view.reload_drains` and on the
+    affected agent row, including long-TTL cache invalidation when the drain
+    file changes;
   - sidebar refresh control and `r` shortcut submit non-dry-run reload and then
     refresh project view;
   - daemon-pushed sidebar refresh remains deferred unless later manual
@@ -217,6 +242,45 @@ Date: 2026-05-29
 
 ## Manual `test_ccb2` Tests
 
+- 2026-06-28 live provider smoke evidence:
+  - `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-move-agent-latest.json`
+    passed `codex` `move-agent`: add helper, ask before move, move to `review`,
+    ask after move, move back to `main`, ask after return, unload helper, and
+    return to only `main`;
+  - `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-same-window-continuous-latest.json`
+    passed `codex` `same-window-continuous`: grow `main` from one managed
+    agent pane to six, preserve the original main pane, verify geometry/fixed
+    columns, ask a dynamic helper, unload helpers in reverse order, reflow back
+    to one pane, and keep main ask-reachable;
+  - `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-move-agent-latest.json`
+    passed `claude` `move-agent` with the same pane-preserving move/move-back
+    and unload checks.
+  - `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-same-window-continuous-latest.json`
+    passed `claude` `same-window-continuous`: grow `main` from one managed
+    agent pane to six, preserve the original main pane, verify geometry/fixed
+    columns, ask a dynamic helper, unload helpers in reverse order, reflow back
+    to one pane, and keep main ask-reachable.
+- 2026-06-28 dynamic lifecycle smoke evidence:
+  - `pytest -q test/test_dynamic_agent_lifecycle_smoke_script.py` passed with
+    `5 passed` before workflow promotion; after adding the CI gate, targeted
+    workflow/lifecycle tests passed with `8 passed`;
+  - `.github/workflows/test.yml` now runs `Guard dynamic agent lifecycle smoke`
+    on Ubuntu/Python 3.11 with fake provider, checking park/resume dispatch
+    gates, pane preservation, reviewer unload, layout cleanup, and terminal
+    asks;
+  - `/home/bfly/yunwei/test_ccb2/dynamic-agent-lifecycle-fake-latest.json`
+    passed fake-provider lifecycle policy checks;
+  - `/home/bfly/yunwei/test_ccb2/dynamic-agent-lifecycle-ci-gate-latest.json`
+    passed the same fake-provider lifecycle smoke using the CI-gate timeout and
+    project shape;
+  - `/home/bfly/yunwei/test_ccb2/dynamic-agent-lifecycle-codex-latest.json`
+    passed real-home `codex` lifecycle checks: long-lived planner helper
+    auto-parks, dispatch is rejected while parked, pane identity is preserved
+    through resume, ask works again after resume, short-lived reviewer helper
+    auto-unloads, and final layout returns to static `frontdesk` plus
+    `planner`.
+  - `/home/bfly/yunwei/test_ccb2/dynamic-agent-lifecycle-claude-latest.json`
+    passed the same real-home lifecycle checks for `claude`.
 - Phase 3 dry-run checks:
   - start a mounted project and run `ccb reload --dry-run` with no config
     changes; expect `plan_class: no_change`;

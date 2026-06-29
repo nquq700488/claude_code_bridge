@@ -127,7 +127,9 @@ def _ensure_codex_diagnostic_log_redirect(codex_home: Path, *, runtime_dir: Path
     db_path = home / DB_NAME
     target = _diagnostic_log_temp_db_path(home, runtime_dir=runtime_dir)
     if db_path.is_symlink():
-        _repair_preinitialized_log_db_target(db_path)
+        if not _repair_existing_log_db_symlink(db_path):
+            _restore_codex_diagnostic_log_redirect(home)
+            return False
         return True
 
     for sidecar_name in (f'{DB_NAME}-wal', f'{DB_NAME}-shm'):
@@ -148,8 +150,28 @@ def _ensure_codex_diagnostic_log_redirect(codex_home: Path, *, runtime_dir: Path
     return True
 
 
-def _repair_preinitialized_log_db_target(db_path: Path) -> None:
-    target = db_path.resolve(strict=False)
+def _repair_existing_log_db_symlink(db_path: Path) -> bool:
+    target = _symlink_target_path(db_path)
+    if target is None:
+        return False
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    if target.exists() and not target.is_file():
+        return False
+    _repair_preinitialized_log_db_target(target)
+    return True
+
+
+def _symlink_target_path(db_path: Path) -> Path | None:
+    try:
+        return db_path.resolve(strict=False)
+    except (OSError, RuntimeError):
+        return None
+
+
+def _repair_preinitialized_log_db_target(target: Path) -> None:
     if not target.is_file():
         return
     if not _log_db_looks_preinitialized_without_migration(target):

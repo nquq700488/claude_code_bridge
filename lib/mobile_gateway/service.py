@@ -1,24 +1,33 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import hashlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import mimetypes
 from pathlib import Path
+import re
+import shutil
+import sqlite3
 import threading
 from typing import Callable, Mapping
+from uuid import uuid4
 from urllib.parse import parse_qs, unquote, urlparse
 
-from ccbd.api_models import DeliveryScope, MessageEnvelope
 from ccbd.socket_client import CcbdClientError
 from .pairing import MobileGatewayPairingError, MobileGatewayPairingStore
+from .project_registry import MobileGatewayProject, MobileGatewayProjectRegistry
 from .terminal import (
     TerminalAttachTarget,
     TerminalGeometry,
     TerminalHistoryTarget,
+    PaneMessageTarget,
     create_tmux_terminal_history,
     create_tmux_terminal_session,
+    send_tmux_pane_message,
 )
 from .websocket import WebSocketConnection, WebSocketProtocolError, accept_websocket, is_websocket_upgrade
 
@@ -34,18 +43,24 @@ _PAIRING_CAPABILITIES = (
     'terminal_open',
     'websocket_terminal',
     'terminal_history',
+    'file_upload',
+    'file_download',
 )
 _REDACTED_NAMESPACE_KEYS = ('socket_path', 'session_name')
 _DEFAULT_ROUTE_PROVIDER = 'lan'
+_PROJECT_LIST_HEALTH_WORKERS = 8
 _DEFAULT_PAIRING_SCOPES = (
     'view',
     'content',
     'focus',
     'ask',
     'message_submit',
+    'file_upload',
+    'file_download',
     'terminal_input',
     'lifecycle',
 )
+_MAX_MOBILE_FILE_BYTES = 25 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -73,19 +88,30 @@ class MobileGatewayService:
         ccbd_client_factory: Callable[[], object],
         mobile_dir: Path | None = None,
         pairing_store: MobileGatewayPairingStore | None = None,
+        project_registry: MobileGatewayProjectRegistry | None = None,
+        mode: str = 'loopback_current_project',
         clock: Callable[[], str] | None = None,
         terminal_session_factory: Callable[[TerminalAttachTarget], object] | None = None,
         terminal_history_factory: Callable[[TerminalHistoryTarget], dict[str, object]] | None = None,
+        terminal_message_sender: Callable[[PaneMessageTarget, str], dict[str, object]] | None = None,
     ) -> None:
         self._project_id = str(project_id)
         self._project_root = Path(project_root)
         self._ccbd_client_factory = ccbd_client_factory
+        self._project_registry = project_registry or MobileGatewayProjectRegistry.current_project(
+            project_id=self._project_id,
+            project_root=self._project_root,
+            ccbd_client_factory=self._ccbd_client_factory,
+        )
+        self._mode = str(mode or 'loopback_current_project').strip() or 'loopback_current_project'
         self._clock = clock or _utc_now
         self._terminal_session_factory = terminal_session_factory or create_tmux_terminal_session
         self._terminal_history_factory = terminal_history_factory or create_tmux_terminal_history
+        self._terminal_message_sender = terminal_message_sender or send_tmux_pane_message
+        self._mobile_dir = Path(mobile_dir) if mobile_dir is not None else None
         self._pairing_store = pairing_store
         if self._pairing_store is None and mobile_dir is not None:
-            self._pairing_store = MobileGatewayPairingStore(Path(mobile_dir))
+            self._pairing_store = MobileGatewayPairingStore(self._mobile_dir)
 
     @property
     def project_id(self) -> str:
@@ -99,7 +125,7 @@ class MobileGatewayService:
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'degraded',
                 'server_time': self._clock(),
-                'mode': 'loopback_current_project',
+                'mode': self._mode,
                 'project_id': self._project_id,
                 'capabilities': self._capabilities(),
                 'ccbd': {
@@ -111,31 +137,38 @@ class MobileGatewayService:
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
             'server_time': self._clock(),
-            'mode': 'loopback_current_project',
+            'mode': self._mode,
             'project_id': self._project_id,
             'capabilities': self._capabilities(),
             'ccbd': _ccbd_health_summary(ccbd),
         }
 
     def projects_payload(self) -> dict[str, object]:
-        ccbd = self._ping_or_unavailable()
+        projects: list[dict[str, object]] = []
+        registry_projects = self._project_registry.projects()
+        health_by_project = self._project_list_health_by_project(registry_projects)
+        capabilities = self._capabilities()
+        for project in registry_projects:
+            ccbd = health_by_project[project.project_id]
+            item = {
+                'id': project.project_id,
+                'display_name': project.public_display_name,
+                'root': str(project.project_root),
+                'health': str(ccbd.get('health') or 'unknown'),
+                'mount_state': str(ccbd.get('mount_state') or ''),
+                'capabilities': capabilities,
+            }
+            if ccbd.get('error'):
+                item['error'] = str(ccbd.get('error') or '')
+            projects.append(item)
         return {
             'schema_version': _SCHEMA_VERSION,
-            'projects': [
-                {
-                    'id': self._project_id,
-                    'display_name': self._project_root.name,
-                    'health': str(ccbd.get('health') or 'unknown'),
-                    'capabilities': self._capabilities(),
-                }
-            ],
+            'projects': projects,
         }
 
     def project_view_payload(self, project_id: str) -> dict[str, object]:
-        requested = str(project_id or '').strip()
-        if requested != self._project_id:
-            raise MobileGatewayError('unknown project', status_code=404)
-        payload = self._request_project_view()
+        project = self._require_project(project_id)
+        payload = self._request_project_view(project)
         return _redact_project_view_payload(payload)
 
     def create_pairing_payload(
@@ -176,6 +209,7 @@ class MobileGatewayService:
         suffix = '/view'
         if route.startswith(prefix) and route.endswith(suffix):
             project_id = unquote(route[len(prefix):-len(suffix)].strip('/'))
+            self._authenticate(headers, required_scopes=('view',))
             return 200, self.project_view_payload(project_id)
         history_suffix = '/terminal-history'
         if route.startswith(prefix) and route.endswith(history_suffix):
@@ -210,11 +244,11 @@ class MobileGatewayService:
         query: Mapping[str, object],
         headers: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
+        project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('view',))
-        view_payload = self._request_project_view()
+        view_payload = self._request_project_view(project)
         target = _terminal_history_target(
-            project_id=self._project_id,
+            project_id=project.project_id,
             view_payload=view_payload,
             agent=_query_text(query, 'agent'),
             namespace_epoch=_query_int(query, 'namespace_epoch'),
@@ -233,7 +267,7 @@ class MobileGatewayService:
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
-            'project_id': self._project_id,
+            'project_id': project.project_id,
             'terminal_history': history,
         }
 
@@ -245,33 +279,180 @@ class MobileGatewayService:
         query: Mapping[str, object],
         headers: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
+        project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('view',))
-        view_payload = self._request_project_view()
+        view_payload = self._request_project_view(project)
         target = _validate_agent_conversation_target(
-            project_id=self._project_id,
+            project_id=project.project_id,
             view_payload=view_payload,
             agent=agent,
             namespace_epoch=_query_int(query, 'namespace_epoch'),
         )
         limit = min(200, max(1, _query_int(query, 'limit') or 50))
-        items = _agent_conversation_items(
-            view_payload,
-            agent=target['agent'],
+        terminal_history = self._agent_terminal_history_for_conversation(
+            project_id=project.project_id,
+            view_payload=view_payload,
+            agent=str(target['agent']),
             namespace_epoch=int(target['namespace_epoch']),
-            limit=limit,
-            project_root=self._project_root,
         )
+        page = _agent_conversation_page(
+            _agent_conversation_items(
+                view_payload,
+                project_id=project.project_id,
+                agent=target['agent'],
+                namespace_epoch=int(target['namespace_epoch']),
+                project_root=project.project_root,
+                terminal_history=terminal_history,
+                mobile_files_dir=self._mobile_files_dir(),
+            ),
+            limit=limit,
+            cursor=_query_text(query, 'cursor'),
+        )
+        conversation: dict[str, object] = {
+            'project_id': project.project_id,
+            'agent': target['agent'],
+            'namespace_epoch': target['namespace_epoch'],
+            'generated_at': self._clock(),
+            'items': page['items'],
+        }
+        if page['next_cursor'] is not None:
+            conversation['next_cursor'] = page['next_cursor']
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
-            'conversation': {
-                'project_id': self._project_id,
-                'agent': target['agent'],
-                'namespace_epoch': target['namespace_epoch'],
-                'generated_at': self._clock(),
-                'items': items,
-            },
+            'conversation': conversation,
+        }
+
+    def _agent_terminal_history_for_conversation(
+        self,
+        *,
+        project_id: str,
+        view_payload: dict[str, object],
+        agent: str,
+        namespace_epoch: int,
+    ) -> dict[str, object] | None:
+        try:
+            target = _terminal_history_target(
+                project_id=project_id,
+                view_payload=view_payload,
+                agent=agent,
+                namespace_epoch=namespace_epoch,
+                max_lines=240,
+            )
+            history = dict(self._terminal_history_factory(target) or {})
+        except Exception:
+            return None
+        history.setdefault('agent', target.agent)
+        history.setdefault('history_scope', 'tmux_scrollback')
+        history.setdefault('source_pane_id', target.pane_id)
+        history.setdefault('generated_at', self._clock())
+        history.setdefault('stale', False)
+        history.setdefault('blocks', [])
+        return history
+
+    def file_upload_target_from_path(self, path: str) -> tuple[str, str] | None:
+        parsed = urlparse(path)
+        route = parsed.path.rstrip('/') or '/'
+        return _parse_project_agent_files_route(route)
+
+    def file_download_target_from_path(self, path: str) -> tuple[str, str, str] | None:
+        parsed = urlparse(path)
+        route = parsed.path.rstrip('/') or '/'
+        return _parse_project_agent_file_route(route)
+
+    def dispatch_file_upload(
+        self,
+        path: str,
+        body: bytes,
+        headers: Mapping[str, object] | None = None,
+    ) -> tuple[int, dict[str, object]]:
+        target = self.file_upload_target_from_path(path)
+        if target is None:
+            raise MobileGatewayError('not found', status_code=404)
+        project_id, agent = target
+        project = self._require_project(project_id)
+        auth = self._authenticate_any_scope(
+            headers,
+            allowed_scopes=('file_upload', 'message_submit', 'ask'),
+        )
+        if len(body) > _MAX_MOBILE_FILE_BYTES:
+            raise MobileGatewayError('file too large', status_code=413)
+        view_payload = self._request_project_view(project)
+        view = _map(view_payload.get('view'))
+        namespace = _map(view.get('namespace'))
+        target_record = _validate_agent_conversation_target(
+            project_id=project.project_id,
+            view_payload=view_payload,
+            agent=agent,
+            namespace_epoch=_optional_int(namespace.get('epoch')),
+        )
+        file_name = _header_file_name(headers)
+        mime_type = _header_text(headers, 'content-type') or 'application/octet-stream'
+        file_id = f'mobile-file-{uuid4().hex[:16]}'
+        digest = hashlib.sha256(body).hexdigest()
+        record = {
+            'schema_version': _SCHEMA_VERSION,
+            'file_id': file_id,
+            'project_id': project.project_id,
+            'agent': target_record['agent'],
+            'device_id': auth.device_id,
+            'file_name': file_name,
+            'mime_type': mime_type,
+            'size_bytes': len(body),
+            'sha256': digest,
+            'created_at': self._clock(),
+        }
+        directory = self._mobile_file_dir(project.project_id, str(target_record['agent']), file_id)
+        directory.mkdir(parents=True, exist_ok=False)
+        (directory / 'content.bin').write_bytes(body)
+        (directory / 'metadata.json').write_text(
+            json.dumps(record, ensure_ascii=False, sort_keys=True),
+            encoding='utf-8',
+        )
+        return 201, {
+            'schema_version': _SCHEMA_VERSION,
+            'status': 'ok',
+            'file_id': file_id,
+            'file_name': file_name,
+            'mime_type': mime_type,
+            'size_bytes': len(body),
+            'sha256': digest,
+        }
+
+    def dispatch_file_download(
+        self,
+        path: str,
+        headers: Mapping[str, object] | None = None,
+    ) -> tuple[int, bytes, dict[str, str]]:
+        target = self.file_download_target_from_path(path)
+        if target is None:
+            raise MobileGatewayError('not found', status_code=404)
+        project_id, agent, file_id = target
+        project = self._require_project(project_id)
+        self._authenticate_any_scope(
+            headers,
+            allowed_scopes=('file_download', 'content', 'view'),
+        )
+        directory = self._mobile_file_dir(project.project_id, agent, file_id)
+        metadata = _read_file_metadata(directory)
+        if not metadata:
+            raise MobileGatewayError('unknown file', status_code=404)
+        if str(metadata.get('project_id') or '') != project.project_id:
+            raise MobileGatewayError('unknown file', status_code=404)
+        if str(metadata.get('agent') or '') != agent:
+            raise MobileGatewayError('unknown file', status_code=404)
+        content_path = directory / 'content.bin'
+        try:
+            body = content_path.read_bytes()
+        except FileNotFoundError as exc:
+            raise MobileGatewayError('unknown file', status_code=404) from exc
+        digest = hashlib.sha256(body).hexdigest()
+        if digest != str(metadata.get('sha256') or ''):
+            raise MobileGatewayError('file checksum mismatch', status_code=500)
+        return 200, body, {
+            'content-type': str(metadata.get('mime_type') or 'application/octet-stream'),
+            'x-ccb-file-name': str(metadata.get('file_name') or 'attachment'),
+            'x-ccb-file-sha256': digest,
         }
 
     def dispatch_post(
@@ -353,13 +534,10 @@ class MobileGatewayService:
         payload: Mapping[str, object],
         headers: Mapping[str, object] | None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
-        auth = self._authenticate_any_scope(
-            headers,
-            allowed_scopes=('ask', 'message_submit'),
-        )
+        project = self._require_project(project_id)
+        self._authenticate_any_scope(headers, allowed_scopes=('message_submit',))
         body_project_id = str(payload.get('project_id') or '').strip()
-        if body_project_id and body_project_id != self._project_id:
+        if body_project_id and body_project_id != project.project_id:
             raise MobileGatewayError('request project_id does not match route', status_code=400)
         body_agent = str(payload.get('agent') or '').strip()
         if body_agent and body_agent != agent:
@@ -368,57 +546,40 @@ class MobileGatewayService:
         if not idempotency_key:
             raise MobileGatewayError('idempotency_key is required', status_code=400)
         body = str(payload.get('body') or '').strip()
-        if not body:
-            raise MobileGatewayError('body is required', status_code=400)
+        attachments = _attachment_records(payload.get('attachments'))
+        if not body and not attachments:
+            raise MobileGatewayError('body or attachments are required', status_code=400)
+        submit_body = body or _attachment_submit_body(attachments)
         message_format = str(payload.get('format') or 'markdown').strip() or 'markdown'
-        view_payload = self._request_project_view()
+        view_payload = self._request_project_view(project)
         target = _validate_agent_conversation_target(
-            project_id=self._project_id,
+            project_id=project.project_id,
             view_payload=view_payload,
             agent=agent,
             namespace_epoch=_optional_int(payload.get('namespace_epoch')),
         )
+        message_target = _pane_message_target(
+            project_id=project.project_id,
+            view_payload=view_payload,
+            target=target,
+        )
         try:
-            receipt = self._client().submit(
-                MessageEnvelope(
-                    project_id=self._project_id,
-                    to_agent=target['agent'],
-                    from_actor='user',
-                    body=body,
-                    task_id=None,
-                    reply_to=None,
-                    message_type='ask',
-                    delivery_scope=DeliveryScope.SINGLE,
-                    silence_on_success=False,
-                    route_options={
-                        'source': 'mobile_gateway',
-                        'device_id': auth.device_id,
-                        'idempotency_key': idempotency_key,
-                        'format': message_format,
-                    },
-                    body_artifact=None,
-                )
-            )
-        except CcbdClientError as exc:
-            raise MobileGatewayError(str(exc), status_code=503) from exc
+            self._terminal_message_sender(message_target, submit_body)
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
-        result = dict(receipt or {}) if isinstance(receipt, Mapping) else {}
-        job_id = str(result.get('job_id') or '')
-        state = str(result.get('status') or 'queued')
-        message_id = str(result.get('message_id') or job_id or idempotency_key)
+        message_id = idempotency_key
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
-            'project_id': self._project_id,
+            'project_id': project.project_id,
             'agent': target['agent'],
             'message_submit': {
                 'accepted': True,
                 'idempotency_key': idempotency_key,
                 'message_id': message_id,
-                'job_id': job_id or None,
-                'state': state,
-                'created_at': result.get('accepted_at') or self._clock(),
+                'job_id': None,
+                'state': 'sent',
+                'created_at': self._clock(),
                 'message': {
                     'id': message_id,
                     'agent': target['agent'],
@@ -428,6 +589,7 @@ class MobileGatewayService:
                     'format': message_format,
                     'state': 'sent',
                     'source': 'mobile',
+                    'attachments': attachments,
                 },
             },
         }
@@ -566,17 +728,17 @@ class MobileGatewayService:
         namespace_epoch: int | None,
         headers: Mapping[str, object] | None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
+        project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('focus',))
         if not str(agent or '').strip():
             raise MobileGatewayError('agent is required', status_code=400)
         try:
-            focus = self._client().project_focus_agent(agent=agent, namespace_epoch=namespace_epoch)
+            focus = project.client().project_focus_agent(agent=agent, namespace_epoch=namespace_epoch)
         except CcbdClientError as exc:
             raise MobileGatewayError(str(exc), status_code=_ccbd_focus_status(exc)) from exc
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
-        return self._focused_project_view_payload(focus)
+        return self._focused_project_view_payload(project, focus)
 
     def _project_lifecycle(
         self,
@@ -585,10 +747,10 @@ class MobileGatewayService:
         payload: Mapping[str, object],
         headers: Mapping[str, object] | None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
+        project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('lifecycle',))
         body_project_id = str(payload.get('project_id') or '').strip()
-        if body_project_id and body_project_id != self._project_id:
+        if body_project_id and body_project_id != project.project_id:
             raise MobileGatewayError('request project_id does not match route', status_code=400)
         action = str(payload.get('action') or '').strip().lower()
         if action not in {'wake', 'open', 'close', 'stop'}:
@@ -600,11 +762,11 @@ class MobileGatewayService:
                 effect='already_running' if action == 'wake' else 'opened',
                 ccb_authority=True,
             )
-            response = _redact_project_view_payload(self._request_project_view())
+            response = _redact_project_view_payload(self._request_project_view(project))
             response.update({
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'ok',
-                'project_id': self._project_id,
+                'project_id': project.project_id,
                 'lifecycle': result,
             })
             return response
@@ -612,7 +774,7 @@ class MobileGatewayService:
             return {
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'ok',
-                'project_id': self._project_id,
+                'project_id': project.project_id,
                 'lifecycle': self._lifecycle_result(
                     action='close',
                     state='running',
@@ -621,7 +783,7 @@ class MobileGatewayService:
                 ),
             }
         try:
-            stop_result = self._client().stop_all(force=False)
+            stop_result = project.client().stop_all(force=False)
         except CcbdClientError as exc:
             raise MobileGatewayError(str(exc), status_code=503) from exc
         except Exception as exc:
@@ -629,7 +791,7 @@ class MobileGatewayService:
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
-            'project_id': self._project_id,
+            'project_id': project.project_id,
             'lifecycle': self._lifecycle_result(
                 action='stop',
                 state='stopping',
@@ -669,17 +831,17 @@ class MobileGatewayService:
         namespace_epoch: int | None,
         headers: Mapping[str, object] | None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
+        project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('focus',))
         if not str(window or '').strip():
             raise MobileGatewayError('window is required', status_code=400)
         try:
-            focus = self._client().project_focus_window(window=window, namespace_epoch=namespace_epoch)
+            focus = project.client().project_focus_window(window=window, namespace_epoch=namespace_epoch)
         except CcbdClientError as exc:
             raise MobileGatewayError(str(exc), status_code=_ccbd_focus_status(exc)) from exc
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
-        return self._focused_project_view_payload(focus)
+        return self._focused_project_view_payload(project, focus)
 
     def _open_terminal(
         self,
@@ -688,22 +850,22 @@ class MobileGatewayService:
         payload: Mapping[str, object],
         headers: Mapping[str, object] | None,
     ) -> dict[str, object]:
-        self._require_current_project(project_id)
+        project = self._require_project(project_id)
         auth = self._authenticate(headers, required_scopes=('terminal_input',))
         body_project_id = str(payload.get('project_id') or '').strip()
-        if body_project_id and body_project_id != self._project_id:
+        if body_project_id and body_project_id != project.project_id:
             raise MobileGatewayError('request project_id does not match route', status_code=400)
         target = _map(payload.get('target'))
         geometry = _map(payload.get('geometry'))
-        view_payload = self._request_project_view()
+        view_payload = self._request_project_view(project)
         target_payload = _validate_terminal_target(
-            self._project_id,
+            project.project_id,
             view_payload,
             target=target,
             namespace_epoch=_optional_int(payload.get('namespace_epoch')),
         )
         handle = self._require_pairing_store().create_terminal_handle(
-            project_id=self._project_id,
+            project_id=project.project_id,
             device_id=auth.device_id,
             target_epoch=int(target_payload['target_epoch']),
             target_summary=target_payload['target_summary'],
@@ -713,21 +875,43 @@ class MobileGatewayService:
         handle['websocket_url'] = _terminal_websocket_url(headers, terminal_id=terminal_id)
         return handle
 
-    def _focused_project_view_payload(self, focus: dict[str, object]) -> dict[str, object]:
-        payload = self._request_project_view()
+    def _focused_project_view_payload(
+        self,
+        project: MobileGatewayProject,
+        focus: dict[str, object],
+    ) -> dict[str, object]:
+        payload = self._request_project_view(project)
         redacted = _redact_project_view_payload(payload)
         redacted['focus'] = dict(focus or {}) if isinstance(focus, dict) else {}
         return redacted
 
-    def _require_current_project(self, project_id: str) -> None:
+    def _require_project(self, project_id: str) -> MobileGatewayProject:
         requested = str(project_id or '').strip()
-        if requested != self._project_id:
+        project = self._project_registry.get(requested)
+        if project is None:
             raise MobileGatewayError('unknown project', status_code=404)
+        return project
 
     def _require_pairing_store(self) -> MobileGatewayPairingStore:
         if self._pairing_store is None:
             raise MobileGatewayError('mobile pairing store is not configured', status_code=503)
         return self._pairing_store
+
+    def _mobile_file_dir(self, project_id: str, agent: str, file_id: str) -> Path:
+        return (
+            self._mobile_files_dir()
+            / _safe_path_segment(project_id)
+            / _safe_path_segment(agent)
+            / _safe_path_segment(file_id)
+        )
+
+    def _mobile_files_dir(self) -> Path:
+        root = (
+            self._mobile_dir
+            if self._mobile_dir is not None
+            else self._project_root / '.ccb' / 'ccbd' / 'mobile'
+        )
+        return root / 'files'
 
     def _capabilities(self) -> list[str]:
         values = list(_BASE_CAPABILITIES)
@@ -755,18 +939,45 @@ class MobileGatewayService:
             return auth
         raise MobileGatewayError('device scope denied', status_code=403)
 
-    def _ping_or_unavailable(self) -> dict[str, object]:
+    def _ping_or_unavailable(self, project: MobileGatewayProject) -> dict[str, object]:
         try:
-            payload = self._client().ping('ccbd')
+            payload = project.client().ping('ccbd')
         except CcbdClientError as exc:
             raise MobileGatewayError(str(exc), status_code=503) from exc
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
         return dict(payload or {}) if isinstance(payload, dict) else {}
 
-    def _request_project_view(self) -> dict[str, object]:
+    def _project_list_health_by_project(
+        self,
+        projects: tuple[MobileGatewayProject, ...],
+    ) -> dict[str, dict[str, object]]:
+        if len(projects) <= 1:
+            return {
+                project.project_id: self._project_list_health(project)
+                for project in projects
+            }
+        max_workers = min(_PROJECT_LIST_HEALTH_WORKERS, len(projects))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            health_items = executor.map(self._project_list_health, projects)
+            return {
+                project.project_id: health
+                for project, health in zip(projects, health_items)
+            }
+
+    def _project_list_health(self, project: MobileGatewayProject) -> dict[str, object]:
         try:
-            payload = self._client().project_view(schema_version=1)
+            return self._ping_or_unavailable(project)
+        except MobileGatewayError:
+            return {
+                'health': 'unreachable',
+                'mount_state': 'unavailable',
+                'error': 'project unavailable',
+            }
+
+    def _request_project_view(self, project: MobileGatewayProject) -> dict[str, object]:
+        try:
+            payload = project.client().project_view(schema_version=1)
         except CcbdClientError as exc:
             raise MobileGatewayError(str(exc), status_code=503) from exc
         except Exception as exc:
@@ -774,7 +985,8 @@ class MobileGatewayService:
         return dict(payload or {}) if isinstance(payload, dict) else {}
 
     def _terminal_attach_target(self, record: dict[str, object]) -> TerminalAttachTarget:
-        view_payload = self._request_project_view()
+        project = self._require_project(str(record.get('project_id') or ''))
+        view_payload = self._request_project_view(project)
         view = _map(view_payload.get('view'))
         namespace = _map(view.get('namespace'))
         actual_epoch = _optional_int(namespace.get('epoch'))
@@ -870,6 +1082,18 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                     return
                 service.handle_terminal_websocket(terminal_id, connection)
                 return
+            if service.file_download_target_from_path(self.path) is not None:
+                try:
+                    status, body, headers = service.dispatch_file_download(self.path, self.headers)
+                except MobileGatewayError as exc:
+                    self._send_json(exc.status_code, {
+                        'schema_version': _SCHEMA_VERSION,
+                        'status': 'error',
+                        'error': _error_text(exc),
+                    })
+                    return
+                self._send_bytes(status, body, headers)
+                return
             try:
                 status, payload = service.dispatch_get(self.path, self.headers)
             except MobileGatewayError as exc:
@@ -883,7 +1107,14 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
 
         def do_POST(self) -> None:  # noqa: N802 - stdlib hook
             try:
-                status, payload = service.dispatch_post(self.path, self._read_json_body(), self.headers)
+                if service.file_upload_target_from_path(self.path) is not None:
+                    status, payload = service.dispatch_file_upload(
+                        self.path,
+                        self._read_raw_body(max_bytes=_MAX_MOBILE_FILE_BYTES),
+                        self.headers,
+                    )
+                else:
+                    status, payload = service.dispatch_post(self.path, self._read_json_body(), self.headers)
             except MobileGatewayError as exc:
                 status = exc.status_code
                 payload = {
@@ -909,7 +1140,21 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
             self.send_header('content-type', 'application/json; charset=utf-8')
             self.send_header('content-length', str(len(body)))
             self.end_headers()
-            self.wfile.write(body)
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
+
+        def _send_bytes(self, status: int, body: bytes, headers: dict[str, str]) -> None:
+            self.send_response(status)
+            for key, value in headers.items():
+                self.send_header(key, value)
+            self.send_header('content-length', str(len(body)))
+            self.end_headers()
+            try:
+                self.wfile.write(body)
+            except (BrokenPipeError, ConnectionResetError):
+                return
 
         def _read_json_body(self) -> dict[str, object]:
             length_text = self.headers.get('content-length') or '0'
@@ -926,6 +1171,16 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
             if isinstance(decoded, dict):
                 return {str(key): value for key, value in decoded.items()}
             raise ValueError('request body must be a JSON object')
+
+        def _read_raw_body(self, *, max_bytes: int) -> bytes:
+            length_text = self.headers.get('content-length') or '0'
+            try:
+                length = int(length_text)
+            except ValueError as exc:
+                raise ValueError('invalid content-length') from exc
+            if length < 0 or length > max_bytes:
+                raise ValueError('request body too large')
+            return self.rfile.read(length) if length else b''
 
     return ThreadingHTTPServer((listen.host, listen.port), _Handler)
 
@@ -970,10 +1225,82 @@ def _optional_text(value: object) -> str | None:
     return text or None
 
 
+def _header_text(headers: Mapping[str, object] | None, name: str) -> str:
+    if headers is None:
+        return ''
+    getter = getattr(headers, 'get', None)
+    value = getter(name) if callable(getter) else headers.get(name)
+    if value is None and name.lower() != name:
+        value = getter(name.lower()) if callable(getter) else headers.get(name.lower())
+    return str(value or '').strip()
+
+
+def _header_file_name(headers: Mapping[str, object] | None) -> str:
+    encoded = _header_text(headers, 'X-Ccb-File-Name')
+    if encoded:
+        decoded = unquote(encoded).strip()
+        if decoded:
+            return decoded
+    return 'attachment'
+
+
 def _map(value: object) -> dict[str, object]:
     if isinstance(value, Mapping):
         return {str(key): item for key, item in value.items()}
     return {}
+
+
+def _attachment_records(value: object) -> list[dict[str, object]]:
+    records: list[dict[str, object]] = []
+    if not isinstance(value, (list, tuple)):
+        return records
+    for item in value:
+        record = _map(item)
+        file_id = _optional_text(record.get('file_id')) or _optional_text(record.get('attachment_id'))
+        if not file_id:
+            continue
+        file_name = _optional_text(record.get('file_name')) or _optional_text(record.get('filename')) or 'attachment'
+        mime_type = _optional_text(record.get('mime_type')) or 'application/octet-stream'
+        records.append(
+            {
+                'file_id': file_id,
+                'file_name': file_name,
+                'mime_type': mime_type,
+                'size_bytes': _int(record.get('size_bytes'), 0),
+                'kind': _optional_text(record.get('kind')) or ('image' if mime_type.startswith('image/') else 'document'),
+            }
+        )
+    return records
+
+
+def _attachment_submit_body(attachments: list[dict[str, object]]) -> str:
+    names = [
+        str(item.get('file_name') or 'attachment')
+        for item in attachments
+        if str(item.get('file_name') or '').strip()
+    ]
+    if not names:
+        return 'Uploaded attachment'
+    if len(names) == 1:
+        return f'Uploaded attachment: {names[0]}'
+    return f'Uploaded attachments: {", ".join(names)}'
+
+
+def _safe_path_segment(value: object) -> str:
+    text = str(value or '').strip()
+    safe = ''.join(ch if ch.isalnum() or ch in {'-', '_', '.'} else '_' for ch in text)
+    safe = safe.strip('._')
+    if not safe:
+        raise MobileGatewayError('invalid file identifier', status_code=400)
+    return safe
+
+
+def _read_file_metadata(directory: Path) -> dict[str, object]:
+    try:
+        payload = json.loads((directory / 'metadata.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+    return _map(payload)
 
 
 def _optional_int(value: object) -> int | None:
@@ -1017,6 +1344,35 @@ def _parse_project_agent_route(route: str, *, suffix: str) -> tuple[str, str] | 
     return project_id, agent
 
 
+def _parse_project_agent_files_route(route: str) -> tuple[str, str] | None:
+    prefix = '/v1/projects/'
+    if not route.startswith(prefix):
+        return None
+    parts = route[len(prefix):].strip('/').split('/')
+    if len(parts) != 4 or parts[1] != 'agents' or parts[3] != 'files':
+        return None
+    project_id = unquote(parts[0]).strip()
+    agent = unquote(parts[2]).strip()
+    if not project_id or not agent:
+        return None
+    return project_id, agent
+
+
+def _parse_project_agent_file_route(route: str) -> tuple[str, str, str] | None:
+    prefix = '/v1/projects/'
+    if not route.startswith(prefix):
+        return None
+    parts = route[len(prefix):].strip('/').split('/')
+    if len(parts) != 5 or parts[1] != 'agents' or parts[3] != 'files':
+        return None
+    project_id = unquote(parts[0]).strip()
+    agent = unquote(parts[2]).strip()
+    file_id = unquote(parts[4]).strip()
+    if not project_id or not agent or not file_id:
+        return None
+    return project_id, agent, file_id
+
+
 def _validate_agent_conversation_target(
     *,
     project_id: str,
@@ -1049,10 +1405,12 @@ def _validate_agent_conversation_target(
 def _agent_conversation_items(
     view_payload: dict[str, object],
     *,
+    project_id: str,
     agent: str,
     namespace_epoch: int,
-    limit: int,
     project_root: Path,
+    terminal_history: dict[str, object] | None = None,
+    mobile_files_dir: Path | None = None,
 ) -> list[dict[str, object]]:
     view = _map(view_payload.get('view'))
     agents = [_map(item) for item in _iterable(view.get('agents'))]
@@ -1093,6 +1451,41 @@ def _agent_conversation_items(
                 'source': _optional_text(content_item.get('source')) or 'content',
             }
         )
+    seen_item_ids = {str(item.get('id') or '') for item in items}
+    native_items = _agent_native_conversation_items(
+        project_root,
+        project_id=project_id,
+        agent=agent,
+        mobile_files_dir=mobile_files_dir,
+    )
+    for item in native_items:
+        item_id = str(item.get('id') or '')
+        if item_id and item_id in seen_item_ids:
+            continue
+        items.append(item)
+        if item_id:
+            seen_item_ids.add(item_id)
+    if native_items:
+        return items
+
+    terminal_items = _terminal_history_conversation_items(
+        terminal_history,
+        agent=agent,
+    )
+    if terminal_items:
+        return terminal_items
+
+    for item in _agent_history_conversation_items(
+        project_root,
+        project_id=project_id,
+        agent=agent,
+    ):
+        item_id = str(item.get('id') or '')
+        if item_id and item_id in seen_item_ids:
+            continue
+        items.append(item)
+        if item_id:
+            seen_item_ids.add(item_id)
     comm_records = [_map(item) for item in _iterable(view.get('comms'))]
     comm_records = [
         item
@@ -1115,13 +1508,24 @@ def _agent_conversation_items(
             or _optional_text(comm.get('message'))
             or _optional_text(comm.get('body_preview'))
         )
-        reply = _completion_reply_for_job(project_root, _optional_text(comm.get('id')))
+        reply_dict = _completion_reply_for_job(
+            project_root,
+            _optional_text(comm.get('id')),
+            project_id=project_id,
+            agent=agent,
+        )
+        reply = str(reply_dict.get('body') or '')
+        reply_attachments = _attachment_records(reply_dict.get('attachments'))
+        attachments = _attachment_records(comm.get('attachments'))
         if reply:
             comm_id = str(comm.get('id') or f'comms-{len(items)}')
             if body:
+                user_id = f'user-{comm_id}'
+                if user_id in seen_item_ids:
+                    continue
                 items.append(
                     {
-                        'id': f'user-{comm_id}',
+                        'id': user_id,
                         'agent': agent,
                         'kind': 'user_message',
                         'title': 'You',
@@ -1129,37 +1533,740 @@ def _agent_conversation_items(
                         'format': _optional_text(comm.get('format')) or 'markdown',
                         'source': 'mobile',
                         'state': 'sent',
+                        'attachments': attachments,
                     }
                 )
+                seen_item_ids.add(user_id)
+            reply_id = f'reply-{comm_id}'
+            if reply_id in seen_item_ids:
+                continue
             items.append(
                 {
-                    'id': f'reply-{comm_id}',
+                    'id': reply_id,
                     'agent': agent,
                     'kind': 'agent_reply',
                     'title': _optional_text(comm.get('title')) or 'Agent reply',
                     'body': reply,
                     'format': 'markdown',
                     'source': 'completion_snapshot',
+                    'attachments': reply_attachments,
                 }
             )
+            seen_item_ids.add(reply_id)
             continue
         if not body:
             continue
         comm_id = str(comm.get('id') or f'comms-{len(items)}')
+        item_id = f'comms-{comm_id}'
+        if item_id in seen_item_ids:
+            continue
         items.append(
             {
-                'id': f'comms-{comm_id}',
+                'id': item_id,
                 'agent': agent,
                 'kind': 'comms_item',
                 'title': _optional_text(comm.get('title')) or 'Comms',
                 'body': body,
                 'format': _optional_text(comm.get('format')) or 'plain',
                 'source': _optional_text(comm.get('source')) or 'project_view',
+                'attachments': attachments,
             }
         )
-    if len(items) > limit:
-        return items[:limit]
+        seen_item_ids.add(item_id)
     return items
+
+
+def _terminal_history_conversation_items(
+    history: dict[str, object] | None,
+    *,
+    agent: str,
+) -> list[dict[str, object]]:
+    history = _map(history)
+    if not history:
+        return []
+    history_scope = _optional_text(history.get('history_scope')) or 'tmux_scrollback'
+    source_pane_id = _optional_text(history.get('source_pane_id'))
+    items: list[dict[str, object]] = []
+    for block in _iterable(history.get('blocks')):
+        block_record = _map(block)
+        text = _optional_text(block_record.get('text')) or ''
+        if not text:
+            continue
+        block_id = _optional_text(block_record.get('id')) or f'history-{len(items) + 1}'
+        block_type = _optional_text(block_record.get('type')) or 'log'
+        is_input = block_type == 'command'
+        items.append(
+            {
+                'id': f'terminal-history-{block_id}',
+                'agent': agent,
+                'kind': 'user_message' if is_input else 'agent_reply',
+                'title': 'Terminal input'
+                if is_input
+                else (_optional_text(block_record.get('title')) or 'Terminal output'),
+                'body': _terminal_history_body(text, is_input=is_input),
+                'format': 'plain',
+                'source': _terminal_conversation_source(
+                    history_scope,
+                    source_pane_id=source_pane_id,
+                    is_input=is_input,
+                ),
+                'attachments': [],
+            }
+        )
+    return items
+
+
+def _terminal_history_body(text: str, *, is_input: bool) -> str:
+    body = text.strip()
+    if not is_input or body.startswith('$ '):
+        return body
+    return '$ ' + body
+
+
+def _terminal_conversation_source(
+    history_scope: str,
+    *,
+    source_pane_id: str | None,
+    is_input: bool,
+) -> str:
+    parts = [
+        'terminal input' if is_input else 'tmux output',
+        history_scope,
+    ]
+    if source_pane_id:
+        parts.append(source_pane_id)
+    return ' / '.join(parts)
+
+
+def _agent_native_conversation_items(
+    project_root: Path,
+    *,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None = None,
+) -> list[dict[str, object]]:
+    return _codex_native_conversation_items(
+        project_root,
+        project_id=project_id,
+        agent=agent,
+        mobile_files_dir=mobile_files_dir,
+    )
+
+
+def _codex_native_conversation_items(
+    project_root: Path,
+    *,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None = None,
+) -> list[dict[str, object]]:
+    home = project_root / '.ccb' / 'agents' / agent / 'provider-state' / 'codex' / 'home'
+    state_path = home / 'state_5.sqlite'
+    if not state_path.is_file():
+        return []
+    try:
+        connection = sqlite3.connect(f'file:{state_path}?mode=ro', uri=True)
+        connection.row_factory = sqlite3.Row
+        rows = list(
+            connection.execute(
+                'select id, rollout_path, created_at, updated_at from threads '
+                'where rollout_path is not null and rollout_path != "" '
+                'order by created_at asc, updated_at asc, id asc'
+            )
+        )
+    except Exception:
+        return []
+    finally:
+        try:
+            connection.close()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+
+    items: list[dict[str, object]] = []
+    for row_index, row in enumerate(rows):
+        thread_id = str(row['id'] or '').strip() or f'thread-{len(items)}'
+        rollout_text = str(row['rollout_path'] or '').strip()
+        if not rollout_text:
+            continue
+        rollout_path = Path(rollout_text)
+        if not rollout_path.is_absolute():
+            rollout_path = home / rollout_path
+        fallback_timestamp = _codex_thread_fallback_timestamp(row)
+        items.extend(
+            _codex_rollout_conversation_items(
+                rollout_path,
+                project_root=project_root,
+                project_id=project_id,
+                agent=agent,
+                thread_id=thread_id,
+                thread_order=row_index,
+                fallback_timestamp=fallback_timestamp,
+                mobile_files_dir=mobile_files_dir,
+                file_roots=[
+                    path
+                    for path in (
+                        mobile_files_dir,
+                        project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+                    )
+                    if path is not None
+                ],
+            )
+        )
+    sorted_items = [
+        item
+        for _, item in sorted(
+            enumerate(items),
+            key=lambda indexed: (
+                _optional_text(indexed[1].get('_native_sort_timestamp')) or '',
+                int(indexed[1].get('_native_thread_order') or 0),
+                int(indexed[1].get('_native_line_number') or 0),
+                indexed[0],
+            ),
+        )
+    ]
+    return [
+        _without_native_sort_fields(item)
+        for item in _coalesce_codex_native_agent_replies(sorted_items)
+    ]
+
+
+def _codex_thread_fallback_timestamp(row: sqlite3.Row) -> str:
+    timestamp = row['updated_at'] or row['created_at'] or 0
+    try:
+        return f'{int(timestamp):020d}'
+    except Exception:
+        return str(timestamp)
+
+
+def _codex_rollout_conversation_items(
+    rollout_path: Path,
+    *,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    thread_id: str,
+    thread_order: int,
+    fallback_timestamp: str,
+    mobile_files_dir: Path | None,
+    file_roots: list[Path],
+) -> list[dict[str, object]]:
+    event_items: list[dict[str, object]] = []
+    response_items: list[dict[str, object]] = []
+    try:
+        lines = rollout_path.open(encoding='utf-8')
+    except Exception:
+        return []
+    with lines:
+        for line_number, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = _map(json.loads(line))
+            except Exception:
+                continue
+            payload = _map(record.get('payload'))
+            if record.get('type') == 'event_msg':
+                event_item = _codex_event_message_conversation_item(
+                    payload,
+                    project_root=project_root,
+                    project_id=project_id,
+                    agent=agent,
+                    item_id=f'codex-{thread_id}-{line_number}',
+                    mobile_files_dir=mobile_files_dir,
+                    file_roots=file_roots,
+                )
+                if event_item is not None:
+                    _set_native_sort_fields(
+                        event_item,
+                        record,
+                        fallback_timestamp=fallback_timestamp,
+                        thread_order=thread_order,
+                        line_number=line_number,
+                    )
+                    event_items.append(event_item)
+                continue
+            if record.get('type') != 'response_item':
+                continue
+            if payload.get('type') != 'message':
+                continue
+            role = str(payload.get('role') or '').strip()
+            if role not in {'user', 'assistant'}:
+                continue
+            body = _codex_message_content_text(payload.get('content'))
+            body = _inject_workspace_artifacts(
+                body,
+                project_root=project_root,
+                project_id=project_id,
+                agent=agent,
+                mobile_files_dir=mobile_files_dir,
+            )
+            body = _clean_native_message_text(body)
+            if not body:
+                continue
+            item_id = f'codex-{thread_id}-{line_number}-{role}'
+            if role == 'user':
+                item = {
+                    'id': item_id,
+                    'agent': agent,
+                    'kind': 'user_message',
+                    'title': 'You',
+                    'body': body,
+                    'format': 'markdown',
+                    'source': 'provider_native/codex',
+                    'state': 'sent',
+                    'attachments': [],
+                }
+            else:
+                item = {
+                    'id': item_id,
+                    'agent': agent,
+                    'kind': 'agent_reply',
+                    'title': 'Agent reply',
+                    'body': body,
+                    'format': 'markdown',
+                    'source': 'provider_native/codex',
+                    'attachments': _artifact_link_attachments(
+                        body,
+                        file_roots=file_roots,
+                        project_id=project_id,
+                        agent=agent,
+                    ),
+                }
+            _set_native_sort_fields(
+                item,
+                record,
+                fallback_timestamp=fallback_timestamp,
+                thread_order=thread_order,
+                line_number=line_number,
+            )
+            response_items.append(item)
+    return event_items or response_items
+
+
+def _set_native_sort_fields(
+    item: dict[str, object],
+    record: dict[str, object],
+    *,
+    fallback_timestamp: str,
+    thread_order: int,
+    line_number: int,
+) -> None:
+    payload = _map(record.get('payload'))
+    item['_native_sort_timestamp'] = (
+        _optional_text(record.get('timestamp'))
+        or _optional_text(payload.get('timestamp'))
+        or fallback_timestamp
+    )
+    item['_native_thread_order'] = thread_order
+    item['_native_line_number'] = line_number
+
+
+def _without_native_sort_fields(item: dict[str, object]) -> dict[str, object]:
+    clean = dict(item)
+    clean.pop('_native_sort_timestamp', None)
+    clean.pop('_native_thread_order', None)
+    clean.pop('_native_line_number', None)
+    return clean
+
+
+def _coalesce_codex_native_agent_replies(
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    grouped: list[dict[str, object]] = []
+    pending: dict[str, object] | None = None
+
+    def flush_pending() -> None:
+        nonlocal pending
+        if pending is not None:
+            grouped.append(pending)
+            pending = None
+
+    for item in items:
+        if not _is_codex_native_agent_reply(item):
+            flush_pending()
+            grouped.append(item)
+            continue
+        if pending is None:
+            pending = dict(item)
+            continue
+        if pending.get('_native_thread_order') != item.get('_native_thread_order'):
+            flush_pending()
+            pending = dict(item)
+            continue
+        pending['body'] = _join_native_agent_reply_bodies(
+            _optional_text(pending.get('body')) or '',
+            _optional_text(item.get('body')) or '',
+        )
+        pending['attachments'] = _merge_attachment_records(
+            pending.get('attachments'),
+            item.get('attachments'),
+        )
+        pending['_native_line_number'] = item.get('_native_line_number')
+        pending['_native_sort_timestamp'] = item.get('_native_sort_timestamp')
+    flush_pending()
+    return grouped
+
+
+def _is_codex_native_agent_reply(item: dict[str, object]) -> bool:
+    return (
+        item.get('kind') == 'agent_reply'
+        and item.get('source') == 'provider_native/codex'
+    )
+
+
+def _join_native_agent_reply_bodies(left: str, right: str) -> str:
+    parts = [part.strip() for part in (left, right) if part.strip()]
+    return '\n\n'.join(parts)
+
+
+def _merge_attachment_records(*values: object) -> list[dict[str, object]]:
+    merged: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for value in values:
+        for record in _attachment_records(value):
+            key = (
+                _optional_text(record.get('file_id'))
+                or _optional_text(record.get('download_url'))
+                or _optional_text(record.get('file_name'))
+                or json.dumps(record, sort_keys=True)
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(record)
+    return merged
+
+
+def _codex_event_message_conversation_item(
+    payload: dict[str, object],
+    *,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    item_id: str,
+    mobile_files_dir: Path | None,
+    file_roots: list[Path],
+) -> dict[str, object] | None:
+    payload_type = str(payload.get('type') or '').strip()
+    body = _optional_text(payload.get('message')) or ''
+    body = _inject_workspace_artifacts(
+        body,
+        project_root=project_root,
+        project_id=project_id,
+        agent=agent,
+        mobile_files_dir=mobile_files_dir,
+    )
+    body = _clean_native_message_text(body)
+    if not body:
+        return None
+    if payload_type == 'user_message':
+        return {
+            'id': f'{item_id}-user',
+            'agent': agent,
+            'kind': 'user_message',
+            'title': 'You',
+            'body': body,
+            'format': 'markdown',
+            'source': 'provider_native/codex',
+            'state': 'sent',
+            'attachments': [],
+        }
+    if payload_type == 'agent_message':
+        return {
+            'id': f'{item_id}-assistant',
+            'agent': agent,
+            'kind': 'agent_reply',
+            'title': 'Agent reply',
+            'body': body,
+            'format': 'markdown',
+            'source': 'provider_native/codex',
+            'attachments': _artifact_link_attachments(
+                body,
+                file_roots=file_roots,
+                project_id=project_id,
+                agent=agent,
+            ),
+        }
+    return None
+
+
+def _codex_message_content_text(value: object) -> str:
+    parts: list[str] = []
+    for item in _iterable(value):
+        content = _map(item)
+        text = (
+            _optional_text(content.get('text'))
+            or _optional_text(content.get('input_text'))
+            or _optional_text(content.get('output_text'))
+            or ''
+        )
+        if text:
+            parts.append(text)
+    return '\n\n'.join(parts)
+
+
+_CCB_REQ_LINE_RE = re.compile(r'^\s*CCB_(?:REQ_ID|DONE):\s+\S+\s*$', re.IGNORECASE)
+
+
+def _inject_workspace_artifacts(
+    body: str,
+    *,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None,
+) -> str:
+    if not body:
+        return body
+    project_root_resolved = project_root.resolve(strict=False)
+    mobile_file_root = (
+        mobile_files_dir
+        if mobile_files_dir is not None
+        else project_root / '.ccb' / 'ccbd' / 'mobile' / 'files'
+    )
+
+    def repl(match: re.Match) -> str:
+        text = match.group(1)
+        url = match.group(2)
+        parsed = urlparse(url)
+        if parsed.scheme or parsed.netloc or url.startswith('#'):
+            return match.group(0)
+        try:
+            link_path = unquote(parsed.path)
+            if not link_path.strip():
+                return match.group(0)
+            target_path = Path(link_path)
+            if not target_path.is_absolute():
+                target_path = project_root / target_path
+            target_path = target_path.resolve(strict=False)
+            try:
+                relative_path = target_path.relative_to(project_root_resolved)
+            except ValueError:
+                return match.group(0)
+            if relative_path.parts and relative_path.parts[0] in {'.ccb', '.git'}:
+                return match.group(0)
+            if not target_path.is_file():
+                return match.group(0)
+            stat = target_path.stat()
+            if stat.st_size > _MAX_MOBILE_FILE_BYTES:
+                return match.group(0)
+            content = target_path.read_bytes()
+            digest = hashlib.sha256(content).hexdigest()
+            identity = '\0'.join(
+                (
+                    project_id,
+                    agent,
+                    relative_path.as_posix(),
+                    str(stat.st_size),
+                    digest,
+                )
+            ).encode('utf-8')
+            file_id = f'mobile-file-{hashlib.sha256(identity).hexdigest()[:24]}'
+            mobile_file_dir = (
+                mobile_file_root
+                / _safe_path_segment(project_id)
+                / _safe_path_segment(agent)
+                / file_id
+            )
+            if not mobile_file_dir.is_dir():
+                mobile_file_dir.mkdir(parents=True, exist_ok=True)
+                content_path = mobile_file_dir / 'content.bin'
+                content_path.write_bytes(content)
+                shutil.copystat(target_path, content_path, follow_symlinks=True)
+                mime_type = (
+                    mimetypes.guess_type(target_path.name)[0]
+                    or 'application/octet-stream'
+                )
+                record = {
+                    'schema_version': _SCHEMA_VERSION,
+                    'file_id': file_id,
+                    'project_id': project_id,
+                    'agent': agent,
+                    'device_id': 'auto-injected',
+                    'file_name': target_path.name,
+                    'mime_type': mime_type,
+                    'size_bytes': stat.st_size,
+                    'sha256': digest,
+                    'created_at': _utc_now(),
+                }
+                (mobile_file_dir / 'metadata.json').write_text(
+                    json.dumps(record, ensure_ascii=False, sort_keys=True),
+                    encoding='utf-8',
+                )
+            return f'[{text}](ccb-artifact://{file_id})'
+        except Exception:
+            return match.group(0)
+
+    return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', repl, body)
+
+
+def _clean_native_message_text(text: str) -> str:
+    lines: list[str] = []
+    skipping_reply_guidance = False
+    for line in str(text or '').splitlines():
+        stripped = line.strip()
+        if _CCB_REQ_LINE_RE.match(line):
+            continue
+        if stripped == 'CCB reply guidance:':
+            skipping_reply_guidance = True
+            continue
+        if skipping_reply_guidance:
+            if not stripped or stripped.startswith('- '):
+                continue
+            skipping_reply_guidance = False
+        lines.append(line)
+    return '\n'.join(lines).strip()
+
+
+def _agent_history_conversation_items(
+    project_root: Path,
+    *,
+    project_id: str,
+    agent: str,
+) -> list[dict[str, object]]:
+    latest_by_job: dict[str, dict[str, object]] = {}
+    path = project_root / '.ccb' / 'agents' / agent / 'jobs.jsonl'
+    try:
+        lines = path.read_text(encoding='utf-8').splitlines()
+    except Exception:
+        return []
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = _map(json.loads(line))
+        except Exception:
+            continue
+        job_id = _optional_text(record.get('job_id'))
+        if not job_id:
+            continue
+        if not _job_record_belongs_to_agent(record, agent):
+            continue
+        latest_by_job[job_id] = record
+
+    records = sorted(
+        latest_by_job.values(),
+        key=lambda item: (
+            _optional_text(item.get('created_at'))
+            or _optional_text(item.get('updated_at'))
+            or '',
+            _optional_text(item.get('job_id')) or '',
+        ),
+    )
+    items: list[dict[str, object]] = []
+    for record in records:
+        status = str(record.get('status') or '').strip().lower()
+        if status not in {'completed', 'cancelled', 'failed', 'incomplete'}:
+            continue
+        request = _map(record.get('request'))
+        body = _optional_text(request.get('body')) or ''
+        job_id = _optional_text(record.get('job_id')) or f'history-{len(items)}'
+        if body:
+            items.append(
+                {
+                    'id': f'user-{job_id}',
+                    'agent': agent,
+                    'kind': 'user_message',
+                    'title': 'You',
+                    'body': body,
+                    'format': 'markdown',
+                    'source': _history_source(record),
+                    'state': 'sent' if status == 'completed' else status,
+                    'attachments': [],
+                }
+            )
+        reply_dict = _completion_reply_from_history_job(
+            project_root,
+            record,
+            project_id=project_id,
+            agent=agent,
+        )
+        reply = str(reply_dict.get('body') or '')
+        if reply:
+            items.append(
+                {
+                    'id': f'reply-{job_id}',
+                    'agent': agent,
+                    'kind': 'agent_reply',
+                    'title': 'Agent reply',
+                    'body': reply,
+                    'format': 'markdown',
+                    'source': 'completion_snapshot',
+                    'attachments': _attachment_records(reply_dict.get('attachments')),
+                }
+            )
+    return items
+
+
+def _job_record_belongs_to_agent(record: dict[str, object], agent: str) -> bool:
+    request = _map(record.get('request'))
+    candidates = (
+        _optional_text(record.get('agent_name')),
+        _optional_text(record.get('target_name')),
+        _optional_text(request.get('to_agent')),
+    )
+    return agent in {item for item in candidates if item}
+
+
+def _history_source(record: dict[str, object]) -> str:
+    request = _map(record.get('request'))
+    route_options = _map(request.get('route_options'))
+    return _optional_text(route_options.get('source')) or 'desktop'
+
+
+def _completion_reply_from_history_job(
+    project_root: Path,
+    record: dict[str, object],
+    *,
+    project_id: str,
+    agent: str,
+) -> dict[str, object]:
+    job_id = _optional_text(record.get('job_id'))
+    terminal_decision = _map(record.get('terminal_decision'))
+    body = _optional_text(terminal_decision.get('reply')) or ''
+    reply_dict = _completion_reply_for_job(
+        project_root,
+        job_id,
+        project_id=project_id,
+        agent=agent,
+    )
+    if not body:
+        return reply_dict
+    attachments = _attachment_records(_map(terminal_decision.get('payload')).get('attachments'))
+    if not attachments:
+        attachments = _attachment_records(reply_dict.get('attachments'))
+    if not attachments:
+        attachments = _artifact_link_attachments(
+            body,
+            file_roots=_mobile_file_roots_for_job(project_root, agent, job_id or ''),
+            project_id=project_id,
+            agent=agent,
+        )
+    return {'body': body, 'attachments': attachments}
+
+
+def _agent_conversation_page(
+    items: list[dict[str, object]],
+    *,
+    limit: int,
+    cursor: str | None,
+) -> dict[str, object]:
+    if cursor is None:
+        end = len(items)
+    else:
+        try:
+            end = int(cursor)
+        except ValueError as exc:
+            raise MobileGatewayError('cursor must be an integer', status_code=400) from exc
+        if end < 0 or end > len(items):
+            raise MobileGatewayError('cursor is out of range', status_code=400)
+    start = max(0, end - limit)
+    return {
+        'items': items[start:end],
+        'next_cursor': str(start) if start > 0 else None,
+    }
 
 
 def _conversation_item_belongs_to_agent(item: dict[str, object], agent: str) -> bool:
@@ -1177,20 +2284,103 @@ def _conversation_item_belongs_to_agent(item: dict[str, object], agent: str) -> 
     return True
 
 
-def _completion_reply_for_job(project_root: Path, job_id: str | None) -> str:
+def _completion_reply_for_job(
+    project_root: Path,
+    job_id: str | None,
+    *,
+    project_id: str,
+    agent: str,
+) -> dict[str, object]:
     if not job_id:
-        return ''
+        return {'body': '', 'attachments': []}
     path = project_root / '.ccb' / 'ccbd' / 'snapshots' / f'{job_id}.json'
     try:
         payload = json.loads(path.read_text(encoding='utf-8'))
     except Exception:
-        return ''
+        return {'body': '', 'attachments': []}
     latest_decision = _map(payload.get('latest_decision'))
-    return (
+    body = (
         _optional_text(latest_decision.get('reply'))
         or _optional_text(payload.get('latest_reply_preview'))
         or ''
     )
+
+    attachments = []
+    payload_obj = _map(latest_decision.get('payload'))
+    if 'attachments' in payload_obj:
+        attachments = _attachment_records(payload_obj.get('attachments'))
+    if not attachments:
+        attachments = _artifact_link_attachments(
+            body,
+            file_roots=_mobile_file_roots_for_job(project_root, agent, job_id),
+            project_id=project_id,
+            agent=agent,
+        )
+    return {'body': body, 'attachments': attachments}
+
+
+def _artifact_link_attachments(
+    body: str,
+    *,
+    file_roots: list[Path],
+    project_id: str,
+    agent: str,
+) -> list[dict[str, object]]:
+    attachments: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for file_id in _artifact_file_ids(body):
+        if file_id in seen:
+            continue
+        seen.add(file_id)
+        for file_root in file_roots:
+            try:
+                directory = (
+                    file_root
+                    / _safe_path_segment(project_id)
+                    / _safe_path_segment(agent)
+                    / _safe_path_segment(file_id)
+                )
+            except MobileGatewayError:
+                continue
+            metadata = _read_file_metadata(directory)
+            if not metadata:
+                continue
+            attachments.extend(_attachment_records([metadata]))
+            break
+    return attachments
+
+
+def _mobile_file_roots_for_job(project_root: Path, agent: str, job_id: str) -> list[Path]:
+    roots: list[Path] = [project_root / '.ccb' / 'ccbd' / 'mobile' / 'files']
+    jobs_path = project_root / '.ccb' / 'agents' / agent / 'jobs.jsonl'
+    try:
+        lines = jobs_path.read_text(encoding='utf-8').splitlines()
+    except Exception:
+        return roots
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except Exception:
+            continue
+        if str(_map(record).get('job_id') or '') != job_id:
+            continue
+        request = _map(_map(record).get('request'))
+        route_options = _map(request.get('route_options'))
+        mobile_files_dir = _optional_text(route_options.get('mobile_files_dir'))
+        if mobile_files_dir:
+            path = Path(mobile_files_dir).expanduser()
+            if path not in roots:
+                roots.insert(0, path)
+    return roots
+
+
+def _artifact_file_ids(body: str) -> list[str]:
+    if not body:
+        return []
+    return [
+        match.group(1)
+        for match in re.finditer(r'ccb-artifact://([A-Za-z0-9._-]+)', body)
+    ]
 
 
 def _agent_status_summary(agent: dict[str, object]) -> str:
@@ -1327,6 +2517,33 @@ def _terminal_history_target(
         socket_path=socket_path,
         session_name=session_name,
         max_lines=min(2000, max(20, int(max_lines))),
+    )
+
+
+def _pane_message_target(
+    *,
+    project_id: str,
+    view_payload: dict[str, object],
+    target: dict[str, object],
+) -> PaneMessageTarget:
+    view = _map(view_payload.get('view'))
+    namespace = _map(view.get('namespace'))
+    socket_path = _optional_text(namespace.get('socket_path'))
+    session_name = _optional_text(namespace.get('session_name'))
+    if not socket_path or not session_name:
+        raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
+    agent_record = _map(target.get('agent_record'))
+    pane_id = _optional_text(agent_record.get('pane_id'))
+    if not pane_id:
+        raise MobileGatewayError('message target has no pane evidence', status_code=409)
+    return PaneMessageTarget(
+        project_id=project_id,
+        namespace_epoch=int(target.get('namespace_epoch') or 0),
+        agent=str(target.get('agent') or ''),
+        window=_optional_text(agent_record.get('window')) or '',
+        pane_id=pane_id,
+        socket_path=socket_path,
+        session_name=session_name,
     )
 
 

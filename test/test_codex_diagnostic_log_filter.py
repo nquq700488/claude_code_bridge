@@ -177,6 +177,34 @@ def test_ensure_codex_diagnostic_log_filter_redirects_before_lazy_db_creation(
     assert rows == []
 
 
+def test_ensure_codex_diagnostic_log_filter_repairs_missing_symlink_target_parent(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    codex_home = tmp_path / 'codex-home'
+    db_path = codex_home / DB_NAME
+    logs_tmp = tmp_path / 'tmp-logs'
+    target = logs_tmp / 'cleared-target' / DB_NAME
+    codex_home.mkdir(parents=True)
+    db_path.symlink_to(target)
+    monkeypatch.delenv('CCB_CODEX_DIAGNOSTIC_LOGS', raising=False)
+    monkeypatch.setenv('CCB_CODEX_LOGS_TMPDIR', str(logs_tmp))
+
+    assert ensure_codex_diagnostic_log_filter(codex_home, runtime_dir=tmp_path / 'runtime') is False
+
+    assert db_path.is_symlink()
+    assert target.parent.is_dir()
+
+    _create_codex_migrated_logs_db(db_path)
+    assert ensure_codex_diagnostic_log_filter(codex_home, runtime_dir=tmp_path / 'runtime') is True
+
+    with sqlite3.connect(str(db_path)) as conn:
+        conn.execute("INSERT INTO logs(level, target) VALUES ('INFO', 'info-row')")
+        rows = conn.execute('SELECT level, target FROM logs ORDER BY id').fetchall()
+
+    assert rows == []
+
+
 def test_ensure_codex_diagnostic_log_filter_repairs_preinitialized_symlink_target(
     tmp_path: Path,
     monkeypatch,
