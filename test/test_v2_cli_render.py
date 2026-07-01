@@ -337,6 +337,97 @@ def test_render_reload_non_dry_run_apply_diagnostics() -> None:
     assert 'reload_error: runtime_mount_failed: provider launch failed' in lines
 
 
+def test_render_reload_busy_replace_drain_diagnostics() -> None:
+    lines = render_reload(
+        {
+            'status': 'blocked',
+            'dry_run': False,
+            'mutation_enabled': False,
+            'plan_class': 'replace_agent',
+            'stage': 'plan',
+            'safe_to_apply': False,
+            'future_safe_to_apply': True,
+            'old_config_signature': 'old',
+            'new_config_signature': 'new',
+            'operations': [
+                {
+                    'op': 'replace_agent',
+                    'agent': 'agent2',
+                    'fields': ['provider'],
+                    'reason': 'existing agent spec changed',
+                }
+            ],
+            'drain_intents': [
+                {
+                    'intent_kind': 'replace',
+                    'agent': 'agent2',
+                    'initial_phase': 'pending_replace',
+                    'dry_run_only': True,
+                    'reason': 'existing agent spec changed',
+                }
+            ],
+            'namespace_patch_plan': {
+                'status': 'planned',
+                'apply_deferred': True,
+                'steps': [
+                    {
+                        'action': 'reuse_agent_pane_for_replace',
+                        'window': 'main',
+                        'agent': 'agent2',
+                    }
+                ],
+                'blocked_operations': [],
+            },
+            'reload_drains': {
+                'active_count': 1,
+                'retry_command': 'ccb reload',
+                'active_records': [
+                    {
+                        'agent': 'agent2',
+                        'intent_kind': 'replace',
+                        'phase': 'draining',
+                        'status': 'waiting',
+                        'busy': True,
+                        'age_s': 12.0,
+                        'deadline_in_s': 288.0,
+                        'reason': 'agent is busy; drain remains bounded and pending',
+                    }
+                ],
+            },
+            'diagnostics': {
+                'reason': 'agent_busy',
+                'message': 'cannot replace busy agent: agent2',
+                'drain_action': 'enqueued',
+                'drain_accepted': True,
+                'graph_published': False,
+                'lease_or_lifecycle_written': False,
+                'config_watch_started': False,
+                'unload_or_replace_executed': False,
+            },
+            'warnings': [],
+            'reasons': [],
+            'errors': ['agent_busy: cannot replace busy agent: agent2'],
+        }
+    )
+
+    assert 'reload_status: blocked' in lines
+    assert 'plan_class: replace_agent' in lines
+    assert 'reload_stage: plan' in lines
+    assert 'reload_diagnostic: reason=agent_busy' in lines
+    assert 'reload_diagnostic: graph_published=false' in lines
+    assert 'reload_drain_active_count: 1' in lines
+    assert (
+        'reload_drain_active: agent=agent2 intent_kind=replace phase=draining '
+        'status=waiting busy=true age_s=12.0 deadline_in_s=288.0 '
+        'reason=agent is busy; drain remains bounded and pending'
+    ) in lines
+    assert 'reload_drain_retry: ccb reload' in lines
+    assert (
+        'reload_drain_intent: intent_kind=replace agent=agent2 initial_phase=pending_replace '
+        'dry_run_only=true reason=existing agent spec changed'
+    ) in lines
+
+
 def test_render_fault_commands() -> None:
     list_summary = SimpleNamespace(
         project_id='proj-1',

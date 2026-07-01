@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show ScrollDirection;
 
+import '../../l10n/ccb_mobile_localizations.dart';
 import '../../models/ccb_agent.dart';
 import '../../models/ccb_project.dart';
 import '../../models/ccb_project_view.dart';
@@ -40,16 +42,19 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
   const ProjectHomeServerProjectListHost({
     required this.projects,
     required this.onRefreshProjects,
+    required this.onOpenSettings,
     required this.onOpenProject,
     super.key,
   });
 
   final List<CcbProject> projects;
   final VoidCallback onRefreshProjects;
+  final VoidCallback onOpenSettings;
   final ValueChanged<CcbProject> onOpenProject;
 
   @override
   Widget build(BuildContext context) {
+    final strings = CcbMobileLocalizations.of(context);
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -59,19 +64,30 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
             children: [
               Align(
                 alignment: Alignment.centerRight,
-                child: IconButton(
-                  key: const ValueKey('project-list-refresh-action'),
-                  tooltip: 'Refresh projects',
-                  onPressed: onRefreshProjects,
-                  icon: const Icon(Icons.refresh),
+                child: Wrap(
+                  spacing: 2,
+                  children: [
+                    IconButton(
+                      key: const ValueKey('project-list-refresh-action'),
+                      tooltip: strings.refreshProjects,
+                      onPressed: onRefreshProjects,
+                      icon: const Icon(Icons.refresh),
+                    ),
+                    IconButton(
+                      key: const ValueKey('project-list-settings-action'),
+                      tooltip: strings.settings,
+                      onPressed: onOpenSettings,
+                      icon: const Icon(Icons.settings_outlined),
+                    ),
+                  ],
                 ),
               ),
               Expanded(
                 child:
                     projects.isEmpty
-                        ? const Center(
-                          key: ValueKey('project-list-empty'),
-                          child: Text('No CCB projects found'),
+                        ? Center(
+                          key: const ValueKey('project-list-empty'),
+                          child: Text(strings.noCcbProjectsFound),
                         )
                         : ListView.separated(
                           key: const ValueKey('project-list'),
@@ -161,6 +177,7 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
     required this.onWindowSelected,
     required this.onAgentSelected,
     required this.onRefreshView,
+    required this.onTimelineScrollDirectionChanged,
     super.key,
   });
 
@@ -178,6 +195,7 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
   final ValueChanged<String> onWindowSelected;
   final ValueChanged<String> onAgentSelected;
   final Future<CcbProjectView?> Function() onRefreshView;
+  final ValueChanged<ScrollDirection> onTimelineScrollDirectionChanged;
 
   @override
   Widget build(BuildContext context) {
@@ -219,6 +237,8 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
                   agent: selectedAgent,
                   enableComposerCollapse: true,
                   onRefreshView: onRefreshView,
+                  onUserScrollDirectionChanged:
+                      onTimelineScrollDirectionChanged,
                 ),
               ),
             ],
@@ -357,6 +377,7 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                         agent: selectedAgent,
                         enableComposerCollapse: false,
                         onRefreshView: onRefreshView,
+                        onUserScrollDirectionChanged: null,
                       ),
                     ),
                   ],

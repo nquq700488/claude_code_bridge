@@ -1,144 +1,106 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
 
 void main() {
-  testWidgets('pasted QR payload returns parsed pairing', (tester) async {
-    GatewayPairingPayload? result;
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: _ScannerLauncher(
-          onResult: (pairing) => result = pairing,
-          scannerPreviewBuilder:
-              (context, onQrText) =>
-                  const ColoredBox(color: Colors.black, child: SizedBox()),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Open scanner'));
-    await tester.pumpAndSettle();
-
-    await tester.enterText(
-      find.byKey(const ValueKey('gateway-pairing-qr-text-field')),
-      _qrText(),
-    );
-    await tester.tap(
-      find.byKey(const ValueKey('gateway-pairing-qr-submit-button')),
-    );
-    await tester.pumpAndSettle();
-
-    expect(result?.pairingCode, 'qr-code');
-    expect(result?.routeProvider, RouteProviderKind.tailnet);
-    expect(result?.gatewayUrl, Uri.parse('https://desktop.tailnet.ts.net'));
-  });
-
-  testWidgets(
-    'invalid pasted QR payload keeps scanner open with status error',
-    (tester) async {
-      await tester.pumpWidget(
-        MaterialApp(
-          home: _ScannerLauncher(
-            scannerPreviewBuilder:
-                (context, onQrText) =>
-                    const ColoredBox(color: Colors.black, child: SizedBox()),
-          ),
-        ),
-      );
-
-      await tester.tap(find.text('Open scanner'));
-      await tester.pumpAndSettle();
-
-      await tester.enterText(
-        find.byKey(const ValueKey('gateway-pairing-qr-text-field')),
-        '"not an object"',
-      );
-      await tester.tap(
-        find.byKey(const ValueKey('gateway-pairing-qr-submit-button')),
-      );
-      await tester.pumpAndSettle();
-
-      expect(
-        find.text('pairing QR payload must be a JSON object'),
-        findsOneWidget,
-      );
-      expect(
-        find.byKey(const ValueKey('gateway-pairing-qr-text-field')),
-        findsOneWidget,
-      );
-    },
-  );
-
-  testWidgets('scanner preview callback still returns parsed pairing', (
+  testWidgets('camera error panel offers manual setup fallback', (
     tester,
   ) async {
-    GatewayPairingPayload? result;
+    var manualSelected = false;
 
     await tester.pumpWidget(
       MaterialApp(
-        home: _ScannerLauncher(
-          onResult: (pairing) => result = pairing,
-          scannerPreviewBuilder:
-              (context, onQrText) => TextButton(
-                key: const ValueKey('fake-camera-detect-button'),
-                onPressed: () => onQrText(_qrText()),
-                child: const Text('Detect QR'),
-              ),
-        ),
-      ),
-    );
-
-    await tester.tap(find.text('Open scanner'));
-    await tester.pumpAndSettle();
-
-    await tester.tap(find.byKey(const ValueKey('fake-camera-detect-button')));
-    await tester.pumpAndSettle();
-
-    expect(result?.pairingCode, 'qr-code');
-  });
-}
-
-class _ScannerLauncher extends StatelessWidget {
-  const _ScannerLauncher({this.onResult, required this.scannerPreviewBuilder});
-
-  final ValueChanged<GatewayPairingPayload?>? onResult;
-  final GatewayPairingScannerPreviewBuilder scannerPreviewBuilder;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      body: Center(
-        child: TextButton(
-          onPressed: () async {
-            final result = await Navigator.of(
-              context,
-            ).push<GatewayPairingPayload>(
-              MaterialPageRoute(
-                builder:
-                    (context) => GatewayPairingScannerScreen(
-                      scannerPreviewBuilder: scannerPreviewBuilder,
-                    ),
-              ),
-            );
-            onResult?.call(result);
+        home: GatewayPairingCameraErrorPanel(
+          message:
+              'Camera permission denied. Enable camera access for CCB Mobile or use manual setup.',
+          onUseManualSetup: () {
+            manualSelected = true;
           },
-          child: const Text('Open scanner'),
         ),
       ),
     );
-  }
-}
 
-String _qrText() {
-  return jsonEncode({
-    'pairing_code': 'qr-code',
-    'claim_endpoint': 'https://desktop.tailnet.ts.net/v1/pairing/claim',
-    'route_provider': 'tailnet',
-    'gateway_url': 'https://desktop.tailnet.ts.net',
-    'scopes': ['view', 'focus', 'terminal_input'],
+    expect(
+      find.byKey(const ValueKey('gateway-pairing-scan-camera-error')),
+      findsOneWidget,
+    );
+    expect(find.text('Camera unavailable'), findsOneWidget);
+    expect(
+      find.text(
+        'Camera permission denied. Enable camera access for CCB Mobile or use manual setup.',
+      ),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('gateway-pairing-scan-manual-button')),
+    );
+
+    expect(manualSelected, isTrue);
+  });
+
+  testWidgets('camera error panel can retry and constrains long details', (
+    tester,
+  ) async {
+    var retried = false;
+    var manualSelected = false;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: GatewayPairingCameraErrorPanel(
+          message: 'Camera could not be opened. Try again or use manual setup.',
+          onRetry: () {
+            retried = true;
+          },
+          onUseManualSetup: () {
+            manualSelected = true;
+          },
+        ),
+      ),
+    );
+
+    expect(tester.takeException(), isNull);
+    expect(
+      find.byKey(const ValueKey('gateway-pairing-scan-retry-button')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('gateway-pairing-scan-retry-button')),
+    );
+    expect(retried, isTrue);
+
+    await tester.tap(
+      find.byKey(const ValueKey('gateway-pairing-scan-manual-button')),
+    );
+    expect(manualSelected, isTrue);
+  });
+
+  test('camera error message hides native implementation details', () {
+    final message = gatewayPairingCameraErrorMessage(
+      Exception(
+        "Attempt to invoke virtual method 'w4.c w4.b.a(s4.b)' on a null object reference",
+      ),
+    );
+
+    expect(
+      message,
+      'Camera could not be opened. Try again or use manual setup.',
+    );
+    expect(message, isNot(contains('null object reference')));
+    expect(message, isNot(contains('w4.')));
+  });
+
+  test('camera permission error has actionable message', () {
+    final message = gatewayPairingCameraErrorMessage(
+      const MobileScannerException(
+        errorCode: MobileScannerErrorCode.permissionDenied,
+      ),
+    );
+
+    expect(message, contains('Camera permission denied'));
+    expect(message, contains('manual setup'));
   });
 }

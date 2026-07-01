@@ -1,5 +1,12 @@
 # Codex Provider Activity
 
+Status update, 2026-06-30: this Codex-specific hook-status plan is superseded
+for sidebar execution state. CCB now uses strict Codex pane evidence plus
+managed Codex session task boundaries, publishes `codex_runtime` through
+ProjectView, and does not install or consume the CCB `codex_hook` activity
+artifact for Codex rows. The generic provider hook framework remains available
+for non-Codex providers and future provider-specific designs.
+
 ## 1. Purpose
 
 This plan defines how CCB should integrate Codex-native lifecycle hooks into

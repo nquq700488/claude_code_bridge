@@ -16,6 +16,10 @@ from ccbd.project_focus.tmux import backend_for_namespace, refresh_sidebar_panes
 from ccbd.services.dispatcher_runtime import comms_recoverability_for_job
 from ccbd.system import parse_utc_timestamp, utc_now
 from message_bureau import CallbackEdgeState
+from provider_backends.codex.launcher_runtime.command_runtime.home import resolve_codex_home_layout
+from provider_pane_status.codex_pane import parse_codex_pane_status
+from provider_pane_status.codex_session import CodexRuntimeStatus, compose_codex_runtime_status, read_codex_session_status
+from storage.paths import PathLayout
 
 from .activity import (
     AgentActivityFacts,
@@ -530,12 +534,15 @@ def _agent_view(
 ) -> dict[str, object]:
     spec = deps.config.agents[agent_name]
     runtime = deps.registry.get(agent_name)
-    provider_activity = context.provider_activity_hint(
-        agent_name=agent_name,
-        provider=spec.provider,
-        runtime=runtime,
-        generated_at=generated_at,
-    )
+    provider_is_codex = _is_codex_provider(spec.provider)
+    provider_activity = None
+    if not provider_is_codex:
+        provider_activity = context.provider_activity_hint(
+            agent_name=agent_name,
+            provider=spec.provider,
+            runtime=runtime,
+            generated_at=generated_at,
+        )
     job = _top_activity_job(active_job=active_job, queued_jobs=queued_jobs)
     provider_runtime = _select_provider_runtime(
         provider_runtimes,
@@ -545,11 +552,25 @@ def _agent_view(
     queue_depth = len(queued_jobs) + (1 if _is_top_activity_job(active_job) else 0)
     callback_child_agent = _callback_child_agent(callback_wait)
     pane_text = None
-    if provider_activity is None or _provider_activity_needs_pane_error_probe(provider_activity, generated_at):
+    codex_runtime_status = None
+    if provider_is_codex:
+        pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
+        if pane_text is not None:
+            codex_runtime_status = _codex_runtime_status(
+                deps=deps,
+                agent_name=agent_name,
+                provider=spec.provider,
+                provider_profile=getattr(spec, 'provider_profile', None),
+                runtime=runtime,
+                pane_text=pane_text,
+                current_job=job,
+            )
+    elif provider_activity is None or _provider_activity_needs_pane_error_probe(provider_activity, generated_at):
         pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
     activity = resolve_agent_activity(
         AgentActivityFacts(
             namespace_mounted=namespace_mounted,
+            provider=spec.provider,
             runtime_state=_runtime_state(runtime),
             runtime_health=getattr(runtime, 'health', None) if runtime is not None else None,
             reconcile_state=getattr(runtime, 'reconcile_state', None) if runtime is not None else None,
@@ -569,6 +590,9 @@ def _agent_view(
             provider_activity_source=getattr(provider_activity, 'source', None),
             provider_activity_reason=getattr(provider_activity, 'reason', None),
             provider_activity_updated_at=getattr(provider_activity, 'updated_at', None),
+            provider_runtime_state=getattr(codex_runtime_status, 'state', None),
+            provider_runtime_source='codex_runtime' if codex_runtime_status is not None else None,
+            provider_runtime_reason=getattr(codex_runtime_status, 'reason', None),
         ),
         now=generated_at,
     )
@@ -602,7 +626,97 @@ def _agent_view(
     }
     if provider_runtime is not None:
         record['provider_runtime'] = provider_runtime
+    if codex_runtime_status is not None:
+        record['provider_runtime_status'] = codex_runtime_status.to_record()
     return record
+
+
+def _is_codex_provider(provider: object) -> bool:
+    return str(provider or '').strip().lower() == 'codex'
+
+
+def _codex_runtime_status(
+    *,
+    deps: ProjectViewDependencies,
+    agent_name: str,
+    provider: str,
+    provider_profile: object | None,
+    runtime: object | None,
+    pane_text: str | None,
+    current_job,
+) -> CodexRuntimeStatus | None:
+    if not _is_codex_provider(provider):
+        return None
+    pane_state = _clean_pane_state(getattr(runtime, 'pane_state', None) if runtime is not None else None)
+    pane_status = parse_codex_pane_status(
+        pane_text,
+        pane_dead=pane_state in {'missing', 'dead'},
+    )
+    session_status = read_codex_session_status(
+        _codex_session_root(
+            deps=deps,
+            agent_name=agent_name,
+            provider=provider,
+            provider_profile=provider_profile,
+        ),
+        work_dir=getattr(runtime, 'workspace_path', None) if runtime is not None else None,
+        min_mtime_s=_job_updated_epoch_for_session_floor(current_job),
+    )
+    raw_status = compose_codex_runtime_status(pane_status, session_status)
+    if (
+        _job_is_running(current_job)
+        and raw_status.state == 'unknown'
+    ):
+        return CodexRuntimeStatus(
+            'start',
+            'prompt_submitted_waiting_for_first_signal',
+            'stabilizer',
+            raw_status.pane_state,
+            raw_status.pane_reason,
+            raw_status.session_state,
+            raw_status.session_reason,
+            notes=(
+                *raw_status.notes,
+                f'raw_state={raw_status.state}',
+                f'raw_reason={raw_status.reason}',
+            ),
+        )
+    return raw_status
+
+
+def _codex_session_root(
+    *,
+    deps: ProjectViewDependencies,
+    agent_name: str,
+    provider: str,
+    provider_profile: object | None,
+) -> Path | None:
+    layout = deps.paths or PathLayout(deps.project_root)
+    runtime_dir_resolver = getattr(layout, 'agent_provider_runtime_dir', None)
+    if not callable(runtime_dir_resolver):
+        return None
+    try:
+        runtime_dir = Path(runtime_dir_resolver(agent_name, provider))
+        return resolve_codex_home_layout(runtime_dir, provider_profile).session_root
+    except Exception:
+        return None
+
+
+def _job_updated_epoch_for_session_floor(job) -> float | None:
+    if not _job_is_running(job):
+        return None
+    try:
+        return parse_utc_timestamp(str(getattr(job, 'updated_at', '') or '')).timestamp()
+    except Exception:
+        return None
+
+
+def _job_is_running(job) -> bool:
+    return job is not None and getattr(job, 'status', None) is JobStatus.RUNNING
+
+
+def _clean_pane_state(value: object) -> str:
+    return str(value or '').strip().lower()
 
 
 def _active_reload_drains_by_agent(reload_drains: dict[str, object]) -> dict[str, dict[str, object]]:
@@ -639,10 +753,10 @@ def _record_inferred_provider_failure(
         return
     if getattr(activity, 'state', None) != 'failed':
         return
-    if getattr(activity, 'source', None) != 'provider_pane':
+    if getattr(activity, 'source', None) not in {'provider_pane', 'codex_runtime'}:
         return
     reason = str(getattr(activity, 'reason', '') or '').strip()
-    if reason != 'provider_terminal_error':
+    if reason not in {'provider_terminal_error', 'provider_api_error', 'provider_auth_failed', 'provider_config_error', 'provider_error_text'}:
         return
     record_provider_activity_failure(
         project_root=deps.project_root,
@@ -1245,7 +1359,7 @@ def _running_recover_hint(context: _ProjectViewBuildContext, *, job, generated_a
     if runtime is None:
         return None
     provider = str(getattr(deps.config.agents.get(agent_name), 'provider', '') or '').strip().lower()
-    if provider not in {'claude', 'codex'}:
+    if provider != 'claude':
         return None
     pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None))
     age = _job_age_seconds(generated_at, getattr(job, 'updated_at', None))

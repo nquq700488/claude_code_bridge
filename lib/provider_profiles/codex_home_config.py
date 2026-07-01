@@ -9,9 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time
 from pathlib import Path
 import re
-import shlex
 import shutil
-import sys
 
 from provider_core.memory_projection import (
     materialize_provider_memory_file,
@@ -51,15 +49,6 @@ _CODEX_PLUGIN_REQUIRED_RELATIVE_PATHS = (
     Path('plugins'),
 )
 _MANAGED_CODEX_DISABLED_FEATURES = ('external_migration',)
-_CODEX_ACTIVITY_HOOK_EVENTS = (
-    'SessionStart',
-    'UserPromptSubmit',
-    'PreToolUse',
-    'PermissionRequest',
-    'PostToolUse',
-    'Stop',
-)
-_CODEX_ACTIVITY_HOOK_TIMEOUT_S = 5
 _CODEX_DEFAULT_INHERITED_HOOK_EVENTS = frozenset(
     {
         'SessionStart',
@@ -194,14 +183,10 @@ def materialize_codex_home_config(
         agent_name=agent_name,
         workspace_path=workspace_path,
     )
-    _install_codex_activity_hooks(
+    _install_codex_inherited_hooks(
         target_home,
         target_config,
         source_home=source_home,
-        project_root=project_root,
-        agent_name=agent_name,
-        runtime_dir=runtime_dir,
-        workspace_path=workspace_path,
     )
     record_memory_projection_event(
         memory_result,
@@ -224,14 +209,11 @@ def repair_codex_activity_hooks(
 ) -> None:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
-    _install_codex_activity_hooks(
+    del project_root, agent_name, runtime_dir, workspace_path
+    _install_codex_inherited_hooks(
         target_home,
         target_home / 'config.toml',
         source_home=source_home,
-        project_root=project_root,
-        agent_name=agent_name,
-        runtime_dir=runtime_dir,
-        workspace_path=workspace_path,
     )
 
 
@@ -1068,93 +1050,25 @@ def _sync_codex_plugin_projection(
         target_sha.write_text(f'{bundle_sha}\n', encoding='utf-8')
 
 
-def _install_codex_activity_hooks(
+def _install_codex_inherited_hooks(
     target_home: Path,
     target_config: Path,
     *,
     source_home: Path | None = None,
-    project_root: Path | None,
-    agent_name: str | None,
-    runtime_dir: Path | None,
-    workspace_path: Path | None,
 ) -> None:
-    if project_root is None or agent_name is None or runtime_dir is None or workspace_path is None:
-        return
-    project_id = _project_id_for_path(project_root)
-    if not project_id:
-        return
     hooks_path = Path(target_home).expanduser() / 'hooks.json'
-    command = _codex_activity_hook_command(
-        project_id=project_id,
-        agent_name=str(agent_name),
-        runtime_dir=Path(runtime_dir).expanduser(),
-        workspace_path=Path(workspace_path).expanduser(),
-    )
-    event_groups = _codex_activity_hook_events(command)
-    event_groups = _merge_codex_hook_groups(
-        event_groups,
-        _allowed_inherited_codex_hooks(source_home),
-    )
+    event_groups = _allowed_inherited_codex_hooks(source_home)
     hooks_payload = {'hooks': event_groups}
     hooks_path.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_text(
         hooks_path,
         json.dumps(hooks_payload, ensure_ascii=False, indent=2) + '\n',
     )
-    _merge_codex_activity_hook_state(
+    _merge_codex_hook_state(
         target_config,
         hooks_path=hooks_path,
         event_groups=event_groups,
     )
-
-
-def _project_id_for_path(project_root: Path) -> str:
-    try:
-        return PathLayout(Path(project_root).expanduser()).project_id
-    except Exception:
-        return ''
-
-
-def _codex_activity_hook_command(
-    *,
-    project_id: str,
-    agent_name: str,
-    runtime_dir: Path,
-    workspace_path: Path,
-) -> str:
-    script_path = Path(__file__).resolve().parents[2] / 'bin' / 'ccb-provider-activity-hook.py'
-    parts = [
-        sys.executable,
-        str(script_path),
-        '--provider',
-        'codex',
-        '--project-id',
-        project_id,
-        '--agent-name',
-        agent_name,
-        '--runtime-dir',
-        str(runtime_dir),
-        '--workspace',
-        str(workspace_path),
-    ]
-    return ' '.join(shlex.quote(str(part)) for part in parts)
-
-
-def _codex_activity_hook_events(command: str) -> dict[str, list[dict[str, object]]]:
-    return {
-        event_name: [
-            {
-                'hooks': [
-                    {
-                        'type': 'command',
-                        'command': command,
-                        'timeout': _CODEX_ACTIVITY_HOOK_TIMEOUT_S,
-                    }
-                ]
-            }
-        ]
-        for event_name in _CODEX_ACTIVITY_HOOK_EVENTS
-    }
 
 
 def _allowed_inherited_codex_hooks(source_home: Path | None) -> dict[str, list[dict[str, object]]]:
@@ -1199,16 +1113,6 @@ def _allowed_inherited_codex_hooks(source_home: Path | None) -> dict[str, list[d
         if groups:
             selected[event] = groups
     return selected
-
-
-def _codex_inherited_hook_events() -> frozenset[str]:
-    configured = _split_codex_inherited_hook_env(os.environ.get(_CODEX_INHERITED_HOOK_EVENTS_ENV))
-    return frozenset([*_CODEX_DEFAULT_INHERITED_HOOK_EVENTS, *configured])
-
-
-def _codex_inherited_command_hook_markers() -> tuple[str, ...]:
-    configured = _split_codex_inherited_hook_env(os.environ.get(_CODEX_INHERITED_COMMAND_HOOK_MARKERS_ENV))
-    return _normalize_codex_command_hook_markers([*_CODEX_DEFAULT_INHERITED_COMMAND_HOOK_MARKERS, *configured])
 
 
 def _normalize_codex_command_hook_markers(markers: object) -> tuple[str, ...]:
@@ -1340,7 +1244,7 @@ def _codex_hook_group_command_identity(group: dict[str, object]) -> tuple[str, .
     )
 
 
-def _merge_codex_activity_hook_state(
+def _merge_codex_hook_state(
     target_config: Path,
     *,
     hooks_path: Path,
@@ -1367,7 +1271,7 @@ def _merge_codex_activity_hook_state(
     payload = _read_source_config_payload(target_config)
     if not payload and existing_text.strip():
         target_config.write_text(
-            _replace_managed_codex_activity_state_block(existing_text, state_table),
+            _replace_managed_codex_hook_state_block(existing_text, state_table),
             encoding='utf-8',
         )
         return
@@ -1379,7 +1283,7 @@ def _merge_codex_activity_hook_state(
     target_config.write_text(_render_toml_document(payload), encoding='utf-8')
 
 
-def _replace_managed_codex_activity_state_block(text: str, state_table: dict[str, object]) -> str:
+def _replace_managed_codex_hook_state_block(text: str, state_table: dict[str, object]) -> str:
     begin = '# ccb managed codex activity hook state: begin'
     end = '# ccb managed codex activity hook state: end'
     lines = text.splitlines()

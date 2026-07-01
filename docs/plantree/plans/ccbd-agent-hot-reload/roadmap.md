@@ -179,6 +179,75 @@ Date: 2026-06-28
   ask-reachable after move transactions, and both providers can survive
   same-window dynamic add/reflow/unload cycles while preserving the original
   main pane.
+- Extended live-provider evidence to multi-window batch release:
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-batch-release-latest.json`
+  passed for `codex` with `batch-release`;
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-batch-release-latest.json`
+  passed for `claude` with `batch-release`. Together these prove a real
+  provider session can add a survivor helper to an existing window, add two
+  helpers into new windows, batch-unload two dynamic helpers, remove the empty
+  dynamic windows, preserve the survivor pane, and keep survivor/main asks
+  reachable after the release transaction.
+- Extended live-provider evidence to higher-stress explicit `[windows]` flows:
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-window-class-continuous-latest.json`
+  and
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-window-class-continuous-latest.json`
+  passed `window-class-continuous` (`1->8->1` across `plan-orchestrate` and
+  `plan-orchestrate-2`);
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-mixed-move-add-latest.json`
+  and
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-mixed-move-add-latest.json`
+  passed `mixed-move-add`; and
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-batch-move-window-class-latest.json`
+  plus
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-batch-move-window-class-latest.json`
+  passed `batch-move-window-class`. Together these prove real Codex and Claude
+  sessions can grow a window-class to a second window and shrink it back, mix
+  pane moves with newly-mounted agents in one reload transaction, batch-move
+  dynamic agents into class-derived target windows, preserve moved pane ids,
+  remove evacuated dynamic windows, and keep moved/new agents ask-reachable.
+- Extended live-provider evidence to explicit arrange/reflow recovery:
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-arrange-window-latest.json`
+  and
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-arrange-window-latest.json`
+  passed `arrange-window`. These prove real Codex and Claude sessions can
+  survive an intentionally disturbed `plan-orchestrate` pane layout, restore the
+  fixed-column target geometry with `ccb agent arrange`, preserve pane ids and
+  agent order, keep a helper ask-reachable after arrange, then unload helpers
+  back to the static `frontdesk` plus `planner` topology.
+- Extended live-provider evidence to the shared-source move edge case:
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-move-shared-source-latest.json`
+  and
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-move-shared-source-latest.json`
+  passed `move-shared-source`. These prove real Codex and Claude sessions can
+  move one dynamic helper out of a source window that still contains another
+  helper, keep the source window alive, preserve both moved and staying pane ids,
+  keep both helpers ask-reachable after the move, move the helper back, and only
+  remove the source window after the final helper is released.
+- Extended live-provider evidence to resolve/preflight and loop capacity:
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-codex-resolve-preflight-latest.json`
+  and
+  `/home/bfly/yunwei/test_ccb2/dynamic-layout-live-claude-resolve-preflight-latest.json`
+  passed `resolve-preflight` with real dynamic providers and fake static filler
+  panes. These prove window-class overflow resolution predicts
+  `plan-orchestrate-2`, the subsequent real provider `agent add` matches the
+  resolved target, release removes the overflow window, execution-node
+  resolution predicts `node-round3-node1`, `loop capacity ensure` creates the
+  real worker/reviewer node window, and `loop capacity release` removes it.
+- Promoted the fake-provider core dynamic layout smoke into the regular
+  Ubuntu/Python 3.11 CI gate as `Guard core dynamic layout smoke`, backed by
+  `scripts/guarded_core_dynamic_layout_smoke.py`. The guard covers
+  `same-window-continuous`, `batch-release`, `move-agent`, `move-shared-source`,
+  `window-class-continuous`, `arrange-window`, `mixed-move-add`,
+  `batch-move-window-class`, and `resolve-preflight`, while keeping real
+  Codex/Claude runs as guarded manual/release evidence. Guard script, workflow
+  text coverage, and dynamic layout script tests passed with
+  `pytest -q test/test_dynamic_layout_smoke_script.py
+  test/test_guarded_dynamic_layout_provider_smoke_script.py
+  test/test_guarded_core_dynamic_layout_smoke_script.py` (`49 passed`), and the
+  source-wrapper guard fake smoke
+  `/home/bfly/yunwei/test_ccb2/guarded-core-dynamic-layout-local-latest.json` passed
+  all nine flows with `dynamic_layout_smoke_status: ok`.
 - Verified dynamic lifecycle policy smoke for park/resume and auto release:
   `pytest -q test/test_dynamic_agent_lifecycle_smoke_script.py` passed with
   `5 passed`; source-wrapper fake smoke
@@ -248,6 +317,74 @@ Date: 2026-06-28
   `77 passed`), and external source-wrapper fake smoke
   `scripts/reload_busy_drain_smoke.py --provider fake --project-name
   reload-busy-drain-smoke --reset` from `/home/bfly/yunwei/test_ccb2`.
+- Added daemon heartbeat auto-retry for ready active unload drains: after
+  completion polling shows the draining agent has no outstanding work, heartbeat
+  reuses the guarded additive reload transaction for the current disk
+  `remove_agent` plan and retires the drain through the existing unload path.
+  Busy drains remain waiting, and stale ready drains are retired when the user
+  restores the agent in `.ccb/ccb.config` before auto-retry. Verification
+  passed with `pytest -q test/test_ccbd_reload_drain_auto_retry.py
+  test/test_reload_busy_drain_smoke_script.py` (`9 passed`), the reload/drain
+  focused slice (`80 passed`), project-view/heartbeat lock checks (`69
+  passed`), `pytest -q test/test_v2_ask_service.py` (`30 passed`), and external
+  source-wrapper fake smoke
+  `scripts/reload_busy_drain_smoke.py --provider fake --auto-retry
+  --project-name reload-busy-drain-auto-retry-smoke --reset` from
+  `/home/bfly/yunwei/test_ccb2`.
+- Closed the first sidebar drain visibility gap: the Rust sidebar helper now
+  parses `reload_drain` and `dispatch_blocked_by_reload_drain` from
+  `project_view` agent rows and renders draining agents with a warning-colored
+  `drain:<status>` marker. Verification passed with `cargo fmt
+  --manifest-path tools/ccb-agent-sidebar/Cargo.toml --check`,
+  `cargo test --manifest-path tools/ccb-agent-sidebar/Cargo.toml` (`73
+  passed`), and external source-wrapper fake smoke
+  `scripts/reload_busy_drain_smoke.py --provider fake --project-name
+  reload-busy-drain-sidebar-visibility --reset` from
+  `/home/bfly/yunwei/test_ccb2`, which proved active drain recording, ask
+  rejection while draining, retry publish, and final drain cleanup.
+- Added a repeatable true tmux sidebar pane capture to the busy-drain smoke:
+  `scripts/reload_busy_drain_smoke.py --check-sidebar-render` widens the test
+  sidebar, waits for a blocked active drain, captures the live sidebar pane, and
+  requires the rendered `drain:waiting` marker before allowing the smoke to
+  pass. Verification passed with `pytest -q
+  test/test_reload_busy_drain_smoke_script.py` (`9 passed`), `python -m
+  py_compile scripts/reload_busy_drain_smoke.py`, `cargo build --release
+  --manifest-path tools/ccb-agent-sidebar/Cargo.toml` so the source wrapper
+  used the updated helper, and external source-wrapper fake smoke
+  `scripts/reload_busy_drain_smoke.py --provider fake --project-name
+  reload-busy-drain-sidebar-render --busy-latency-ms 15000
+  --check-sidebar-render --reset` from `/home/bfly/yunwei/test_ccb2`, which
+  passed all checks including `sidebar_renders_active_drain`.
+- Added the first replace-agent apply boundary: non-dry-run `replace_agent`
+  reloads now return a structured `replace_agent_deferred` plan-stage blocker
+  instead of a generic unsupported-plan message. The payload includes affected
+  `replace_agents`, planned replace drain intents, and a CLI-rendered
+  `next_supported_action`, while still avoiding namespace patch, runtime
+  mutation, service-graph publish, or persistent drain records. Verification
+  passed with `pytest -q test/test_ccbd_reload_apply.py
+  test/test_ccbd_reload_drain.py test/test_ccbd_reload_dry_run.py
+  test/test_v2_cli_render.py` (`99 passed`) and `python -m py_compile
+  lib/ccbd/reload_apply_plan.py lib/cli/render_runtime/reload_view.py`.
+- Landed the first idle `replace_agent` mutation slice: pure existing-agent
+  provider/spec replacement now plans a same-slot runtime replacement, skips
+  tmux namespace mutation, stops old runtime authority, respawns the new
+  provider in the original pane, publishes the new service graph/signature, and
+  reports `replaced_agents`. Busy replacement records a bounded `replace`
+  drain and leaves namespace/runtime/publish untouched; a later manual idle
+  retry reuses the same replacement path and retires the active replace drain.
+  A real source-wrapper smoke in `/home/bfly/yunwei/test_ccb2` proved
+  `fake-codex -> fake-claude` same-slot replacement publishes, preserves pane
+  `%1`, updates layout status to the new provider, and keeps `ask` reachable.
+  Verification passed with `PYTHONPATH=lib pytest -q test/test_ccbd_reload_apply.py
+  test/test_ccbd_reload_patch.py test/test_ccbd_reload_drain.py
+  test/test_ccbd_reload_dry_run.py test/test_ccbd_reload_runtime_mount.py
+  test/test_ccbd_reload_transaction.py test/test_v2_cli_render.py
+  test/test_v2_cli_router.py` (`212 passed`) and external source-wrapper smoke
+  `scripts/guarded_core_dynamic_layout_smoke.py --test-root
+  /home/bfly/yunwei/test_ccb2 --ccb-test
+  /home/bfly/yunwei/ccb_source/ccb_test --provider fake --project-prefix
+  core-dynamic-layout-replace-safety --reset`, which passed all guarded core
+  dynamic layout checks.
 
 ## In Progress
 
@@ -257,22 +394,26 @@ Date: 2026-06-28
   release, busy retain, empty dynamic-window cleanup, config-only park/resume
   dispatch toggling, compact-startup pane identity preservation, bounded
   busy-unload drain recording/status surfacing in reload and project-view
-  surfaces, batch release, batch move into explicit
-  review/loop/node windows, and mixed move-plus-add explicit `[windows]`
-  reload. Live `codex` and `claude` move, same-window `1->6->1`, and lifecycle
-  park/resume smokes have passed; broader provider lifecycle matrix coverage,
-  daemon-pushed sidebar refresh, automatic background drain retry,
-  replacement, arbitrary layout reshapes, and background config watching remain
-  deferred.
+  surfaces, heartbeat auto-retry for ready unload drains, batch release, batch
+  move into explicit review/loop/node windows, and mixed move-plus-add explicit
+  `[windows]` reload. Live `codex` and `claude` move, same-window `1->6->1`,
+  lifecycle park/resume, multi-window batch-release, window-class-continuous,
+  mixed move-plus-add, batch window-class move, arrange-window, and
+  shared-source move, plus resolve/preflight loop-capacity smokes have passed;
+  the core fake-provider dynamic layout bundle is now a CI gate. Sidebar helper
+  now renders active drain status from `project_view`, and a true tmux pane
+  capture smoke verifies the marker in a running sidebar. Pure idle
+  replace-agent mutation is implemented for same-slot respawn and publish, and
+  busy replace has bounded drain plus manual idle-retry cleanup. Automatic
+  heartbeat retry for ready replace drains, daemon-pushed sidebar refresh,
+  arbitrary layout reshapes, and background config watching remain deferred.
 
 ## Next
 
-1. Extend live-provider smoke for pane-backed `codex`/`claude` dynamic add,
-   move, release, hide/park/resume. `codex` `move-agent`, `codex`
-   `same-window-continuous`, `codex` lifecycle park/resume, `claude`
-   `move-agent`, `claude` `same-window-continuous`, and `claude` lifecycle
-   park/resume have passed with real-home auth; remaining flows need the same
-   guarded account-boundary treatment before being promoted to release gates.
+1. Watch the first remote CI run for the expanded `Guard core dynamic layout
+   smoke` gate. If runtime or flake rate is too high, split the nine fake flows
+   into a stable core gate and an edge-flow gate rather than weakening
+   assertions.
 2. Run or update the automatic and manual additive reload matrix in
    [topics/test-matrix.md](topics/test-matrix.md), including `test_ccb2`
    evidence for unchanged old panes, newly-mounted agents, released dynamic
@@ -280,15 +421,11 @@ Date: 2026-06-28
    cleanup. The fake busy-remove drain path now has a dedicated CI smoke; the
    next matrix expansion should decide whether a guarded real-provider variant
    is useful or too slow for routine gates.
-3. Validate whether sidebar's existing project-view polling/refresh path is
-   enough for drain status visibility; add a lightweight daemon-pushed sidebar
-   refresh signal only if manual validation proves it is needed.
-4. Add automatic drain retry only after explicit retry remains stable; the
-   first bridge records bounded drains, blocks new work, surfaces status, and
-   lets `ccb reload` retry when the agent becomes idle, but does not yet run a
-   background idle watcher.
-5. Expose replacement only after unload semantics are safe; busy replacement
-   remains pending with explicit bounds.
+3. Extend the busy `replace_agent` drain path with heartbeat-driven retry
+   execution, using the landed same-slot replacement path once the active
+   replace drain becomes idle-ready.
+4. Keep daemon-pushed sidebar refresh deferred unless a real tmux visual check
+   shows project-view polling is too slow for drain/reload state changes.
 
 ## Deferred
 

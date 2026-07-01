@@ -433,7 +433,7 @@ def test_project_view_cache_invalidates_when_reload_drain_file_changes(tmp_path:
     assert second['view']['agents'][1]['dispatch_blocked_by_reload_drain'] is True
 
 
-def test_project_view_uses_provider_activity_without_ccb_job(tmp_path: Path) -> None:
+def test_project_view_ignores_codex_provider_activity_without_ccb_job(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-activity'
     project_root.mkdir()
     layout = PathLayout(project_root)
@@ -469,13 +469,13 @@ def test_project_view_uses_provider_activity_without_ccb_job(tmp_path: Path) -> 
     ).build_response()
 
     agent = response['view']['agents'][0]
-    assert agent['activity_state'] == 'active'
-    assert agent['activity_source'] == 'codex_hook'
-    assert agent['activity_reason'] == 'provider_userpromptsubmit'
-    assert agent['last_progress_at'] == NOW
+    assert agent['activity_state'] == 'idle'
+    assert agent['activity_source'] == 'pane_liveness'
+    assert agent['activity_reason'] == 'pane_alive'
+    assert 'provider_runtime_status' not in agent
 
 
-def test_project_view_provider_failed_overrides_running_job_metadata(tmp_path: Path) -> None:
+def test_project_view_ignores_codex_provider_activity_failed_for_running_job(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-failed'
     project_root.mkdir()
     layout = PathLayout(project_root)
@@ -514,9 +514,9 @@ def test_project_view_provider_failed_overrides_running_job_metadata(tmp_path: P
     ).build_response()
 
     agent = response['view']['agents'][0]
-    assert agent['activity_state'] == 'failed'
-    assert agent['activity_source'] == 'codex_hook'
-    assert agent['activity_reason'] == 'api_error'
+    assert agent['activity_state'] == 'active'
+    assert agent['activity_source'] == 'ccb_job'
+    assert agent['activity_reason'] == 'job_running'
     assert agent['current_job_id'] == 'job_running_1234'
 
 
@@ -558,15 +558,15 @@ def test_project_view_ignores_provider_activity_for_wrong_pane(tmp_path: Path) -
     assert agent['activity_source'] == 'pane_liveness'
 
 
-def test_project_view_skips_capture_pane_when_provider_activity_is_fresh(tmp_path: Path) -> None:
+def test_project_view_skips_capture_pane_when_non_codex_provider_activity_is_fresh(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-no-capture'
     project_root.mkdir()
     layout = PathLayout(project_root)
     project_id = compute_project_id(project_root)
     config = _config()
     registry = AgentRegistry(layout, config)
-    runtime = _runtime('agent1', project_id=project_id)
-    runtime.session_id = 'ccb-agent1-session'
+    runtime = _runtime('agent2', project_id=project_id)
+    runtime.session_id = 'claude-session-1'
     registry.upsert(runtime)
     mount_manager = MountManager(layout, clock=lambda: NOW)
     mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
@@ -581,14 +581,14 @@ def test_project_view_skips_capture_pane_when_provider_activity_is_fresh(tmp_pat
     )
     dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
     write_activity(
-        provider='codex',
+        provider='claude',
         project_id=project_id,
-        agent_name='agent1',
-        runtime_dir=layout.agent_provider_runtime_dir('agent1', 'codex'),
+        agent_name='agent2',
+        runtime_dir=layout.agent_provider_runtime_dir('agent2', 'claude'),
         state='active',
-        source='codex_hook',
-        ccb_session_id='ccb-agent1-session',
-        pane_id='%1',
+        source='claude_hook',
+        ccb_session_id='ccb-agent2-session',
+        pane_id='%2',
         workspace_path='/tmp/workspace',
         updated_at=NOW,
     )
@@ -614,8 +614,136 @@ def test_project_view_skips_capture_pane_when_provider_activity_is_fresh(tmp_pat
         )
     ).build_response()
 
-    assert response['view']['agents'][0]['activity_source'] == 'codex_hook'
+    assert response['view']['agents'][1]['activity_source'] == 'claude_hook'
     assert [args for args in backend.calls if args[:3] == ['capture-pane', '-p', '-t']] == []
+
+
+def test_project_view_codex_runtime_status_overrides_sidebar_presentation(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-runtime-sidebar'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    runtime = _runtime('agent1', project_id=project_id)
+    registry.upsert(runtime)
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    ProjectNamespaceStateStore(layout).save(
+        ProjectNamespaceState(
+            project_id=project_id,
+            namespace_epoch=3,
+            tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+            tmux_session_name='ccb-codex-runtime-sidebar',
+            layout_version=2,
+        )
+    )
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+
+    class CodexWorkingBackend(_SnapshotBackend):
+        def _tmux_run(self, args: list[str], *, capture=False, check=False, timeout=None):
+            self.calls.append(list(args))
+            if args[:3] == ['capture-pane', '-p', '-t']:
+                return type('CP', (), {'returncode': 0, 'stdout': '• Working (28s • esc to interrupt)\n', 'stderr': ''})()
+            return self._snapshot_run(args, capture=capture, check=check, timeout=timeout)
+
+    backend = CodexWorkingBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        project_id,
+        backend_factory=lambda socket_path=None: backend,
+    )
+
+    response = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            namespace_controller=controller,
+            paths=layout,
+            clock=lambda: NOW,
+        )
+    ).build_response()
+
+    agent = response['view']['agents'][0]
+    assert agent['activity_state'] == 'active'
+    assert agent['activity_source'] == 'codex_runtime'
+    assert agent['activity_reason'] == 'codex_working_status_line'
+    assert agent['activity_symbol'] == '●'
+    assert agent['activity_color'] == 'green'
+    assert agent['provider_runtime_status']['state'] == 'working'
+    assert agent['provider_runtime_status']['pane_state'] == 'working'
+
+
+def test_project_view_codex_running_unknown_displays_start(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-codex-runtime-start'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    runtime = _runtime('agent1', project_id=project_id)
+    registry.upsert(runtime)
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+    ProjectNamespaceStateStore(layout).save(
+        ProjectNamespaceState(
+            project_id=project_id,
+            namespace_epoch=3,
+            tmux_socket_path=str(layout.ccbd_tmux_socket_path),
+            tmux_session_name='ccb-codex-runtime-start',
+            layout_version=2,
+        )
+    )
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    running = _job(project_id, job_id='job_running_1234', sender='user', target='agent1', status=JobStatus.RUNNING)
+    dispatcher._append_job(running)
+    dispatcher._state.mark_active_for(TargetKind.AGENT, 'agent1', running.job_id)
+
+    class CodexPromptBackend(_SnapshotBackend):
+        def _tmux_run(self, args: list[str], *, capture=False, check=False, timeout=None):
+            self.calls.append(list(args))
+            if args[:3] == ['capture-pane', '-p', '-t']:
+                return type('CP', (), {'returncode': 0, 'stdout': '› Reply with exactly: ok\n', 'stderr': ''})()
+            return self._snapshot_run(args, capture=capture, check=check, timeout=timeout)
+
+    backend = CodexPromptBackend()
+    controller = ProjectNamespaceController(
+        layout,
+        project_id,
+        backend_factory=lambda socket_path=None: backend,
+    )
+
+    response = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            namespace_controller=controller,
+            paths=layout,
+            clock=lambda: NOW,
+        )
+    ).build_response()
+
+    agent = response['view']['agents'][0]
+    assert agent['activity_state'] == 'pending'
+    assert agent['activity_source'] == 'codex_runtime'
+    assert agent['activity_reason'] == 'prompt_submitted_waiting_for_first_signal'
+    assert agent['activity_symbol'] == '◌'
+    assert agent['activity_color'] == 'yellow'
+    assert agent['provider_runtime_status']['state'] == 'start'
+    assert agent['provider_runtime_status']['notes'] == [
+        'raw_state=unknown',
+        'raw_reason=no_known_status_pattern',
+    ]
 
 
 def test_project_view_marks_stale_provider_activity_failed_from_pane_error(tmp_path: Path) -> None:
@@ -696,14 +824,14 @@ def test_project_view_marks_stale_provider_activity_failed_from_pane_error(tmp_p
 
     agent = response['view']['agents'][0]
     assert agent['activity_state'] == 'failed'
-    assert agent['activity_source'] == 'provider_pane'
-    assert agent['activity_reason'] == 'provider_terminal_error'
+    assert agent['activity_source'] == 'codex_runtime'
+    assert agent['activity_reason'] == 'provider_api_error'
     assert [args for args in backend.calls if args[:3] == ['capture-pane', '-p', '-t']] == [
         ['capture-pane', '-p', '-t', '%1', '-S', '-30']
     ]
 
 
-def test_project_view_marks_stale_provider_activity_failed_from_http_status_error(tmp_path: Path) -> None:
+def test_project_view_marks_codex_runtime_failed_from_http_status_error_without_activity_artifact(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-http-error'
     project_root.mkdir()
     layout = PathLayout(project_root)
@@ -782,14 +910,13 @@ def test_project_view_marks_stale_provider_activity_failed_from_http_status_erro
 
     agent = response['view']['agents'][0]
     assert agent['activity_state'] == 'failed'
-    assert agent['activity_source'] == 'provider_pane'
-    assert agent['activity_reason'] == 'provider_terminal_error'
+    assert agent['activity_source'] == 'codex_runtime'
+    assert agent['activity_reason'] == 'provider_api_error'
 
     activity_payload = load_activity(layout.agent_provider_runtime_dir('agent1', 'codex'))
     assert activity_payload is not None
-    assert activity_payload['state'] == 'failed'
-    assert activity_payload['source'] == 'provider_pane'
-    assert activity_payload['diagnostics']['reason'] == 'provider_terminal_error'
+    assert activity_payload['state'] == 'active'
+    assert activity_payload['source'] == 'codex_hook'
 
     clean_backend = _SnapshotBackend()
     clean_controller = ProjectNamespaceController(
@@ -814,13 +941,15 @@ def test_project_view_marks_stale_provider_activity_failed_from_http_status_erro
     ).build_response()
 
     second_agent = second_response['view']['agents'][0]
-    assert second_agent['activity_state'] == 'failed'
-    assert second_agent['activity_source'] == 'provider_pane'
-    assert second_agent['activity_reason'] == 'provider_terminal_error'
-    assert [args for args in clean_backend.calls if args[:3] == ['capture-pane', '-p', '-t']] == []
+    assert second_agent['activity_state'] == 'idle'
+    assert second_agent['activity_source'] == 'pane_liveness'
+    assert second_agent['activity_reason'] == 'pane_alive'
+    assert [args for args in clean_backend.calls if args[:3] == ['capture-pane', '-p', '-t']] == [
+        ['capture-pane', '-p', '-t', '%1', '-S', '-30']
+    ]
 
 
-def test_project_view_marks_stale_codex_activity_idle_from_prompt(tmp_path: Path) -> None:
+def test_project_view_does_not_use_legacy_codex_prompt_idle_status(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-pane-idle'
     project_root.mkdir()
     layout = PathLayout(project_root)
@@ -899,9 +1028,12 @@ def test_project_view_marks_stale_codex_activity_idle_from_prompt(tmp_path: Path
     ).build_response()
 
     agent = response['view']['agents'][0]
-    assert agent['activity_state'] == 'idle'
-    assert agent['activity_source'] == 'provider_pane'
-    assert agent['activity_reason'] == 'provider_prompt_idle'
+    assert agent['activity_state'] == 'pending'
+    assert agent['activity_source'] == 'codex_runtime'
+    assert agent['activity_reason'] == 'no_known_status_pattern'
+    assert agent['activity_symbol'] == '?'
+    assert agent['activity_color'] == 'gray'
+    assert agent['provider_runtime_status']['state'] == 'unknown'
 
 
 def test_project_view_returns_minimal_windows_agents_and_comms(tmp_path: Path) -> None:
@@ -3151,8 +3283,10 @@ def test_project_view_marks_provider_prompt_as_pending(tmp_path: Path) -> None:
     agent1 = service.build_response()['view']['agents'][0]
 
     assert agent1['activity_state'] == 'pending'
-    assert agent1['activity_source'] == 'provider_prompt'
+    assert agent1['activity_source'] == 'codex_runtime'
     assert agent1['activity_reason'] == 'provider_waiting_for_user'
+    assert agent1['activity_symbol'] == '?'
+    assert agent1['activity_color'] == 'yellow'
 
 
 def test_project_view_marks_running_job_idle_after_provider_prompt_reappears(tmp_path: Path) -> None:
@@ -3205,19 +3339,16 @@ def test_project_view_marks_running_job_idle_after_provider_prompt_reappears(tmp
     comm = view['comms'][0]
 
     assert agent3['activity_state'] == 'pending'
-    assert agent3['activity_source'] == 'provider_prompt'
-    assert agent3['activity_reason'] == 'provider_prompt_idle'
+    assert agent3['activity_source'] == 'codex_runtime'
+    assert agent3['activity_reason'] == 'prompt_submitted_waiting_for_first_signal'
+    assert agent3['activity_symbol'] == '◌'
+    assert agent3['activity_color'] == 'yellow'
     assert agent3['current_job_id'] == job.job_id
     assert comm['id'] == job.job_id
-    assert comm['business_status'] == 'blocked'
-    assert comm['status_label'] == 'stuck'
-    assert comm['recoverable'] is True
-    assert comm['block_reason'] == 'provider_prompt_idle'
-    assert comm['recover_target'] == {
-        'job_id': job.job_id,
-        'reply_delivery_job_id': None,
-        'block_reason': 'provider_prompt_idle',
-    }
+    assert comm['business_status'] == 'replying'
+    assert comm['status_label'] == 'work'
+    assert comm['recoverable'] is False
+    assert comm['block_reason'] is None
 
 
 def test_project_view_does_not_mark_fresh_running_prompt_idle_as_recoverable(tmp_path: Path) -> None:
@@ -3267,9 +3398,11 @@ def test_project_view_does_not_mark_fresh_running_prompt_idle_as_recoverable(tmp
     agent3 = next(agent for agent in view['agents'] if agent['name'] == 'agent3')
     comm = view['comms'][0]
 
-    assert agent3['activity_state'] == 'active'
-    assert agent3['activity_source'] == 'ccb_job'
-    assert agent3['activity_reason'] == 'job_running'
+    assert agent3['activity_state'] == 'pending'
+    assert agent3['activity_source'] == 'codex_runtime'
+    assert agent3['activity_reason'] == 'prompt_submitted_waiting_for_first_signal'
+    assert agent3['activity_symbol'] == '◌'
+    assert agent3['activity_color'] == 'yellow'
     assert agent3['current_job_id'] == job.job_id
     assert comm['id'] == job.job_id
     assert comm['business_status'] == 'replying'
@@ -3278,7 +3411,7 @@ def test_project_view_does_not_mark_fresh_running_prompt_idle_as_recoverable(tmp
     assert comm['block_reason'] is None
 
 
-def test_project_view_marks_stale_running_job_recoverable_when_provider_prompt_is_idle_without_anchor(tmp_path: Path) -> None:
+def test_project_view_does_not_use_legacy_codex_prompt_idle_recovery_without_anchor(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-idle-no-anchor'
     project_root.mkdir()
     layout = PathLayout(project_root)
@@ -3332,15 +3465,10 @@ def test_project_view_marks_stale_running_job_recoverable_when_provider_prompt_i
     comm = service.build_response()['view']['comms'][0]
 
     assert comm['id'] == old_job.job_id
-    assert comm['business_status'] == 'blocked'
-    assert comm['status_label'] == 'stuck'
-    assert comm['recoverable'] is True
-    assert comm['block_reason'] == 'provider_prompt_idle_stale'
-    assert comm['recover_target'] == {
-        'job_id': old_job.job_id,
-        'reply_delivery_job_id': None,
-        'block_reason': 'provider_prompt_idle_stale',
-    }
+    assert comm['business_status'] == 'replying'
+    assert comm['status_label'] == 'work'
+    assert comm['recoverable'] is False
+    assert comm['block_reason'] is None
 
 
 def test_activity_resolver_core_states() -> None:
@@ -3348,6 +3476,7 @@ def test_activity_resolver_core_states() -> None:
     queued = resolve_agent_activity(
         AgentActivityFacts(
             namespace_mounted=True,
+            provider='codex',
             runtime_state='idle',
             pane_id='%1',
             pane_state='alive',
@@ -3364,6 +3493,7 @@ def test_activity_resolver_core_states() -> None:
     running = resolve_agent_activity(
         AgentActivityFacts(
             namespace_mounted=True,
+            provider='codex',
             runtime_state='idle',
             pane_id='%1',
             pane_state='alive',
@@ -3588,6 +3718,97 @@ def test_activity_resolver_provider_working_pane() -> None:
     assert activity.reason == 'provider_working'
 
 
+def test_activity_resolver_disables_legacy_codex_pane_heuristics() -> None:
+    activity = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            provider='codex',
+            runtime_state='idle',
+            pane_id='%1',
+            pane_state='alive',
+            pane_text='Working (28s • esc to interrupt)',
+        ),
+        now=NOW,
+    )
+
+    assert activity.state == 'idle'
+    assert activity.source == 'pane_liveness'
+    assert activity.reason == 'pane_alive'
+
+
+def test_activity_resolver_codex_runtime_status_presentation() -> None:
+    start = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            runtime_state='idle',
+            pane_id='%1',
+            pane_state='alive',
+            current_job_status='running',
+            current_job_id='job_start',
+            current_job_updated_at=NOW,
+            provider_runtime_state='start',
+            provider_runtime_source='codex_runtime',
+            provider_runtime_reason='prompt_submitted_waiting_for_first_signal',
+        ),
+        now=NOW,
+    )
+    working = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            runtime_state='idle',
+            pane_id='%1',
+            pane_state='alive',
+            provider_runtime_state='working',
+            provider_runtime_source='codex_runtime',
+            provider_runtime_reason='codex_working_status_line',
+        ),
+        now=NOW,
+    )
+    free = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            runtime_state='idle',
+            pane_id='%1',
+            pane_state='alive',
+            provider_runtime_state='free',
+            provider_runtime_source='codex_runtime',
+            provider_runtime_reason='codex_session_task_complete',
+        ),
+        now=NOW,
+    )
+    unknown = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            provider='codex',
+            runtime_state='idle',
+            pane_id='%1',
+            pane_state='alive',
+            pane_text='Working (28s • esc to interrupt)',
+            provider_runtime_state='unknown',
+            provider_runtime_source='codex_runtime',
+            provider_runtime_reason='no_known_status_pattern',
+        ),
+        now=NOW,
+    )
+
+    assert start.to_record()['activity_state'] == 'pending'
+    assert start.to_record()['activity_symbol'] == '◌'
+    assert start.to_record()['activity_color'] == 'yellow'
+    assert start.to_record()['activity_source'] == 'codex_runtime'
+    assert start.to_record()['activity_reason'] == 'prompt_submitted_waiting_for_first_signal'
+    assert working.to_record()['activity_state'] == 'active'
+    assert working.to_record()['activity_symbol'] == '●'
+    assert working.to_record()['activity_color'] == 'green'
+    assert free.to_record()['activity_state'] == 'idle'
+    assert free.to_record()['activity_symbol'] == '◇'
+    assert free.to_record()['activity_color'] == 'blue'
+    assert unknown.to_record()['activity_state'] == 'pending'
+    assert unknown.to_record()['activity_symbol'] == '?'
+    assert unknown.to_record()['activity_color'] == 'gray'
+    assert unknown.to_record()['activity_source'] == 'codex_runtime'
+    assert unknown.to_record()['activity_reason'] == 'no_known_status_pattern'
+
+
 def test_activity_resolver_provider_background_terminal_running_after_prompt() -> None:
     activity = resolve_agent_activity(
         AgentActivityFacts(
@@ -3641,7 +3862,7 @@ def test_activity_resolver_claude_scheduled_task_shell_running_after_prompt() ->
     assert activity.reason == 'provider_working'
 
 
-def test_activity_resolver_keeps_codex_queued_message_active() -> None:
+def test_activity_resolver_ignores_codex_hook_activity() -> None:
     pane_text = '\n'.join(
         [
             '╭───────────────────────────────────────────────╮',
@@ -3664,6 +3885,7 @@ def test_activity_resolver_keeps_codex_queued_message_active() -> None:
     activity = resolve_agent_activity(
         AgentActivityFacts(
             namespace_mounted=True,
+            provider='codex',
             runtime_state='idle',
             pane_id='%3',
             pane_state='alive',
@@ -3676,9 +3898,9 @@ def test_activity_resolver_keeps_codex_queued_message_active() -> None:
         now=NOW,
     )
 
-    assert activity.state == 'active'
-    assert activity.source == 'codex_hook'
-    assert activity.reason == 'provider_userpromptsubmit'
+    assert activity.state == 'idle'
+    assert activity.source == 'pane_liveness'
+    assert activity.reason == 'pane_alive'
 
 
 def test_activity_resolver_ignores_stale_provider_working_history() -> None:

@@ -11,6 +11,8 @@ import 'package:xterm/xterm.dart';
 import 'package:ccb_mobile/ccb_mobile.dart';
 import 'package:ccb_mobile/features/agent_chat/agent_message_composer.dart';
 import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace.dart';
+import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace_model.dart';
+import 'package:ccb_mobile/features/agent_chat/selected_agent_workspace_view.dart';
 
 import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
@@ -38,6 +40,8 @@ void main() {
             onSend: () {
               sendCount += 1;
             },
+            onSendTab: () {},
+            onSendEscape: () {},
           ),
         ),
       ),
@@ -75,6 +79,8 @@ void main() {
             onSend: () {
               sendCount += 1;
             },
+            onSendTab: () {},
+            onSendEscape: () {},
           ),
         ),
       ),
@@ -86,6 +92,257 @@ void main() {
     await tester.pump();
 
     expect(sendCount, 0);
+  });
+
+  testWidgets('agent status prioritizes working over refresh after send', (
+    tester,
+  ) async {
+    final agent = CcbAgent(
+      name: 'mobile',
+      provider: 'codex',
+      window: 'main',
+      order: 0,
+      active: true,
+      queueDepth: 0,
+    );
+    final draftController = TextEditingController();
+    final focusNode = FocusNode();
+    final timelineController = ScrollController();
+    addTearDown(draftController.dispose);
+    addTearDown(focusNode.dispose);
+    addTearDown(timelineController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SelectedAgentWorkspaceView(
+            repository: FakeMobileCcbRepository.demo(),
+            view: _workspaceView(agent),
+            model: SelectedAgentWorkspaceModel(
+              agent: agent,
+              contentItems: const [],
+              initialHistory: null,
+              timelineItems: const [],
+              commsItems: const [],
+              isLoadingConversation: true,
+              hasOlderConversation: false,
+              expandedItemIds: const {},
+              hasNewMessages: false,
+              isSending: true,
+              isAwaitingAgentResponse: true,
+              isComposerCollapsed: false,
+              executionStatus: agentExecutionStatus(
+                agent: agent,
+                isAwaitingAgentResponse: true,
+                isLoadingConversation: true,
+              ),
+            ),
+            timelineController: timelineController,
+            draftController: draftController,
+            draftFocusNode: focusNode,
+            enableComposerCollapse: false,
+            onRetry: (_) {},
+            onToggleExpanded: (_) {},
+            onRefreshLatest: () {},
+            onNearEnd: () {},
+            onUserNearEnd: () {},
+            onNearStart: () {},
+            onUserScrollDirectionChanged: (_) {},
+            onJumpToLatest: () {},
+            onCollapseComposer: () {},
+            onExpandComposer: () {},
+            draftAttachments: const [],
+            downloadingAttachmentIds: const {},
+            downloadedAttachmentIds: const {},
+            onPickImageAttachment: () {},
+            onPickFileAttachment: () {},
+            onRemoveAttachment: (_) {},
+            onDownloadAttachment: (_) {},
+            onOpenAttachment: (_) {},
+            onSend: () {},
+            onSendTab: () {},
+            onSendEscape: () {},
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
+    expect(find.text('Idle'), findsNothing);
+  });
+
+  testWidgets('message composer shows focused quick key toolbar', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+
+    final controller = TextEditingController();
+    var tabCount = 0;
+    var escapeCount = 0;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentMessageComposer(
+            agentName: 'mobile',
+            controller: controller,
+            isSending: false,
+            collapsible: false,
+            collapsed: false,
+            onCollapse: () {},
+            onExpand: () {},
+            draftAttachments: const [],
+            onPickImage: () {},
+            onPickFile: () {},
+            onRemoveAttachment: (_) {},
+            onSend: () {},
+            onSendTab: () {
+              tabCount += 1;
+            },
+            onSendEscape: () {
+              escapeCount += 1;
+            },
+          ),
+        ),
+      ),
+    );
+
+    expect(find.byKey(const ValueKey('agent-quick-key-toolbar')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-quick-key-tab')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-quick-key-esc')), findsNothing);
+
+    await tester.tap(find.byKey(const ValueKey('agent-message-composer')));
+    await tester.pump();
+
+    final toolbar = find.byKey(const ValueKey('agent-quick-key-toolbar'));
+    final composer = find.byKey(const ValueKey('agent-message-composer'));
+    expect(toolbar, findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-quick-key-tab')), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-quick-key-esc')), findsOneWidget);
+    expect(
+      tester.getBottomLeft(toolbar).dy,
+      lessThanOrEqualTo(tester.getTopLeft(composer).dy),
+    );
+
+    await tester.tap(find.byKey(const ValueKey('agent-quick-key-tab')));
+    await tester.pump();
+    await tester.tap(find.byKey(const ValueKey('agent-quick-key-esc')));
+    await tester.pump();
+
+    expect(tabCount, 1);
+    expect(escapeCount, 1);
+
+    FocusManager.instance.primaryFocus?.unfocus();
+    await tester.pump();
+    expect(find.byKey(const ValueKey('agent-quick-key-toolbar')), findsNothing);
+  });
+
+  testWidgets('workspace tap outside composer collapses input and quick keys', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SelectedAgentWorkspace(
+            repository: FakeMobileCcbRepository.demo(),
+            terminalTransport: null,
+            usePaneInputForMessages: false,
+            view: _workspaceView(
+              const CcbAgent(
+                name: 'mobile',
+                provider: 'codex',
+                window: 'main',
+                order: 0,
+                active: true,
+                queueDepth: 0,
+              ),
+            ),
+            agent: const CcbAgent(
+              name: 'mobile',
+              provider: 'codex',
+              window: 'main',
+              order: 0,
+              active: true,
+              queueDepth: 0,
+            ),
+            enableComposerCollapse: true,
+            onRefreshView: null,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byKey(const ValueKey('agent-message-composer')));
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('agent-chat-composer')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('agent-quick-key-toolbar')),
+      findsOneWidget,
+    );
+
+    await tester.tap(
+      find.byKey(const ValueKey('agent-compose-dismiss-region')),
+    );
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('agent-chat-composer-collapsed')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('agent-quick-key-toolbar')), findsNothing);
+  });
+
+  testWidgets('refresh updates codex execution status from project view', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(home: Scaffold(body: _WorkspaceRefreshStatusHarness())),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Idle'), findsOneWidget);
+    expect(find.text('Working'), findsNothing);
+
+    await tester.tap(
+      find.byKey(const ValueKey('agent-conversation-refresh-action')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
+  });
+
+  testWidgets('refresh shows interrupted codex status as exception', (
+    tester,
+  ) async {
+    await tester.pumpWidget(
+      const MaterialApp(
+        home: Scaffold(
+          body: _WorkspaceRefreshStatusHarness(
+            refreshActivityReason: 'conversation_interrupted',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Idle'), findsOneWidget);
+
+    await tester.tap(
+      find.byKey(const ValueKey('agent-conversation-refresh-action')),
+    );
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 100));
+
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Exception'), findsOneWidget);
+    expect(find.text('Working'), findsNothing);
   });
 
   testWidgets('message composer shows attachment tray and picker sheet', (
@@ -126,6 +383,8 @@ void main() {
               removed = localId;
             },
             onSend: () {},
+            onSendTab: () {},
+            onSendEscape: () {},
           ),
         ),
       ),
@@ -467,11 +726,8 @@ void main() {
       const Offset(0, 700),
     );
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('conversation-state-local-mobile-0')),
-        matching: find.text('Sent'),
-      ),
-      findsOneWidget,
+      find.byKey(const ValueKey('conversation-state-local-mobile-0')),
+      findsNothing,
     );
 
     await tester.enterText(
@@ -526,11 +782,8 @@ void main() {
       const Offset(0, 700),
     );
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('conversation-state-local-mobile-1')),
-        matching: find.text('Sent'),
-      ),
-      findsOneWidget,
+      find.byKey(const ValueKey('conversation-state-local-mobile-1')),
+      findsNothing,
     );
   });
 
@@ -559,11 +812,8 @@ void main() {
     );
     expect(find.text('visible after submit'), findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('conversation-state-local-mobile-0')),
-        matching: find.text('Sent'),
-      ),
-      findsOneWidget,
+      find.byKey(const ValueKey('conversation-state-local-mobile-0')),
+      findsNothing,
     );
   });
 
@@ -598,11 +848,8 @@ void main() {
     );
     expect(find.text('button first visible'), findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('conversation-state-local-mobile-0')),
-        matching: find.text('Sent'),
-      ),
-      findsOneWidget,
+      find.byKey(const ValueKey('conversation-state-local-mobile-0')),
+      findsNothing,
     );
     await dragUntilVisible(
       tester,
@@ -611,11 +858,8 @@ void main() {
     );
     expect(find.text('button second visible'), findsOneWidget);
     expect(
-      find.descendant(
-        of: find.byKey(const ValueKey('conversation-state-local-mobile-1')),
-        matching: find.text('Sent'),
-      ),
-      findsOneWidget,
+      find.byKey(const ValueKey('conversation-state-local-mobile-1')),
+      findsNothing,
     );
   });
 
@@ -718,20 +962,134 @@ void main() {
       const ValueKey('conversation-attachment-chip-gateway-file'),
       const Offset(0, -700),
     );
-    final firstChip = tester.widget<ActionChip>(
-      find.byKey(const ValueKey('conversation-attachment-chip-gateway-file')),
+    tester
+        .widget<InkWell>(
+          find.byKey(
+            const ValueKey('conversation-attachment-chip-gateway-file'),
+          ),
+        )
+        .onTap!();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('conversation-attachment-action-download-gateway-file'),
+      ),
     );
-    firstChip.onPressed!();
     await tester.pump();
-    final busyChip = tester.widget<ActionChip>(
+    final busyChip = tester.widget<InkWell>(
       find.byKey(const ValueKey('conversation-attachment-chip-gateway-file')),
     );
-    expect(busyChip.onPressed, isNull);
+    expect(busyChip.onTap, isNull);
 
     expect(repository.downloadCalls, 1);
     expect(
       find.byKey(const ValueKey('agent-attachment-progress-gateway-file')),
       findsOneWidget,
+    );
+  });
+
+  testWidgets('stale attachment action does not download after agent switch', (
+    tester,
+  ) async {
+    final repository = DownloadGateRepository();
+    var selectedAgent = _agentNamed('mobile');
+    var view = _workspaceView(selectedAgent);
+    StateSetter? updateHarness;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              updateHarness = setState;
+              return SelectedAgentWorkspace(
+                repository: repository,
+                terminalTransport: null,
+                usePaneInputForMessages: false,
+                view: view,
+                agent: selectedAgent,
+                enableComposerCollapse: true,
+                onRefreshView: null,
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await dragUntilVisible(
+      tester,
+      const ValueKey('conversation-attachment-chip-gateway-file'),
+      const Offset(0, -700),
+    );
+    await tester.longPress(
+      find.byKey(const ValueKey('conversation-attachment-chip-gateway-file')),
+    );
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(
+        const ValueKey('conversation-attachment-action-download-gateway-file'),
+      ),
+      findsOneWidget,
+    );
+
+    updateHarness!(() {
+      selectedAgent = _agentNamed('lead');
+      view = _workspaceView(selectedAgent);
+    });
+    await tester.pump();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('conversation-attachment-action-download-gateway-file'),
+      ),
+    );
+    await tester.pump();
+
+    expect(repository.downloadCalls, 0);
+    expect(
+      find.byKey(const ValueKey('agent-attachment-progress-gateway-file')),
+      findsNothing,
+    );
+  });
+
+  testWidgets('oversized gateway attachment does not start download', (
+    tester,
+  ) async {
+    final repository = DownloadGateRepository(
+      attachmentSizeBytes: agentMessageMaxAttachmentBytes + 1,
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ProjectHomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await openCurrentProject(tester);
+
+    await dragUntilVisible(
+      tester,
+      const ValueKey('conversation-attachment-chip-gateway-file'),
+      const Offset(0, -700),
+    );
+    tester
+        .widget<InkWell>(
+          find.byKey(
+            const ValueKey('conversation-attachment-chip-gateway-file'),
+          ),
+        )
+        .onTap!();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('conversation-attachment-action-download-gateway-file'),
+      ),
+    );
+    await tester.pump();
+
+    expect(repository.downloadCalls, 0);
+    expect(find.text('gateway-notes.txt is larger than 25 MB'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('agent-attachment-progress-gateway-file')),
+      findsNothing,
     );
   });
 
@@ -881,12 +1239,12 @@ void main() {
     await tester.tap(find.text('docs link'));
     await tester.pumpAndSettle();
     expect(
-      find.text('Open links from raw source: https://example.com'),
+      find.byKey(const ValueKey('open-url-confirm-action')),
       findsOneWidget,
     );
   });
 
-  testWidgets('paired composer submits chat through repository endpoint', (
+  testWidgets('paired composer submits chat through pane input', (
     tester,
   ) async {
     final secureStore = MemorySecureStore();
@@ -899,7 +1257,7 @@ void main() {
           kind: RouteProviderKind.lan,
           gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
         ),
-        scopes: const {'view', 'content', 'focus', 'terminal_input'},
+        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
       ),
       deviceToken: 'device-secret',
       projectId: 'proj-demo',
@@ -930,12 +1288,397 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
     await tester.pumpAndSettle();
 
-    expect(repository.submittedMessages, hasLength(1));
-    expect(repository.submittedMessages.single.body, 'partial pane send');
-    expect(terminalTransport.requests, isEmpty);
-    expect(terminalTransport.sessions, isEmpty);
+    expect(repository.submittedMessages, isEmpty);
+    expect(terminalTransport.requests, hasLength(1));
+    expect(terminalTransport.sessions.single.pasted, ['partial pane send']);
+    expect(terminalTransport.sessions.single.written, isEmpty);
     expect(find.text('partial pane send'), findsOneWidget);
-    expect(find.text('Check pane'), findsNothing);
+    expect(find.text('Check pane'), findsOneWidget);
+  });
+
+  testWidgets('paired composer shows working while pane input is pending', (
+    tester,
+  ) async {
+    final secureStore = MemorySecureStore();
+    final profileStore = GatewayHostProfileStore(secureStore: secureStore);
+    final host = GatewayPairedHost(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev-working-pane',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+        ),
+        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
+      ),
+      deviceToken: 'device-secret',
+      projectId: 'proj-demo',
+    );
+    await profileStore.save(host);
+    final terminalTransport = BlockingPasteTerminalTransport(
+      writeError: const TerminalTransportException('enter failed'),
+    );
+    final repository = RecordingGatewayRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (profile) => repository,
+          gatewayTerminalTransportFactory: (profile) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      'pending pane send',
+    );
+    await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+    await tester.pump();
+
+    expect(repository.submittedMessages, isEmpty);
+    await dragUntilVisible(
+      tester,
+      const ValueKey('conversation-item-local-mobile-0'),
+      const Offset(0, -700),
+    );
+    expect(renderedTextContaining('pending pane send'), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
+
+    terminalTransport.completePaste();
+    await tester.pumpAndSettle();
+
+    expect(terminalTransport.sessions.single.pasted, ['pending pane send']);
+    expect(terminalTransport.sessions.single.written, isEmpty);
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
+    expect(find.text('Check pane'), findsOneWidget);
+  });
+
+  testWidgets('paired terminal output updates status without chat bubble', (
+    tester,
+  ) async {
+    final secureStore = MemorySecureStore();
+    final profileStore = GatewayHostProfileStore(secureStore: secureStore);
+    final host = GatewayPairedHost(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev-stream-status',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+        ),
+        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
+      ),
+      deviceToken: 'device-secret',
+      projectId: 'proj-demo',
+    );
+    await profileStore.save(host);
+    final terminalTransport = RecordingTerminalTransport();
+    final repository = RecordingGatewayRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (profile) => repository,
+          gatewayTerminalTransportFactory: (profile) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      'stream status only',
+    );
+    await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+    await tester.pump();
+
+    expect(terminalTransport.sessions, hasLength(1));
+    terminalTransport.sessions.single.addOutput('stream-only-visible-status\n');
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
+    expect(find.text('Terminal output'), findsNothing);
+    expect(find.textContaining('stream-only-visible-status'), findsNothing);
+  });
+
+  testWidgets(
+    'paired terminal interrupted output updates status to exception',
+    (tester) async {
+      final secureStore = MemorySecureStore();
+      final profileStore = GatewayHostProfileStore(secureStore: secureStore);
+      final host = GatewayPairedHost(
+        profile: GatewayHostProfile(
+          hostId: 'proj-demo',
+          deviceId: 'dev-stream-interrupted-status',
+          routeProvider: RouteProvider(
+            kind: RouteProviderKind.lan,
+            gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+          ),
+          scopes: const {
+            'view',
+            'content',
+            'focus',
+            'terminal_input',
+            'notify',
+          },
+        ),
+        deviceToken: 'device-secret',
+        projectId: 'proj-demo',
+      );
+      await profileStore.save(host);
+      final terminalTransport = RecordingTerminalTransport();
+      final repository = RecordingGatewayRepository();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: FakeMobileCcbRepository.demo(),
+            profileStore: profileStore,
+            gatewayRepositoryFactory: (profile) => repository,
+            gatewayTerminalTransportFactory: (profile) => terminalTransport,
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      await activateStoredGatewayProfile(tester);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'stream interrupted status',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pump();
+
+      expect(terminalTransport.sessions, hasLength(1));
+      terminalTransport.sessions.single.addOutput('Conversation ');
+      await tester.pump();
+      expect(find.text('Working'), findsOneWidget);
+
+      terminalTransport.sessions.single.addOutput('interrupted\n');
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('agent-working-status')),
+        findsOneWidget,
+      );
+      expect(find.text('Exception'), findsOneWidget);
+      expect(find.text('Working'), findsNothing);
+      expect(find.textContaining('Conversation interrupted'), findsNothing);
+    },
+  );
+
+  testWidgets(
+    'scheduled refresh clears working status when project view is idle',
+    (tester) async {
+      final terminalTransport = RecordingTerminalTransport();
+      var refreshCalls = 0;
+      var view = _workspaceView(
+        _statusAgent(
+          activityState: 'idle',
+          activitySource: 'provider_pane',
+          activityReason: 'provider_prompt_idle',
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                final agent = view.agentByName('mobile')!;
+                return SelectedAgentWorkspace(
+                  repository: FakeMobileCcbRepository.demo(),
+                  terminalTransport: terminalTransport,
+                  usePaneInputForMessages: true,
+                  view: view,
+                  agent: agent,
+                  enableComposerCollapse: true,
+                  onRefreshView: () async {
+                    refreshCalls += 1;
+                    final refreshed = _workspaceView(
+                      _statusAgent(
+                        activityState: 'idle',
+                        activitySource: 'provider_pane',
+                        activityReason: 'provider_prompt_idle',
+                      ),
+                    );
+                    setState(() {
+                      view = refreshed;
+                    });
+                    return refreshed;
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(find.text('Idle'), findsOneWidget);
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'work then idle',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pump();
+
+      expect(terminalTransport.sessions.single.pasted, ['work then idle']);
+      expect(find.text('Working'), findsOneWidget);
+
+      await tester.pump(const Duration(milliseconds: 120));
+      await tester.pumpAndSettle();
+
+      expect(refreshCalls, greaterThanOrEqualTo(1));
+      expect(find.text('Idle'), findsOneWidget);
+      expect(find.text('Working'), findsNothing);
+      expect(find.text('mobile completed'), findsOneWidget);
+    },
+  );
+
+  testWidgets('paired pane command result can render from terminal history', (
+    tester,
+  ) async {
+    final secureStore = MemorySecureStore();
+    final profileStore = GatewayHostProfileStore(secureStore: secureStore);
+    final host = GatewayPairedHost(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev-pane-status',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+        ),
+        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
+      ),
+      deviceToken: 'device-secret',
+      projectId: 'proj-demo',
+    );
+    await profileStore.save(host);
+    final terminalTransport = RecordingTerminalTransport();
+    final repository =
+        RecordingGatewayRepository()
+          ..terminalHistoryOverride = const ReadableTerminalHistory(
+            agentName: 'mobile',
+            historyScope: 'tmux_scrollback',
+            sourcePaneId: '%2',
+            blocks: [
+              ReadableTerminalBlock(
+                id: 'status-output',
+                type: 'log',
+                title: 'Terminal output',
+                text: 'Credits remaining: 42%',
+              ),
+            ],
+          );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (profile) => repository,
+          gatewayTerminalTransportFactory: (profile) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      '/status',
+    );
+    await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+    await tester.pump();
+    await tester.pump(const Duration(seconds: 1));
+    await tester.pumpAndSettle();
+
+    expect(repository.submittedMessages, isEmpty);
+    expect(terminalTransport.sessions.single.pasted, ['/status']);
+    expect(terminalTransport.sessions.single.written, [
+      [13],
+    ]);
+    expect(repository.terminalHistoryCalls, isNotEmpty);
+    expect(find.text('Credits remaining: 42%'), findsOneWidget);
+  });
+
+  testWidgets('paired Tab quick key types draft into pane without Enter', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+
+    final secureStore = MemorySecureStore();
+    final profileStore = GatewayHostProfileStore(secureStore: secureStore);
+    final host = GatewayPairedHost(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev-tab-draft',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+        ),
+        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
+      ),
+      deviceToken: 'device-secret',
+      projectId: 'proj-demo',
+    );
+    await profileStore.save(host);
+    final terminalTransport = RecordingTerminalTransport();
+    final repository = RecordingGatewayRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (profile) => repository,
+          gatewayTerminalTransportFactory: (profile) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('agent-message-composer')));
+    await tester.pump();
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      'draft before tab',
+    );
+    await tester.pump();
+
+    expect(find.byKey(const ValueKey('agent-quick-key-tab')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('agent-quick-key-tab')));
+    await tester.pump();
+
+    expect(repository.submittedMessages, isEmpty);
+    expect(terminalTransport.requests, hasLength(1));
+    expect(terminalTransport.sessions.single.pasted, ['draft before tab']);
+    expect(terminalTransport.sessions.single.written, [
+      [9],
+    ]);
+    expect(
+      tester
+          .widget<TextField>(
+            find.byKey(const ValueKey('agent-message-composer')),
+          )
+          .controller!
+          .text,
+      isEmpty,
+    );
   });
 
   testWidgets('stale namespace epoch refreshes and retries chat send', (
@@ -964,7 +1707,7 @@ void main() {
     sendButton.onPressed!();
     await tester.pumpAndSettle();
 
-    expect(repository.getProjectViewCalls, 2);
+    expect(repository.getProjectViewCalls, greaterThanOrEqualTo(2));
     expect(
       [for (final item in repository.submittedMessages) item.namespaceEpoch],
       [4, 5],
@@ -995,6 +1738,78 @@ Future<void> _waitForFinder(
   expect(finder, findsOneWidget);
 }
 
+class _WorkspaceRefreshStatusHarness extends StatefulWidget {
+  const _WorkspaceRefreshStatusHarness({
+    this.refreshActivityReason = 'codex_runtime_reconnecting',
+  });
+
+  final String refreshActivityReason;
+
+  @override
+  State<_WorkspaceRefreshStatusHarness> createState() =>
+      _WorkspaceRefreshStatusHarnessState();
+}
+
+class _WorkspaceRefreshStatusHarnessState
+    extends State<_WorkspaceRefreshStatusHarness> {
+  late CcbAgent _agent = _statusAgent();
+  late CcbProjectView _view = _workspaceView(_agent);
+
+  @override
+  Widget build(BuildContext context) {
+    return SelectedAgentWorkspace(
+      repository: FakeMobileCcbRepository.demo(),
+      terminalTransport: null,
+      usePaneInputForMessages: false,
+      view: _view,
+      agent: _agent,
+      enableComposerCollapse: true,
+      onRefreshView: () async {
+        final agent = _statusAgent(
+          activityState: 'pending',
+          activitySource: 'codex_runtime',
+          activityReason: widget.refreshActivityReason,
+        );
+        final view = _workspaceView(agent);
+        setState(() {
+          _agent = agent;
+          _view = view;
+        });
+        return view;
+      },
+    );
+  }
+}
+
+CcbAgent _statusAgent({
+  String? activityState,
+  String? activitySource,
+  String? activityReason,
+}) {
+  return CcbAgent(
+    name: 'mobile',
+    provider: 'codex',
+    window: 'main',
+    order: 0,
+    active: true,
+    queueDepth: 0,
+    activityState: activityState,
+    activitySource: activitySource,
+    activityReason: activityReason,
+  );
+}
+
+CcbAgent _agentNamed(String name) {
+  return CcbAgent(
+    name: name,
+    provider: 'codex',
+    window: 'main',
+    order: name == 'mobile' ? 0 : 1,
+    active: true,
+    queueDepth: 0,
+  );
+}
+
 class _FakeFilePicker extends FilePickerPlatform {
   _FakeFilePicker(this.results);
 
@@ -1023,7 +1838,30 @@ class _FakeFilePicker extends FilePickerPlatform {
   }
 }
 
+CcbProjectView _workspaceView(CcbAgent agent) {
+  return CcbProjectView(
+    project: const CcbProject(
+      id: 'proj-demo',
+      displayName: 'Project',
+      root: '/tmp/project',
+    ),
+    namespaceEpoch: 7,
+    tmuxSocketPath: null,
+    tmuxSessionName: null,
+    activeWindow: agent.window,
+    activePaneId: null,
+    windows: const [],
+    agents: [agent],
+    contentItems: const [],
+    notifications: const [],
+    terminalHistories: const {},
+  );
+}
+
 class DownloadGateRepository extends RecordingGatewayRepository {
+  DownloadGateRepository({this.attachmentSizeBytes = 16});
+
+  final int attachmentSizeBytes;
   final _downloadGate = Completer<List<int>>();
   var downloadCalls = 0;
 
@@ -1040,7 +1878,7 @@ class DownloadGateRepository extends RecordingGatewayRepository {
       projectId: projectId,
       agentName: agent,
       namespaceEpoch: namespaceEpoch,
-      items: const [
+      items: [
         CcbConversationItem(
           id: 'gateway-reply-with-file',
           agentName: 'mobile',
@@ -1052,7 +1890,7 @@ class DownloadGateRepository extends RecordingGatewayRepository {
               fileId: 'gateway-file',
               fileName: 'gateway-notes.txt',
               mimeType: 'text/plain',
-              sizeBytes: 16,
+              sizeBytes: attachmentSizeBytes,
             ),
           ],
         ),
@@ -1156,5 +1994,79 @@ class NativeConversationRepository extends RecordingGatewayRepository {
       ],
       generatedAt: DateTime.utc(2026, 6, 26),
     );
+  }
+}
+
+class BlockingPasteTerminalTransport implements TerminalTransport {
+  BlockingPasteTerminalTransport({this.writeError});
+
+  final Object? writeError;
+  final _pasteGate = Completer<void>();
+  final requests = <TerminalOpenRequest>[];
+  final sessions = <BlockingPasteTerminalSession>[];
+
+  @override
+  Future<TerminalSession> open(TerminalOpenRequest request) async {
+    requests.add(request);
+    final session = BlockingPasteTerminalSession(
+      request.attachCommand,
+      pasteGate: _pasteGate.future,
+      writeError: writeError,
+    );
+    sessions.add(session);
+    return session;
+  }
+
+  void completePaste() {
+    if (!_pasteGate.isCompleted) {
+      _pasteGate.complete();
+    }
+  }
+}
+
+class BlockingPasteTerminalSession implements TerminalSession {
+  BlockingPasteTerminalSession(
+    this.launchedCommand, {
+    required Future<void> pasteGate,
+    this.writeError,
+  }) : _pasteGate = pasteGate;
+
+  final Future<void> _pasteGate;
+  final Object? writeError;
+  final _output = StreamController<Uint8List>.broadcast();
+
+  @override
+  final String launchedCommand;
+
+  final pasted = <String>[];
+  final written = <List<int>>[];
+
+  @override
+  Stream<Uint8List> get output => _output.stream;
+
+  @override
+  Future<void> close() async {
+    await _output.close();
+  }
+
+  @override
+  Future<void> paste(String text) async {
+    pasted.add(text);
+    await _pasteGate;
+  }
+
+  @override
+  Future<void> reconnect() async {}
+
+  @override
+  Future<void> resize(TerminalGeometry geometry) async {}
+
+  @override
+  Future<void> writeBytes(List<int> bytes) async {
+    final error = writeError;
+    if (error != null) {
+      throw error;
+    }
+    written.add(bytes);
   }
 }

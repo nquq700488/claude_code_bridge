@@ -54,7 +54,13 @@ void main() {
                 expandedItemIds: const {},
                 hasNewMessages: false,
                 isSending: false,
+                isAwaitingAgentResponse: true,
                 isComposerCollapsed: false,
+                executionStatus: agentExecutionStatus(
+                  agent: _agent(),
+                  isAwaitingAgentResponse: true,
+                  isLoadingConversation: false,
+                ),
               ),
               timelineController: scrollController,
               draftController: draftController,
@@ -66,6 +72,7 @@ void main() {
               onNearEnd: () {},
               onUserNearEnd: () {},
               onNearStart: () {},
+              onUserScrollDirectionChanged: (_) {},
               onJumpToLatest: () {},
               onCollapseComposer: () {},
               onExpandComposer: () {},
@@ -76,7 +83,10 @@ void main() {
               onPickFileAttachment: () {},
               onRemoveAttachment: (_) {},
               onDownloadAttachment: (_) {},
+              onOpenAttachment: (_) {},
               onSend: () {},
+              onSendTab: () {},
+              onSendEscape: () {},
             ),
           ),
         ),
@@ -85,6 +95,8 @@ void main() {
 
     expect(find.byKey(const ValueKey('agent-comms-status')), findsOneWidget);
     expect(find.text('Communicating'), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
+    expect(find.text('Working'), findsOneWidget);
     expect(find.text('project view updated'), findsOneWidget);
     expect(
       find.byKey(const ValueKey('conversation-item-comms-1')),

@@ -1,8 +1,33 @@
-## Unreleased
-
 # Changelog
 
 ## Unreleased
+
+## v8.0.7 (2026-06-30)
+
+### CCB Mobile Notifications And Theme Stabilization
+
+- **Task Completion Notifications**: adds the server-wide mobile notification SSE stream and Android local notifications for pane-backed task completion, with low-sensitive payloads and real emulator tap-routing validation.
+- **Provider Status For Mobile**: carries the Codex/provider pane status detection used by mobile activity indicators and sidebar runtime state.
+- **Mobile App Polish**: updates the Android app to the steel-blue/slate theme, improved content text styles, long-bubble limits, notification tap routing, and release-channel update wiring.
+- **Release Surface Synchronized**: VERSION, package metadata, mobile app version metadata, README links, workflow defaults, and APK download URLs are aligned for 8.0.7.
+
+## v8.0.6 (2026-06-30)
+
+### CCB Mobile Real Project Chat Stabilization
+
+- **Mobile App Chat Polished**: improves real-project pane-native message
+  sending, status recovery, terminal stream handling, QR/manual pairing, input
+  ergonomics, localization, and noisy timeline filtering for Android.
+- **Server-Wide Mobile Gateway Integrated**: includes the latest server-wide
+  project listing, native provider transcript, provider runtime status, and
+  mobile terminal pane input fixes from the CCB source line.
+- **Mobile Pairing Polished**: `ccb update mobile` now prints a compact
+  terminal QR instead of a full-screen QR, the Android APK restores the CCB
+  bridge launcher icon, and the QR scanner shows actionable retry/manual setup
+  fallback instead of raw native camera errors.
+- **Release Surface Synchronized**: VERSION, package metadata, mobile app
+  version metadata, README links, workflow defaults, and APK download URLs are
+  aligned for 8.0.6.
 
 ## v8.0.4 (2026-06-28)
 
@@ -933,77 +958,6 @@
 ### Superseded Agent Roles Catalog Release
 
 - Superseded by v7.2.5 after the release gate found that source checkout `--project` commands were rejected from the source cwd during CCBD real platform smoke checks.
-
-### Provider Session Binding Refresh (Claude, OpenCode, Kimi)
-
-- **Stale Result After Idle Fixed**: Claude, OpenCode, and Kimi execution adapters now call `_refresh_reader_for_current_session_binding()` at the start of every `poll()`, following the Codex pattern established in ISSUE-017. This prevents stale readers from returning old completion results after long idle periods where the provider CLI created a new local session.
-- **Claude `poll_session_loop` Offset Fix**: When the Claude polling loop detects a session change mid-poll, it now sets `offset = st_size` (end-of-file) instead of `0`, matching `capture_state()` behavior. This prevents ALL historical assistant messages from being re-processed as "new completions."
-- **OpenCode `reset_state_for_session` Fix**: Now accepts optional `session_entry` parameter and sets `session_updated` from the actual session entry instead of `-1`, preventing `should_scan_session` from re-triggering on already-seen messages.
-- **Kimi Reader Rebuild on Binding Change**: Kimi's poll now rebuilds the reader when session UUID or context path changes since start, providing defense-in-depth alongside the existing `_maybe_rotate_session`.
-
-### Watch/Pend Timeout Defaults Aligned
-
-- **Default Watch Timeout Unified**: `pend --watch` and `ask --wait` now share the same default timeout of **600 seconds (10 minutes)**, matching the `no_terminal_timeout_s` range used by provider reliability policies. Previously `pend --watch` defaulted to 10 seconds (far too short for AI agent replies) while `ask --wait` defaulted to 3600 seconds (excessively long). Both can still be overridden via `CCB_WATCH_TIMEOUT_S` or `--timeout`.
-
-### Clean Script Hardening
-
-- **`.ccb/clean.sh` Auto-Stops Daemon Before Deletion**: The clean script now detects if the CCB daemon (keeper/ccbd) is still running and automatically stops it via `ccb kill` before removing runtime files. This prevents the "deleted files keep coming back" issue caused by the supervision loop recreating removed state. If `ccb` is not in PATH, a warning is printed instead.
-
-### ccb restart Command
-
-- **`ccb restart [agent...]`**: New CLI command to restart agent tmux panes in place. `ccb restart` restarts all agents; `ccb restart <agent>` restarts a specific one. The handler kills and respawns the agent's tmux pane with the same launch command. Does not delete .ccb state, sessions, or logs.
-
-### Pane Title Format
-
-- **Agent:Provider Display**: Tmux pane titles now show `agent_name:provider` format (e.g., `developer:codex`, `reviewer:claude`) instead of just the agent name, making it easy to identify which AI provider backs each agent at a glance.
-
-### Webhook Bootstrap Fix
-
-- **FrozenInstanceError Fixed**: Removed `webhook` field assignments to frozen dataclass instances (`RuntimeSupervisionContext`, `dispatcher._webhook`, `health_monitor._webhook`) that caused `FrozenInstanceError` on Python 3.12, preventing ccbd from starting. WebhookSender is still created but no longer wired into frozen objects — all consumers safely handle `webhook=None`.
-
-### Supervision Recovery Hardening
-
-- **pane-foreign No Longer Triggers Destructive Recovery**: `runtime_requires_recovery` now returns `False` for `pane-foreign` health, preventing infinite kill-respawn loops when pane identity verification fails. Agents in `pane-foreign` state remain degraded but functional instead of being repeatedly killed.
-
-### Kimi Wire Protocol Support (New CLI Format)
-
-- **Session Storage Migration**: Kimi CLI v2.x moved sessions from `~/.kimi/sessions/<MD5>/<uuid>/context.jsonl` to `~/.kimi-code/sessions/wd_<name>_<hash>/session_<uuid>/agents/main/wire.jsonl`. `KimiLogReader` now discovers sessions via `session_index.jsonl` and parses the new event-based wire protocol (`content.part` events with `part.type: text/think`). Falls back to legacy `context.jsonl` format when no wire session is found.
-- **Think Fallback for Legacy Format**: `_extract_assistant_text()` now falls back to `think` content blocks when no `text` block is present in legacy assistant messages, matching Kimi CLI v2.x behavior where reply text is emitted as think content.
-
-### Kimi Launcher Hardening
-
-- **`--continue` Guarded**: Kimi launcher no longer unconditionally passes `--continue`. It is only appended when the agent spec explicitly sets `restore = "provider"`. This eliminates the infinite crash loop after `.ccb/clean.sh` or on first launch when no local Kimi session exists.
-- **PTY Compatibility Mitigation**: Kimi launcher now injects `PROMPT_TOOLKIT_NO_CPR=1` and `TERM=xterm-256color` into the pane environment to work around macOS kqueue + tmux PTY issues that caused `OSError: [Errno 22] Invalid argument` from prompt_toolkit.
-
-### Kimi Session Auto-Rotation
-
-- **Session Discovery Fixed**: `_find_latest_session_uuid` now sorts sessions by `context.jsonl` mtime instead of directory mtime, ensuring the active session is always selected
-- **Auto-Session Switching**: Kimi poll loop now detects newer sessions and emits `SESSION_ROTATE` events, preventing stuck reads on stale session files
-- **Think Block Exposure**: Kimi `poll()` now extracts `think` content from `context.jsonl` and emits `ASSISTANT_CHUNK` events for real-time progress visibility during long tasks
-- **Multi-Agent Binding Guard**: `_is_bound_elsewhere` prevents switching to sessions already bound by other CCB agents
-
-### MMX Anchor Binding
-
-- **Anchor Detection Enabled**: MMX poll loop now detects `CCB_REQ:` echo in pane logs and emits `ANCHOR_SEEN` events
-- **Event Stream Modernization**: MMX `poll()` converted from terminal `CompletionDecision` to `CompletionItem` event stream (`ANCHOR_SEEN` → `ASSISTANT_FINAL` → `TURN_BOUNDARY`)
-- **Manifest Updated**: `supports_anchor_binding` changed from `False` to `True`
-
-### MMX Multi-Line Message Support
-
-- **mmx-daemon Fixed**: daemon now correctly reads multi-line messages via `CCB_MSG_END` terminator and EOF handling
-
-### CLI Health Check
-
-- **`--wait` Periodic Health Check**: `watch_ask_job` now queries agent health every 5s via `queue()` and aborts early on pane death or degraded health
-
-### Python 3.12 Compatibility
-
-- **Shebang Fixed**: `ccb` script shebang changed from `#!/usr/bin/env python3` to `#!/opt/homebrew/bin/python3.12` to avoid Xcode Python 3.9 conflicts
-- **Type Union Syntax Fixed**: Codex backend `Any | None` changed to `Optional[Any]` across 4 files for Python 3.12 `_SpecialForm` compatibility
-
-### Heartbeat Tuning
-
-- **Silence Threshold Reduced**: `JOB_HEARTBEAT_SILENCE_START_AFTER_S` and `JOB_HEARTBEAT_REPEAT_INTERVAL_S` reduced from 600s to 120s for faster stale-job detection
 
 ## v7.2.3 (2026-06-03)
 

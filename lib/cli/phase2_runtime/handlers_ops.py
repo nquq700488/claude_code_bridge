@@ -41,8 +41,6 @@ def handle_restart(context, command, out, services) -> int:
     summary = services.restart_agent(context, command)
     services.write_lines(out, services.render_restart(summary))
     return 0
-
-
 def handle_loop_capacity(context, command, out, services) -> int:
     payload = services.loop_capacity(context, command)
     if bool(getattr(command, 'json_output', False)):

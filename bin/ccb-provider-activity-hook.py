@@ -145,6 +145,8 @@ def main() -> int:
     args = _parse_args()
     payload = _read_stdin_payload()
     provider = str(args.provider or '').strip().lower()
+    if provider == 'codex':
+        return 0
     state = _activity_state(provider, payload, args.state)
     runtime_dir = str(args.runtime_dir or os.environ.get('CCB_CALLER_RUNTIME_DIR') or '').strip()
     agent_name = str(args.agent_name or os.environ.get('CCB_CALLER_ACTOR') or '').strip()

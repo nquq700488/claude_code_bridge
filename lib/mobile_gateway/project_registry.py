@@ -213,6 +213,8 @@ def _project_from_record(record: dict[str, object]) -> MobileGatewayProject | No
     socket_path = Path(socket_text).expanduser()
     if not project_root.is_absolute() or not socket_path.is_absolute():
         return None
+    if not project_root.exists() or not socket_path.is_socket():
+        return None
     display_name = str(record.get('display_name') or '').strip() or None
     return MobileGatewayProject(
         project_id=project_id,

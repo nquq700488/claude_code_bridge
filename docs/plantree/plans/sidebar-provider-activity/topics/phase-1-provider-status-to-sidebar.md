@@ -43,7 +43,7 @@ ccbd ownership/lifecycle guard
   -> provider-native activity evidence
   -> CCB queued-submit metadata when no provider evidence exists
   -> runtime health / pane liveness fallback
-  -> pane text fallback
+  -> explicit provider pane-status observation
 ```
 
 Meaning:
@@ -56,8 +56,8 @@ Meaning:
   authority;
 - queued or accepted CCB work may show `pending` only while provider activity is
   absent;
-- pane text is fallback evidence, not the primary signal when a valid provider
-  artifact exists.
+- pane text is usable only through a provider-specific explicit parser, not
+  through generic keyword or prompt-visible fallback.
 
 ## Canonical Artifact Path
 
@@ -140,8 +140,9 @@ Freshness rules:
 
 - `active`, `tool`, and `waiting` are trusted while the runtime session and pane
   identity still match.
-- after a short soft-stale interval, pane text may downgrade `active` to `idle`
-  only when it positively shows an idle prompt for the same live pane.
+- after a short soft-stale interval, pane text may downgrade `active` only when
+  a provider-specific parser or hook provides explicit idle authority. A visible
+  input prompt alone is not idle evidence.
 - after a longer hard-stale interval without terminal evidence, degrade
   `active/tool` to `pending` with reason `provider_activity_stale`, not `idle`.
 - `failed` is sticky until the next provider `active/tool/waiting` event for
@@ -222,8 +223,10 @@ Extend `AgentActivityFacts` with optional provider activity evidence and update
 guards and before CCB job/pane fallback.
 
 When provider evidence is fresh and authoritative, `_agent_view()` should avoid
-`capture-pane` unless the evidence is soft-stale and pane text is needed to
-prove idle. This keeps sidebar refresh CPU bounded.
+`capture-pane` unless the evidence is soft-stale and a provider-specific parser
+has a documented explicit signal to check. Prompt visibility alone must not be
+used to prove idle. This keeps sidebar refresh CPU bounded without reviving the
+old prompt-idle fallback.
 
 The current sidebar already renders `activity_state`, `activity_symbol`, and
 `activity_color`. Rust changes should be limited to optional model fields or

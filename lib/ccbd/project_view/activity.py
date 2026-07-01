@@ -71,6 +71,7 @@ _WAITING_CALLBACK_STATES = frozenset({'pending', 'child_completed'})
 @dataclass(frozen=True)
 class AgentActivityFacts:
     namespace_mounted: bool
+    provider: str | None = None
     runtime_state: str | None = None
     runtime_health: str | None = None
     reconcile_state: str | None = None
@@ -90,6 +91,9 @@ class AgentActivityFacts:
     provider_activity_source: str | None = None
     provider_activity_reason: str | None = None
     provider_activity_updated_at: str | None = None
+    provider_runtime_state: str | None = None
+    provider_runtime_source: str | None = None
+    provider_runtime_reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,13 +103,19 @@ class AgentActivity:
     reason: str
     last_progress_at: str | None = None
     current_job_id: str | None = None
+    symbol_override: str | None = None
+    color_override: str | None = None
 
     @property
     def symbol(self) -> str:
+        if self.symbol_override:
+            return self.symbol_override
         return ACTIVITY_PRESENTATION[self.state][0]
 
     @property
     def color(self) -> str:
+        if self.color_override:
+            return self.color_override
         return ACTIVITY_PRESENTATION[self.state][1]
 
     def to_record(self) -> dict[str, object]:
@@ -153,8 +163,17 @@ def resolve_agent_activity(
         reason = 'pane_missing_recovering' if _pane_missing(facts) else 'reconcile_active'
         return AgentActivity(ACTIVITY_PENDING, 'reconcile', reason)
 
+    provider_runtime_activity = _provider_runtime_activity(facts)
+    if provider_runtime_activity is not None:
+        return provider_runtime_activity
+
     provider_activity_source = _clean(facts.provider_activity_source)
-    if provider_activity_state in {ACTIVITY_ACTIVE, ACTIVITY_PENDING} and _provider_terminal_error(facts.pane_text):
+    provider_is_codex = _provider_is_codex(facts)
+    if (
+        not provider_is_codex
+        and provider_activity_state in {ACTIVITY_ACTIVE, ACTIVITY_PENDING}
+        and _provider_terminal_error(facts.pane_text)
+    ):
         return AgentActivity(
             ACTIVITY_FAILED,
             'provider_pane',
@@ -162,22 +181,8 @@ def resolve_agent_activity(
             last_progress_at=facts.provider_activity_updated_at,
             current_job_id=facts.current_job_id,
         )
-    if (
-        provider_activity_state == ACTIVITY_ACTIVE
-        and provider_activity_source == 'codex_hook'
-        and facts.pane_text
-        and not _provider_working(facts.pane_text)
-        and _provider_tail_idle_prompt(facts.pane_text)
-    ):
-        return AgentActivity(
-            ACTIVITY_IDLE,
-            'provider_pane',
-            'provider_prompt_idle',
-            last_progress_at=facts.provider_activity_updated_at,
-            current_job_id=facts.current_job_id,
-        )
 
-    if provider_activity_state in {ACTIVITY_ACTIVE, ACTIVITY_PENDING, ACTIVITY_IDLE, ACTIVITY_FAILED}:
+    if not provider_is_codex and provider_activity_state in {ACTIVITY_ACTIVE, ACTIVITY_PENDING, ACTIVITY_IDLE, ACTIVITY_FAILED}:
         return AgentActivity(
             provider_activity_state,
             provider_activity_source or 'provider_activity',
@@ -196,7 +201,7 @@ def resolve_agent_activity(
         )
 
     if job_status == 'running':
-        if _provider_working(facts.pane_text):
+        if not provider_is_codex and _provider_working(facts.pane_text):
             return AgentActivity(
                 ACTIVITY_ACTIVE,
                 'provider_pane',
@@ -206,7 +211,8 @@ def resolve_agent_activity(
             )
         age_s = _age_seconds(now, facts.current_job_updated_at)
         if (
-            age_s is not None
+            not provider_is_codex
+            and age_s is not None
             and age_s >= provider_input_stuck_after_s
             and provider_prompt_idle_after_request(facts.pane_text, facts.current_job_id)
         ):
@@ -218,7 +224,8 @@ def resolve_agent_activity(
                 current_job_id=facts.current_job_id,
             )
         if (
-            age_s is not None
+            not provider_is_codex
+            and age_s is not None
             and age_s >= provider_input_stuck_after_s
             and provider_prompt_input_stuck(facts.pane_text, facts.current_job_id)
         ):
@@ -254,12 +261,13 @@ def resolve_agent_activity(
             last_progress_at=facts.callback_updated_at,
         )
 
-    if _provider_working(facts.pane_text):
-        return AgentActivity(ACTIVITY_ACTIVE, 'provider_pane', 'provider_working')
-    if _provider_tail_idle_prompt(facts.pane_text):
-        return AgentActivity(ACTIVITY_IDLE, 'pane_liveness', 'pane_alive')
-    if _provider_waiting_for_user(facts.pane_text):
-        return AgentActivity(ACTIVITY_PENDING, 'provider_prompt', 'provider_waiting_for_user')
+    if not provider_is_codex:
+        if _provider_working(facts.pane_text):
+            return AgentActivity(ACTIVITY_ACTIVE, 'provider_pane', 'provider_working')
+        if _provider_tail_idle_prompt(facts.pane_text):
+            return AgentActivity(ACTIVITY_IDLE, 'pane_liveness', 'pane_alive')
+        if _provider_waiting_for_user(facts.pane_text):
+            return AgentActivity(ACTIVITY_PENDING, 'provider_prompt', 'provider_waiting_for_user')
 
     if runtime_state == 'degraded':
         return AgentActivity(ACTIVITY_PENDING, 'runtime_health', 'health_unknown')
@@ -284,6 +292,99 @@ def _age_seconds(now: str, timestamp: str | None) -> float | None:
 
 def _clean(value: object) -> str:
     return str(value or '').strip().lower()
+
+
+def _provider_is_codex(facts: AgentActivityFacts) -> bool:
+    return _clean(facts.provider) == 'codex'
+
+
+def _provider_runtime_activity(facts: AgentActivityFacts) -> AgentActivity | None:
+    if _clean(facts.provider_runtime_source) != 'codex_runtime':
+        return None
+    runtime_state = _clean(facts.provider_runtime_state)
+    reason = _clean(facts.provider_runtime_reason) or f'codex_runtime_{runtime_state or "unknown"}'
+    last_progress_at = facts.current_job_updated_at
+    if runtime_state == 'free':
+        return AgentActivity(
+            ACTIVITY_IDLE,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='◇',
+            color_override='blue',
+        )
+    if runtime_state == 'start':
+        return AgentActivity(
+            ACTIVITY_PENDING,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='◌',
+            color_override='yellow',
+        )
+    if runtime_state == 'working':
+        return AgentActivity(
+            ACTIVITY_ACTIVE,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='●',
+            color_override='green',
+        )
+    if runtime_state == 'tool_running':
+        return AgentActivity(
+            ACTIVITY_ACTIVE,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='◆',
+            color_override='green',
+        )
+    if runtime_state == 'reconnecting':
+        return AgentActivity(
+            ACTIVITY_PENDING,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='↻',
+            color_override='yellow',
+        )
+    if runtime_state in {'waiting_for_user', 'auth_required'}:
+        return AgentActivity(
+            ACTIVITY_PENDING,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='?',
+            color_override='yellow',
+        )
+    if runtime_state in {'auth_failed', 'api_error', 'config_error', 'failed', 'pane_dead'}:
+        return AgentActivity(
+            ACTIVITY_FAILED,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='✕',
+            color_override='red',
+        )
+    if runtime_state == 'unknown':
+        return AgentActivity(
+            ACTIVITY_PENDING,
+            'codex_runtime',
+            reason,
+            last_progress_at=last_progress_at,
+            current_job_id=facts.current_job_id,
+            symbol_override='?',
+            color_override='gray',
+        )
+    return None
 
 
 def _pane_missing(facts: AgentActivityFacts) -> bool:

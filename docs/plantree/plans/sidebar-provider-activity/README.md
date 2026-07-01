@@ -23,6 +23,18 @@ layout.
   first implementation slice for provider-native activity monitoring exposed to
   sidebar through `project_view`, without changing mailbox, Comms, reply, or
   retry behavior.
+- [topics/agent-runtime-status-v1.md](topics/agent-runtime-status-v1.md):
+  normalized source-side runtime status model for ProjectView clients, starting
+  with generic evidence merging and Codex/Claude-specific working-state
+  adapters.
+- [topics/codex-pane-status-probe-spike.md](topics/codex-pane-status-probe-spike.md):
+  independent Codex-in-tmux probe plan for measuring pane output acquisition,
+  status inference confidence, scenario coverage, and performance before
+  production parser work.
+- [topics/provider-pane-status-signal-module.md](topics/provider-pane-status-signal-module.md):
+  production landing plan for extracting explicit provider pane observations
+  into a small shared module, starting with Codex and preserving room for
+  Claude without treating pane evidence as job lifecycle authority.
 - [topics/test-matrix.md](topics/test-matrix.md): automatic, manual, API fault
   lane, and release-gate validation plan.
 - [topics/current-ccbd-comms-and-retry.md](topics/current-ccbd-comms-and-retry.md):
@@ -57,8 +69,15 @@ In scope:
 
 - Provider-native activity artifact contract.
 - Codex and Claude manual-pane status accuracy.
+- Structured `AgentRuntimeStatus` exposed through `project_view` for sidebar,
+  mobile gateway, and future clients.
 - Provider error/failure state propagation into `project_view`.
-- Freshness, stale-state, wrong-pane, and wrong-generation protection.
+- Freshness, transition smoothing, stale-state, wrong-pane, and
+  wrong-generation protection.
+- Bounded pane/status-line sampling so status accuracy does not make
+  `project_view` refresh expensive or visually unstable.
+- An isolated Codex pane-status probe that runs in `/home/bfly/yunwei/test_ccb2`
+  before production status parsing is promoted.
 - Dedicated automatic and manual validation matrix.
 
 Out of scope:

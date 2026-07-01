@@ -12,6 +12,7 @@ from mobile_gateway import (
     MobileGatewayPairingStore,
     MobileGatewayService,
     build_mobile_gateway_server,
+    discover_running_mobile_gateway_projects,
     load_mobile_gateway_project_registry,
     mobile_host_state_dir,
     parse_listen_address,
@@ -59,6 +60,7 @@ def prepare_mobile_gateway(context, command) -> MobileGatewayServeHandle:
         'endpoints': [
             '/v1/health',
             '/v1/projects',
+            '/v1/mobile/notifications',
             '/v1/projects/{project_id}/view',
             '/v1/pairing/claim',
             '/v1/devices/me',
@@ -84,7 +86,7 @@ def prepare_server_mobile_gateway(
     project_registry: MobileGatewayProjectRegistry | None = None,
     host_id: str | None = None,
 ) -> MobileGatewayServeHandle:
-    registry = project_registry or load_mobile_gateway_project_registry(include_running=True)
+    registry = project_registry or _running_server_project_registry()
     listen = parse_listen_address(command.listen)
     resolved_host_id = str(host_id or '').strip() or _server_host_id()
     state_dir = mobile_host_state_dir()
@@ -127,6 +129,7 @@ def prepare_server_mobile_gateway(
         'endpoints': [
             '/v1/health',
             '/v1/projects',
+            '/v1/mobile/notifications',
             '/v1/projects/{project_id}/view',
             '/v1/pairing/claim',
             '/v1/devices/me',
@@ -144,6 +147,13 @@ def prepare_server_mobile_gateway(
         summary=summary,
         server=server,
     )
+
+
+def _running_server_project_registry() -> MobileGatewayProjectRegistry:
+    projects = discover_running_mobile_gateway_projects()
+    if not projects:
+        raise ValueError('no running CCB projects found for mobile server setup')
+    return MobileGatewayProjectRegistry(list(projects))
 
 
 def mobile_devices_status(context, command) -> dict[str, object]:

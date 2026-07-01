@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 
-def test_provider_activity_hook_writes_codex_active_snapshot(tmp_path: Path) -> None:
+def test_provider_activity_hook_noops_for_codex(tmp_path: Path) -> None:
     project_root = Path(__file__).resolve().parents[1]
     runtime_dir = tmp_path / 'runtime'
     workspace = tmp_path / 'workspace'
@@ -44,15 +44,7 @@ def test_provider_activity_hook_writes_codex_active_snapshot(tmp_path: Path) -> 
     )
 
     assert proc.returncode == 0, proc.stderr
-    activity = json.loads((runtime_dir / 'activity.json').read_text(encoding='utf-8'))
-    assert activity['state'] == 'active'
-    assert activity['event_name'] == 'UserPromptSubmit'
-    assert activity['agent_name'] == 'agent2'
-    assert activity['ccb_session_id'] == 'ccb-agent2-1'
-    assert activity['pane_id'] == '%42'
-    assert activity['provider_session_id'] == 'codex-session-1'
-    assert activity['provider_turn_id'] == 'turn-1'
-    assert 'prompt' not in activity
+    assert not (runtime_dir / 'activity.json').exists()
 
 
 def test_provider_activity_hook_maps_claude_waiting_notification(tmp_path: Path) -> None:
@@ -97,7 +89,7 @@ def test_provider_activity_hook_exits_zero_without_writing_on_malformed_payload(
             sys.executable,
             str(project_root / 'bin' / 'ccb-provider-activity-hook.py'),
             '--provider',
-            'codex',
+            'claude',
             '--project-id',
             'project-1',
             '--agent-name',
@@ -133,7 +125,7 @@ def test_provider_activity_hook_maps_error_payload_to_failed_without_secret(tmp_
             sys.executable,
             str(project_root / 'bin' / 'ccb-provider-activity-hook.py'),
             '--provider',
-            'codex',
+            'claude',
             '--project-id',
             'project-1',
             '--agent-name',

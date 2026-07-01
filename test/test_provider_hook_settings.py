@@ -548,7 +548,7 @@ def test_prepare_provider_workspace_records_codex_memory_projection_event_once(
     assert marker['status'] == 'ok'
 
 
-def test_prepare_provider_workspace_materializes_codex_activity_hooks_and_trust_state(
+def test_prepare_provider_workspace_does_not_materialize_codex_activity_hooks(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -588,32 +588,13 @@ command = "echo external-hook"
     codex_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
     hooks_path = codex_home / 'hooks.json'
     hooks_payload = json.loads(hooks_path.read_text(encoding='utf-8'))
-    event_names = set(hooks_payload['hooks'])
-    assert {
-        'SessionStart',
-        'UserPromptSubmit',
-        'PreToolUse',
-        'PermissionRequest',
-        'PostToolUse',
-        'Stop',
-    } <= event_names
-    command = hooks_payload['hooks']['UserPromptSubmit'][0]['hooks'][0]['command']
-    assert 'ccb-provider-activity-hook' in command
-    assert '--provider codex' in command
-    assert '--agent-name agent1' in command
-    assert f'--runtime-dir {runtime_dir}' in command
-    assert f'--workspace {workspace}' in command
-    assert layout.project_id in command
+    assert hooks_payload == {'hooks': {}}
 
     config_path = codex_home / 'config.toml'
     config_text = config_path.read_text(encoding='utf-8')
     assert 'external-hook' not in config_text
     config = tomllib.loads(config_text)
-    state = config['hooks']['state']
-    assert len(state) == 6
-    user_prompt_key = f'{hooks_path}:user_prompt_submit:0:0'
-    assert state[user_prompt_key]['enabled'] is True
-    assert str(state[user_prompt_key]['trusted_hash']).startswith('sha256:')
+    assert config['hooks']['state'] == {}
     assert not (workspace / '.codex').exists()
 
 
@@ -674,7 +655,7 @@ def test_prepare_provider_workspace_preserves_allowed_codex_hindsight_hooks(
         for group in hooks_payload['hooks']['UserPromptSubmit']
         for hook in group['hooks']
     ]
-    assert any('ccb-provider-activity-hook' in command for command in user_prompt_commands)
+    assert not any('ccb-provider-activity-hook' in command for command in user_prompt_commands)
     assert any('.hindsight/codex/scripts/recall.py' in command for command in user_prompt_commands)
     assert not any('unmanaged-root-hook' in command for commands in hooks_payload['hooks'].values() for group in commands for command in [group['hooks'][0]['command']])
     session_start_handlers = [
@@ -694,8 +675,8 @@ def test_prepare_provider_workspace_preserves_allowed_codex_hindsight_hooks(
 
     config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
     state = config['hooks']['state']
-    assert any(key.endswith(':user_prompt_submit:1:0') for key in state)
-    assert len(state) == 9
+    assert any(key.endswith(':user_prompt_submit:0:0') for key in state)
+    assert len(state) == 3
 
 
 def test_prepare_provider_workspace_preserves_omx_native_codex_hooks(
@@ -752,21 +733,21 @@ def test_prepare_provider_workspace_preserves_omx_native_codex_hooks(
         for hook in group.get('hooks', [])
     ]
 
-    assert any('ccb-provider-activity-hook' in command for command in all_commands)
+    assert not any('ccb-provider-activity-hook' in command for command in all_commands)
     assert sum('codex-native-hook.js' in command for command in all_commands) == 7
     assert 'Notification' not in hooks_payload['hooks']
 
     config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
     state = config['hooks']['state']
     hooks_path = codex_home / 'hooks.json'
-    assert f'{hooks_path}:session_start:1:0' in state
-    assert f'{hooks_path}:user_prompt_submit:1:0' in state
-    assert f'{hooks_path}:pre_tool_use:1:0' in state
-    assert f'{hooks_path}:post_tool_use:1:0' in state
+    assert f'{hooks_path}:session_start:0:0' in state
+    assert f'{hooks_path}:user_prompt_submit:0:0' in state
+    assert f'{hooks_path}:pre_tool_use:0:0' in state
+    assert f'{hooks_path}:post_tool_use:0:0' in state
     assert f'{hooks_path}:pre_compact:0:0' in state
     assert f'{hooks_path}:post_compact:0:0' in state
-    assert f'{hooks_path}:stop:1:0' in state
-    assert len(state) == 13
+    assert f'{hooks_path}:stop:0:0' in state
+    assert len(state) == 7
 
     identity = {
         'event_name': 'user_prompt_submit',
@@ -782,7 +763,7 @@ def test_prepare_provider_workspace_preserves_omx_native_codex_hooks(
     expected_hash = 'sha256:' + hashlib.sha256(
         json.dumps(identity, ensure_ascii=False, separators=(',', ':'), sort_keys=True).encode('utf-8')
     ).hexdigest()
-    assert state[f'{hooks_path}:user_prompt_submit:1:0']['trusted_hash'] == expected_hash
+    assert state[f'{hooks_path}:user_prompt_submit:0:0']['trusted_hash'] == expected_hash
 
 
 def test_prepare_provider_workspace_preserves_configured_codex_command_hooks(
@@ -853,7 +834,7 @@ def test_prepare_provider_workspace_preserves_configured_codex_command_hooks(
         for hook in group.get('hooks', [])
     ]
 
-    assert any('ccb-provider-activity-hook' in command for command in all_commands)
+    assert not any('ccb-provider-activity-hook' in command for command in all_commands)
     assert any(
         str(generic_hook_root / 'recall.sh') == str(hook.get('command') or '') and hook['timeout'] == 19
         for hook in user_prompt_handlers
@@ -867,9 +848,9 @@ def test_prepare_provider_workspace_preserves_configured_codex_command_hooks(
 
     config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
     state = config['hooks']['state']
-    assert any(key.endswith(':user_prompt_submit:1:0') for key in state)
-    assert any(key.endswith(':stop:1:0') for key in state)
-    assert len(state) == 8
+    assert any(key.endswith(':user_prompt_submit:0:0') for key in state)
+    assert any(key.endswith(':stop:0:0') for key in state)
+    assert len(state) == 2
 
 
 def test_prepare_provider_workspace_respects_codex_explicit_runtime_home(

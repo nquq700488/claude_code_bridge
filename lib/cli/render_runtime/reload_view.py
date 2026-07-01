@@ -82,6 +82,11 @@ def _reload_active_drain_lines(payload: Mapping[str, object]) -> list[str]:
 def _reload_diagnostic_lines(diagnostics: Mapping[str, object]) -> list[str]:
     lines: list[str] = []
     lines.extend(_optional_key_values('reload_diagnostic', diagnostics, ('reason', 'message')))
+    replace_agents = diagnostics.get('replace_agents')
+    if isinstance(replace_agents, (list, tuple)):
+        lines.append(f'reload_diagnostic: replace_agents={_render_value(replace_agents)}')
+    if diagnostics.get('next_supported_action'):
+        lines.append(f'reload_diagnostic: next_supported_action={diagnostics.get("next_supported_action")}')
     for key in (
         'graph_published',
         'lease_or_lifecycle_written',
@@ -114,6 +119,7 @@ def _reload_residue_line(residue: Mapping[str, object]) -> str:
         'removed_windows',
         'removed_panes',
         'removed_agents',
+        'replaced_agents',
         'reflowed_windows',
         'reflow_errors',
         'rollback_actions',
@@ -121,6 +127,7 @@ def _reload_residue_line(residue: Mapping[str, object]) -> str:
         'mounted_agents',
         'runtime_authority_written_agents',
         'unloaded_agents',
+        'replaced_agents',
         'runtime_authority_stopped_agents',
         'helper_terminated_agents',
     ):

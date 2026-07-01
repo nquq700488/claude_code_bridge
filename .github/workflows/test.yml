@@ -71,116 +71,39 @@ jobs:
           assert payload["flows"] == ["window-class", "move-agent", "resolve-preflight"]
           PY
 
-      - name: Guard same-window continuous dynamic layout smoke
+      - name: Guard core dynamic layout smoke
         if: matrix.os == 'ubuntu-latest' && matrix.python-version == '3.11'
         shell: bash
         run: |
           set -euo pipefail
           export TERM=xterm-256color
-          smoke_root="${RUNNER_TEMP}/ccb-same-window-continuous-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          python scripts/dynamic_layout_smoke.py \
+          smoke_root="${RUNNER_TEMP}/ccb-core-dynamic-layout-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          python scripts/guarded_core_dynamic_layout_smoke.py \
             --test-root "$smoke_root" \
-            --project-prefix ci-same-window-continuous \
+            --project-prefix ci-core-dynamic-layout \
             --ccb-test "$GITHUB_WORKSPACE/ccb_test" \
             --provider fake \
-            --flow same-window-continuous \
-            --flow batch-release \
-            --flow move-agent \
-            --flow move-shared-source \
-            --flow window-class-continuous \
-            --flow arrange-window \
-            --command-timeout 180 \
-            --reset > "$RUNNER_TEMP/same-window-continuous-smoke.json"
-          python - "$RUNNER_TEMP/same-window-continuous-smoke.json" <<'PY'
+            --command-timeout 240 \
+            --reset \
+            --json | tee "$RUNNER_TEMP/core-dynamic-layout-smoke.json"
+          python - "$RUNNER_TEMP/core-dynamic-layout-smoke.json" <<'PY'
           import json
           import sys
           from pathlib import Path
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
           assert payload["dynamic_layout_smoke_status"] == "ok"
-          assert payload["flows"] == ["same-window-continuous", "batch-release", "move-agent", "move-shared-source", "window-class-continuous", "arrange-window"]
-          assert payload["checks"]["same_window_continuous_1_to_6_to_1"] is True
-          assert payload["checks"]["batch_release_multi_window"] is True
-          assert payload["checks"]["move_agent_to_new_window"] is True
-          assert payload["checks"]["move_agent_shared_source"] is True
-          assert payload["checks"]["window_class_continuous_1_to_8_to_1"] is True
-          assert payload["checks"]["arrange_window_disturb_restore"] is True
-          results = {item["flow"]: item for item in payload["results"]}
-          result = results["same_window_continuous_1_to_6_to_1"]
-          checks = result["checks"]
-          assert result["flow"] == "same_window_continuous_1_to_6_to_1"
-          assert checks["grew_to_six_order"] is True
-          assert checks["observed_grew_to_six_panes"] is True
-          assert checks["observed_grow_geometry"] is True
-          assert checks["observed_grow_indexes_contiguous"] is True
-          assert checks["observed_grow_min_width"] is True
-          assert checks["observed_grow_fixed_columns"] is True
-          assert checks["release_remove_agent_plans"] is True
-          assert checks["release_reflowed_main"] is True
-          assert checks["main_pane_preserved"] is True
-          assert checks["shrunk_to_one_order"] is True
-          assert checks["observed_shrunk_to_one_pane"] is True
-          assert checks["observed_shrink_geometry"] is True
-          assert checks["dynamic_agents_cleaned"] is True
-          assert checks["ask_main_accepted"] is True
-          move = results["move_agent_to_new_window"]["checks"]
-          assert move["add_agent_plan"] is True
-          assert move["pre_move_ask_accepted"] is True
-          assert move["pre_move_ask_terminal"] is True
-          assert move["move_plan_class"] is True
-          assert move["move_preserved_helper_pane"] is True
-          assert move["move_window_evidence"] is True
-          assert move["post_move_ask_accepted"] is True
-          assert move["post_move_ask_terminal"] is True
-          assert move["return_preserved_helper_pane"] is True
-          assert move["return_removed_review_window"] is True
-          assert move["return_ask_accepted"] is True
-          assert move["return_ask_terminal"] is True
-          assert move["release_kept_main_window"] is True
-          assert move["dynamic_agents_cleaned"] is True
-          batch = results["batch_release_multi_window"]["checks"]
-          assert batch["batch_remove_agent_plan"] is True
-          assert batch["batch_removed_agents"] is True
-          assert batch["batch_removed_agent_panes_match"] is True
-          assert batch["batch_removed_windows"] is True
-          assert batch["survivor_panes_preserved"] is True
-          assert batch["after_windows"] is True
-          assert batch["survivor_ask_accepted"] is True
-          assert batch["main_ask_accepted"] is True
-          window_class = results["window_class_continuous_1_to_8_to_1"]["checks"]
-          assert window_class["add_plan_sequence"] is True
-          assert window_class["page1_order"] is True
-          assert window_class["page2_order"] is True
-          assert window_class["page1_observed_fixed_columns"] is True
-          assert window_class["page2_observed_fixed_columns"] is True
-          assert window_class["helper7_ask_accepted"] is True
-          assert window_class["helper7_ask_terminal"] is True
-          assert window_class["release_remove_agent_plans"] is True
-          assert window_class["page2_removed_when_empty"] is True
-          assert window_class["after_page2_removed"] is True
-          assert window_class["dynamic_agents_cleaned"] is True
-          arrange = results["arrange_window_disturb_restore"]["checks"]
-          assert arrange["disturb_made_non_fixed"] is True
-          assert arrange["arrange_status_ok"] is True
-          assert arrange["arrange_reflowed_plan"] is True
-          assert arrange["arrange_fixed_columns"] is True
-          assert arrange["pane_ids_preserved"] is True
-          assert arrange["helper_ask_accepted"] is True
-          assert arrange["helper_ask_terminal"] is True
-          assert arrange["dynamic_agents_cleaned"] is True
-          print(
-              json.dumps(
-                  {
-                      "dynamic_layout_smoke_status": payload["dynamic_layout_smoke_status"],
-                      "flows": payload["flows"],
-                      "same_window_checks": checks,
-                      "move_checks": move,
-                      "window_class_checks": window_class,
-                      "arrange_checks": arrange,
-                  },
-                  sort_keys=True,
-              )
-          )
+          assert payload["flows"] == [
+              "same-window-continuous",
+              "batch-release",
+              "move-agent",
+              "move-shared-source",
+              "window-class-continuous",
+              "arrange-window",
+              "mixed-move-add",
+              "batch-move-window-class",
+              "resolve-preflight",
+          ]
           PY
 
       - name: Guard dynamic agent lifecycle smoke
@@ -250,6 +173,7 @@ jobs:
             --provider fake \
             --command-timeout 180 \
             --busy-latency-ms 5000 \
+            --auto-retry \
             --reset > "$RUNNER_TEMP/reload-busy-drain-smoke.json"
           python - "$RUNNER_TEMP/reload-busy-drain-smoke.json" <<'PY'
           import json
@@ -264,7 +188,7 @@ jobs:
           assert checks["project_view_records_active_drain"] is True
           assert checks["new_ask_rejected_while_draining"] is True
           assert checks["busy_job_terminal"] is True
-          assert checks["retry_reload_published"] is True
+          assert checks["auto_retry_published"] is True
           assert checks["project_view_drain_cleared"] is True
           assert checks["agent2_removed_from_view"] is True
           print(
@@ -276,7 +200,7 @@ jobs:
                           "blocked_reload_reports_active_drain": checks["blocked_reload_reports_active_drain"],
                           "project_view_records_active_drain": checks["project_view_records_active_drain"],
                           "new_ask_rejected_while_draining": checks["new_ask_rejected_while_draining"],
-                          "retry_reload_published": checks["retry_reload_published"],
+                          "auto_retry_published": checks["auto_retry_published"],
                           "agent2_removed_from_view": checks["agent2_removed_from_view"],
                       },
                   },

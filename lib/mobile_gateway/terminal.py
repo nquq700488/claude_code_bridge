@@ -35,12 +35,14 @@ class TerminalAttachTarget:
     terminal_id: str
     socket_path: str
     session_name: str
+    pane_id: str | None
     geometry: TerminalGeometry
     target_summary: dict[str, object]
 
     @property
     def command(self) -> list[str]:
-        return ['tmux', '-S', self.socket_path, 'attach-session', '-t', self.session_name]
+        target = self.pane_id or self.session_name
+        return ['tmux', '-S', self.socket_path, 'attach-session', '-t', target]
 
 
 @dataclass(frozen=True)
@@ -162,10 +164,17 @@ class TmuxTerminalSession:
         return data
 
     def write(self, data: bytes) -> None:
-        if data:
-            os.write(self._master_fd, data)
+        if not data:
+            return
+        if self.target.pane_id:
+            _send_tmux_terminal_bytes(self.target, data)
+            return
+        os.write(self._master_fd, data)
 
     def paste(self, text: str) -> None:
+        if self.target.pane_id:
+            _send_tmux_terminal_literal(self.target, str(text or ''))
+            return
         self.write(str(text).encode('utf-8'))
 
     def resize(self, geometry: TerminalGeometry) -> None:
@@ -195,6 +204,52 @@ class TmuxTerminalSession:
 
 def create_tmux_terminal_session(target: TerminalAttachTarget) -> TmuxTerminalSession:
     return TmuxTerminalSession(target)
+
+
+def _send_tmux_terminal_literal(target: TerminalAttachTarget, text: str) -> None:
+    if not text:
+        return
+    _tmux_terminal_run(target, ['send-keys', '-t', str(target.pane_id), '-l', text])
+
+
+def _send_tmux_terminal_bytes(target: TerminalAttachTarget, data: bytes) -> None:
+    key_names = {
+        b'\r': 'Enter',
+        b'\n': 'Enter',
+        b'\t': 'Tab',
+        b'\x1b': 'Escape',
+        b'\x03': 'C-c',
+        b'\x04': 'C-d',
+        b'\x15': 'C-u',
+        b'\x7f': 'BSpace',
+        b'\b': 'BSpace',
+    }
+    key = key_names.get(data)
+    if key is not None:
+        _tmux_terminal_run(target, ['send-keys', '-t', str(target.pane_id), key])
+        return
+    try:
+        text = data.decode('utf-8')
+    except UnicodeDecodeError:
+        raise RuntimeError(f'unsupported terminal input bytes for {target.terminal_id}')
+    _send_tmux_terminal_literal(target, text)
+
+
+def _tmux_terminal_run(
+    target: TerminalAttachTarget,
+    args: list[str],
+) -> None:
+    cp = subprocess.run(
+        ['tmux', '-S', target.socket_path, *args],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+        timeout=2.0,
+    )
+    if cp.returncode != 0:
+        message = (cp.stderr or '').strip() or 'tmux terminal input failed'
+        raise RuntimeError(message)
 
 
 def _readable_history_blocks(text: str) -> list[dict[str, object]]:

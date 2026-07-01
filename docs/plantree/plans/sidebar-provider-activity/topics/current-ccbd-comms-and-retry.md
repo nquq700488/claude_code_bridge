@@ -34,8 +34,10 @@ Important behavior:
   latest attempt row.
 - `business_status` is a communication workflow label, not a provider
   execution-state label.
-- `running_recover_hint` is currently inferred from pane text heuristics for
-  Codex/Claude running jobs and can mark a Comms row as `blocked/stuck`.
+- `running_recover_hint` is currently inferred from legacy pane text
+  heuristics for Codex/Claude running jobs and can mark a Comms row as
+  `blocked/stuck`. The provider-pane-status extraction will not carry these
+  prompt-visible heuristics forward.
 - Comms recoverability is attached to rows through
   `comms_recoverability_for_job()`.
 
@@ -149,7 +151,7 @@ Retry body behavior:
 - a running job appears stale by runtime health, pane state, or a trusted
   running hint.
 
-Trusted running hints are currently:
+Trusted running hints are currently legacy behavior:
 
 - `provider_prompt_idle`
 - `provider_prompt_idle_stale`
@@ -158,6 +160,14 @@ Trusted running hints are currently:
 
 Recovering stale running jobs currently cancels the old job without recording a
 reply, then retries the job.
+
+The `provider_prompt_*` hints are deprecated for the provider pane-status
+work. Prompt visibility is not status or recovery authority. When the Codex
+ProjectView path switches to `provider_pane_status.codex_pane`, these hints
+must be removed from activity/status inputs rather than moved into another
+diagnostics module. Future running-job recovery should be driven by explicit
+provider hook, protocol/session, runtime health, or bounded reliability
+evidence, not by a visible prompt alone.
 
 ## Implications For Provider Activity
 
@@ -196,3 +206,5 @@ When provider-native activity lands, keep focused regression tests for:
 - sticky provider `failed` state does not force Comms retry by itself;
 - provider activity `active/idle/failed` does not mutate message-bureau state
   unless a real job terminalization path emits a terminal decision.
+- provider pane `unknown` or prompt visibility does not create a recoverable
+  Comms hint by itself.

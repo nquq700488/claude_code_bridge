@@ -94,6 +94,14 @@ Required coverage:
 - runtime fault, stopped agent, missing pane, and failed reconciliation win over
   provider artifact
 - pane text fallback is used only when no fresh provider evidence exists
+- runtime status smoothing keeps `working` visible through a short transient
+  idle gap, then returns to `idle` only after confirmation
+- high-confidence `waiting_for_user`, `failed`, and `offline` states bypass
+  ordinary display smoothing when they need user attention
+- stale working evidence crosses the stalled threshold instead of remaining
+  active forever
+- previous-status smoothing resets when runtime generation or pane ownership
+  changes
 
 ## 4. Provider Hook Tests
 
@@ -133,6 +141,8 @@ These tests call `ProjectViewService` with fake dispatcher/runtime/tmux facts.
 
 Required scenarios:
 
+- every agent row keeps backward-compatible `activity_state` fields and also
+  exposes redacted structured `runtime_status`;
 - no active CCB job, fresh Codex activity `active` -> agent row `active`
 - no active CCB job, fresh Claude activity `active` -> agent row `active`
 - fresh `waiting` -> row `pending`
@@ -149,6 +159,8 @@ Required scenarios:
   make the agent row failed without provider/runtime evidence
 - cache hit path does not call tmux or reread provider artifacts unnecessarily
 - one ProjectView build reads each activity artifact at most once per agent
+- repeated ProjectView builds do not oscillate `runtime_status.state` when raw
+  evidence alternates within the configured smoothing windows
 
 Performance assertions:
 
@@ -156,6 +168,66 @@ Performance assertions:
 - no global provider-home scan
 - no large transcript scan from the sidebar refresh path
 - no additional per-agent `capture-pane` calls when provider activity is fresh
+- per-pane `capture-pane` fallback is throttled and reused within the configured
+  minimum capture interval
+
+## 5.1 Mobile Gateway Status Tests
+
+Mobile gateway should consume ProjectView status, not reinvent provider state.
+
+Required scenarios:
+
+- conversation `status_event` summary is derived from `activity_state` and
+  `runtime_status`, not a separate coarse agent state fallback;
+- `runtime_status` fields exposed through mobile APIs are redacted and compact;
+- legacy clients still receive a plain status summary;
+- stale-active, waiting-for-user, reconnecting/stalled, and failed states
+  produce user-readable summaries suitable for the mobile conversation header;
+- rapid ProjectView refreshes do not generate alternating active/idle mobile
+  status events for one unresolved provider turn;
+- no prompt text, reply text, API key, OAuth token, or full transcript body is
+  emitted through status fields.
+
+## 5.2 Codex Pane Probe Spike
+
+Before production Codex status-line parsing lands, run the independent probe
+from
+[codex-pane-status-probe-spike.md](codex-pane-status-probe-spike.md).
+
+Required scenarios:
+
+- startup-idle: Codex pane starts, pane facts are recorded, and the current
+  screen establishes the input-ready baseline;
+- quick-turn: a short prompt produces `working -> idle` evidence with
+  first-output latency;
+- long-tool: a visible multi-second command/tool run produces fresh output and
+  active state evidence;
+- interrupt: Escape/Ctrl-C during work does not leave status permanently
+  active;
+- pane-death: killing the dedicated test pane reports pane death and stops
+  parsing stale output;
+- stale-scrollback: old `Working (...)` text before a newer idle prompt does
+  not keep the state active;
+- approval-wait and API/model/auth failure either pass in a credential-enabled
+  lane or produce explicit skip reasons.
+
+Required artifacts under `/home/bfly/yunwei/test_ccb2`:
+
+- redacted `run.json` summary;
+- timestamped `events.jsonl` and `snapshots.jsonl`;
+- raw and normalized pane-output logs kept private unless sanitized;
+- capture samples for each `capture-pane` variant under test;
+- `metrics.json` with output latency, capture count, capture duration, and
+  parser mismatch counts.
+
+Promotion gate:
+
+- only sanitized probe fixtures may be committed;
+- Codex parser tests must cite the fixture scenario they cover;
+- parser scope is limited to high- or medium-confidence patterns observed by
+  the probe;
+- low-confidence provider copy remains display detail or `unknown/pending`
+  evidence, not a hard status transition.
 
 ## 6. Fault Injection Tests
 
@@ -302,6 +374,8 @@ Before release, run:
 
 - focused unit tests for activity writer/reader/resolver
 - provider hook helper tests for Codex and Claude
+- Codex pane probe spike with redacted fixture summary for parser-backed
+  patterns
 - full `pytest -q`
 - Rust sidebar tests
 - compile checks

@@ -1998,6 +1998,26 @@ def test_codex_launcher_repairs_activity_hook_trust_for_existing_home(monkeypatc
     project_root = tmp_path / 'repo-codex-existing-hooks'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
+    system_home = tmp_path / 'system-home'
+    system_codex = system_home / '.codex'
+    omx_command = '"/usr/bin/node" "/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js"'
+    system_codex.mkdir(parents=True, exist_ok=True)
+    (system_codex / 'hooks.json').write_text(
+        json.dumps(
+            {
+                'hooks': {
+                    'SessionStart': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'UserPromptSubmit': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PreToolUse': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PostToolUse': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'PreCompact': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                    'Stop': [{'hooks': [{'type': 'command', 'command': omx_command}]}],
+                },
+            },
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
     codex_home = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-state' / 'codex' / 'home'
     (codex_home / 'sessions').mkdir(parents=True, exist_ok=True)
     (codex_home / 'config.toml').write_text('model = "gpt-test"\n', encoding='utf-8')
@@ -2012,7 +2032,7 @@ def test_codex_launcher_repairs_activity_hook_trust_for_existing_home(monkeypatc
         ),
         encoding='utf-8',
     )
-    monkeypatch.delenv('CODEX_HOME', raising=False)
+    monkeypatch.setenv('CODEX_HOME', str(system_codex))
 
     spec = _spec('agent1')
     command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=True)
