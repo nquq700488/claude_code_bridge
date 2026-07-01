@@ -1,20 +1,21 @@
 # 使用此 Fork 版本的 CCB
 
-> **核心原则**：系统里只保留这一个 CCB 安装。它是官方 CCB 的 Fork，额外添加了 **MiniMax (mmx)** 和 **Kimi** 两个 provider 支持。官方版本没有这两个 provider。
+> **核心原则**：系统里只保留这一个 CCB 安装。它是官方 CCB（v8.0.7）的 Fork，额外添加了 **MiniMax (mmx)** provider 支持，并对 **Kimi** provider 做了增强（更健壮的 CLI 可执行文件查找 + 新 session 格式兼容）。官方版本已收录 Kimi、Gemini、Codex、Claude 等 15 个 CLI 家族。
 
 ---
 
 ## 1. 这个 Fork 与官方版本的区别
 
-| 特性 | 官方 CCB | 此 Fork |
-|------|----------|---------|
+| 特性 | 官方 CCB (v8.0.7) | 此 Fork |
+|------|---------------------|---------|
 | Claude | ✅ | ✅ |
 | Codex (OpenAI) | ✅ | ✅ |
 | Gemini | ✅ | ✅ |
+| Kimi | ✅ | ✅（增强版） |
 | **MiniMax (mmx)** | ❌ | ✅ |
-| **Kimi** | ❌ | ✅ |
+| MiMo / Qwen / Cursor / Copilot / Crush / Kiro / Pi / Z.ai / OpenCode / Antigravity / Droid | ✅ | ✅ |
 
-- **安装目录**：`~/.local/share/ccb`（官方默认是 `codex-dual`，已改为 `ccb`）
+- **安装目录**：`~/.local/share/ccb`
 - **源码位置**：`/Users/zhangtao/Documents/study/claude_code_bridge`
 
 ---
@@ -118,14 +119,17 @@ ccb status
 
 ### 2.5 支持的 Provider 简写
 
-在 `.ccb/ccb.config` 中使用：
+在 `.ccb/ccb.config` 中使用（完整列表见上游 README）：
 
 | 配置写法 | Provider | 说明 |
 |----------|----------|------|
-| `agent:mmx` | MiniMax | 纯文本对话，无本地 tool calling |
-| `agent:kimi` | Kimi | 支持 skills |
+| `agent:mmx` | MiniMax | Fork 独有，纯文本对话，无本地 tool calling |
+| `agent:kimi` | Kimi | Fork 增强版（CLI 查找更健壮 + session 兼容），支持 skills |
 | `agent:claude` | Claude | 支持 skills |
 | `agent:codex` | Codex (OpenAI) | 支持 skills |
+| `agent:gemini` | Gemini | 支持 skills |
+| `agent:agy` | Antigravity | 支持 skills |
+| 更多... | Qwen/Cursor/Copilot/Kiro/Pi/Z.ai/Droid 等 | 上游原生支持 |
 
 ### 2.6 各 Agent 使用规范与注意事项
 
@@ -295,14 +299,14 @@ bash install.sh install
 
 ### 3.2 修改代码后的同步
 
-当你在源码目录修改了代码（如 `lib/provider_backends/mmx/`），不需要重新运行 `install.sh`，用同步脚本即可：
+修改源码后同步到安装目录：
 
 ```bash
 cd /Users/zhangtao/Documents/study/claude_code_bridge
-bash sync-to-install.sh
+bash install.sh install
 ```
 
-这会增量同步 `lib/`、`bin/` 和 `.ccb/ccb.config` 到安装目录，并清除 `__pycache__`。
+`install.sh install` 会重新创建 symlink 和刷新 skills 安装。
 
 ### 3.3 完全重装
 
@@ -318,7 +322,7 @@ CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 
 ### ❌ 绝对不要运行 `ccb update`
 
-`ccb update` 会从官方 release 渠道下载最新版本（当前官方是 v6.0.7），**这会覆盖掉此 Fork 中添加的 mmx 和 kimi provider**，导致这两个 provider 失效。
+`ccb update` 会从官方 release 渠道下载最新版本，**这会覆盖掉此 Fork 中添加的 mmx provider 和 Kimi 增强**，导致这些功能失效。
 
 如果看到以下提示，**忽略它**：
 

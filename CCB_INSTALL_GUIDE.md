@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v7.6.16 | 最后更新：2026-06-24
+> 版本：适用于 CCB v8.0.7 | 最后更新：2026-07-01
 
 ---
 
@@ -23,9 +23,9 @@
 
 ## CCB 简介
 
-> **名称演变**：CCB 最初代表 **Claude Code Bridge**。随着项目扩展到支持多模型协作（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX），这个缩写现在代表 **Collaborative Code Bridge** —— 协作代码桥。
+> **名称演变**：CCB 最初代表 **Claude Code Bridge**。随着项目扩展到支持多模型协作（15 个 CLI 家族：Codex、Claude、Gemini、Kimi、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Pi、Z.ai、OpenCode、Antigravity、Droid，Fork 额外支持 MMX），这个缩写现在代表 **Collaborative Code Bridge** —— 协作代码桥。
 
-**CCB (Collaborative Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent（Claude、Codex、Gemini、OpenCode、Kimi、Droid、MMX、Antigravity/agy），并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
+**CCB (Collaborative Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent，并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
 
 核心能力：
 - 一键启停多个 AI CLI Agent
