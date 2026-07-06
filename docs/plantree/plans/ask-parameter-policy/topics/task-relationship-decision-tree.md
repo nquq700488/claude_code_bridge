@@ -27,7 +27,7 @@ Before choosing artifact flags, choose result intent.
 
 5. Is this ask from an active CCB parent task that cannot finish until the child
    result arrives?
-   - Yes: add `--callback`, then stop for CCB continuation.
+   - Yes: add `--chain`, then stop for CCB continuation.
    - No: submit normally and stop.
 
 6. Does the request body include exact transient text?
@@ -57,7 +57,7 @@ Active parent needs short child result:
 
 ```text
 user -> A
-A --callback --compact -> B
+A --chain --compact -> B
 B completes
 CCB continues A with a distilled result.
 ```
@@ -73,7 +73,7 @@ B full report is stored as a completion-reply artifact.
 Active parent needs full child report:
 
 ```text
-A --callback --artifact-reply -> B
+A --chain --artifact-reply -> B
 B full result is stored as artifact
 CCB continues A with the artifact reference.
 ```
@@ -84,7 +84,18 @@ Exact input plus full output:
 A --artifact-io -> B
 ```
 
-Add `--callback` when A is an active parent that depends on B.
+Add `--chain` when A is an active parent that depends on B.
+
+Root/top-level delegation:
+
+```text
+user -> A
+A -> B
+```
+
+Do not add `--chain` to the root A-to-B ask merely because A wants B's final
+answer. `--chain` starts at the first dependent child ask made by an already
+active agent.
 
 ## Nested Routing
 
@@ -94,14 +105,16 @@ An upstream silent edge does not decide downstream routing:
 A --silence -> B
 ```
 
-B still runs an active job. If B needs C's result to finish, B uses callback. If
+B still runs an active job. If B needs C's result to finish, B uses chain. If
 B is only dispatching independent work to C, B uses silence.
 
-Callback chains still require each waiting hop to create its own callback edge:
+Chain dependencies still require each dependent child ask to create its own
+chain edge:
 
 ```text
-A --callback -> B
-B --callback -> C
+user -> A
+A -> B
+B --chain -> C
 ```
 
 CCB propagates continuations after those edges exist.

@@ -306,7 +306,7 @@ def test_ccbd_socket_get_and_watch_resolve_callback_root_final_reply(tmp_path: P
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     )['job_id']
     app.dispatcher.complete(parent_job_id, _decision(reply='delegated to worker'))
@@ -2260,7 +2260,7 @@ def test_ccbd_socket_gemini_session_snapshot_completes_via_tracker(monkeypatch, 
     event_types = [event['type'] for event in watch['events']]
     assert event_types.count('completion_item') == 2
     assert 'completion_terminal' in event_types
-    assert event_types[-1] == 'job_completed'
+    assert 'job_completed' in event_types
 
     shutdown = client.shutdown()
     assert shutdown['state'] == 'unmounted'

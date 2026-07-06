@@ -216,6 +216,29 @@ def test_notification_service_scans_all_registered_projects(tmp_path: Path) -> N
     ]
 
 
+def test_notification_completion_records_project_activity(tmp_path: Path) -> None:
+    client = _ActivityCcbdClient(
+        project_id='proj-demo',
+        project_root='/srv/demo',
+        display_name='demo',
+    )
+    service = _service(client, mobile_dir=tmp_path / 'mobile')
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': pairing['pairing_code']},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+
+    assert service.notification_events_since('/v1/mobile/notifications?once=1', headers) == []
+    client.activity_state = 'idle'
+    events = service.notification_events_since('/v1/mobile/notifications?once=1', headers)
+    projects = service.projects_payload()
+
+    assert events[0]['kind'] == 'task_completed'
+    assert projects['projects'][0]['last_activity_at'] == '2026-06-30T01:02:03Z'
+
+
 def test_notification_http_sse_once_stream_smoke(tmp_path: Path) -> None:
     client = _ActivityCcbdClient(project_id='proj-demo', project_root='/srv/demo', display_name='demo')
     service = _service(client, mobile_dir=tmp_path / 'mobile')

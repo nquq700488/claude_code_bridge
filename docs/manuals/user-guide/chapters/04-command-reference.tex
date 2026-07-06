@@ -27,7 +27,7 @@ ccb --version
 \section{任务提交}
 
 \begin{lstlisting}
-ccb ask [--compact] [--silence] [--callback] [--artifact-request] \
+ccb ask [--compact] [--silence] [--chain] [--artifact-request] \
   [--artifact-reply] [--artifact-io] <target> [--] <message...>
 \end{lstlisting}
 
@@ -36,7 +36,7 @@ flags：
 \begin{itemize}
   \item \cmd{--compact}：请求精简回复。
   \item \cmd{--silence}：成功时静默，失败仍显示。
-  \item \cmd{--callback}：把结果作为新任务回调给当前 agent。
+  \item \cmd{--chain}：把结果作为新任务回调给当前 agent。
   \item \cmd{--artifact-request}：请求体写入 text artifact。
   \item \cmd{--artifact-reply}：回复写入 text artifact。
   \item \cmd{--artifact-io}：同时启用 request 和 reply artifact。
@@ -48,11 +48,11 @@ flags：
 ccb ask archi analyze communication flow
 ccb ask --compact reviewer review latest diff
 ccb ask --silence ops run smoke check
-ccb ask --callback archi collect evidence for this task
-ccb ask --callback --artifact-reply archi collect long evidence
+ccb ask --chain archi collect evidence for this task
+ccb ask --chain --artifact-reply archi collect long evidence
 \end{lstlisting}
 
-active CCB task 中的 nested ask 必须使用 \cmd{--callback} 或 \cmd{--silence}。
+active CCB task 中的 nested ask 必须使用 \cmd{--chain} 或 \cmd{--silence}。
 
 \section{ask diagnostics aliases}
 

@@ -232,7 +232,7 @@ def test_project_restart_agent_handler_blocks_pending_reply_and_callback(monkeyp
     assert 'queue_depth' in reasons
     assert 'pending_reply_delivery' in reasons
     assert 'active_inbound_delivery' in reasons
-    assert 'pending_callback_continuation' in reasons
+    assert 'pending_chain_continuation' in reasons
     assert calls == []
 
 

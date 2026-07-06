@@ -21,7 +21,7 @@ Make result intent the first ask-parameter selector:
 - plain `ask` only for short questions or short handoffs where inline text is
   enough.
 
-`--callback` remains the dependency selector for active parent tasks and
+`--chain` remains the dependency selector for active parent tasks and
 combines with the result-intent choice when the child result is required.
 
 ## Consequences

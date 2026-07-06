@@ -24,5 +24,5 @@ when exact transient input or exact final output matters.
   by policy, not only by byte threshold.
 - Repo-readable files should normally be passed by path instead of copied into
   artifact text.
-- Common combinations such as `--callback --artifact-reply` and `--silence
+- Common combinations such as `--chain --artifact-reply` and `--silence
   --artifact-request` remain valid.

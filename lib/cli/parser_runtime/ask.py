@@ -54,7 +54,7 @@ def _parse_route_options(remaining: list[str], *, error_type):
             if option == '--silence':
                 silence = True
                 continue
-            if option == '--callback':
+            if option == '--chain':
                 callback = True
                 continue
             if option == '--artifact-request':

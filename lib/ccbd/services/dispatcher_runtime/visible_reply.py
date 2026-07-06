@@ -70,7 +70,7 @@ def visible_reply_for_job(dispatcher, job, snapshot=None) -> VisibleReply:
 
 
 def _is_delegated_terminal(terminal: dict | None) -> bool:
-    return bool(terminal and (terminal.get('delegated') or terminal.get('callback_edge_id')))
+    return bool(terminal and (terminal.get('delegated') or terminal.get('chain_edge_id')))
 
 
 def _latest_message_reply_for_job(dispatcher, job):

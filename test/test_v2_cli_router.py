@@ -296,6 +296,35 @@ def test_run_cli_entrypoint_routes_install_mobile_before_phase2(monkeypatch) -> 
     assert calls[0].listen == "127.0.0.1:0"
 
 
+def test_run_cli_entrypoint_routes_internal_mobile_host_serve_before_phase2(monkeypatch) -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+    calls: list[tuple[list[str], Path]] = []
+
+    def _mobile_host(tokens, *, script_root):
+        calls.append((list(tokens), script_root))
+        return 37
+
+    monkeypatch.setattr(entrypoint_runtime, "maybe_handle_mobile_host_serve_command", _mobile_host)
+    monkeypatch.setattr(
+        entrypoint_runtime,
+        "maybe_handle_phase2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("phase2 should not run")),
+    )
+
+    result = run_cli_entrypoint(
+        ["__mobile-host-serve", "--listen", "127.0.0.1:8787"],
+        version="5.2.8",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/not-a-project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 37
+    assert calls == [(["__mobile-host-serve", "--listen", "127.0.0.1:8787"], Path("/tmp/ccb"))]
+
+
 def test_run_cli_entrypoint_routes_rich(monkeypatch) -> None:
     stdout = StringIO()
     stderr = StringIO()
@@ -1365,19 +1394,21 @@ def test_run_cli_entrypoint_prints_ask_help() -> None:
     assert result == 0
     assert "Usage:" in stdout.getvalue()
     assert (
-        "ccb ask [--compact] [--silence] [--callback] [--artifact-request] [--artifact-reply] <target> [--] <message...>"
+        "ccb ask [--compact] [--silence] [--chain] [--artifact-request] [--artifact-reply] <target> [--] <message...>"
         in stdout.getvalue()
     )
     assert "--compact request a distilled reply that preserves key information" in stdout.getvalue()
     assert "--silence request silent-on-success delivery; failures/blockers still surface" in stdout.getvalue()
-    assert "--callback route the result back as a new task to the current agent" in stdout.getvalue()
+    assert "--chain mark this ask as part of the current active task chain" in stdout.getvalue()
     assert "--artifact-request force the request body into a CCB text artifact" in stdout.getvalue()
     assert "--artifact-reply force the final reply into a CCB text artifact" in stdout.getvalue()
     assert "--artifact-io enable both --artifact-request and --artifact-reply" in stdout.getvalue()
     assert "ccb ask --compact agent1 review latest diff" in stdout.getvalue()
     assert "ccb ask --silence agent1 run smoke check" in stdout.getvalue()
-    assert "ccb ask --callback agent2 collect evidence for this task" in stdout.getvalue()
-    assert "ccb ask --callback --artifact-reply agent2 collect long evidence" in stdout.getvalue()
+    assert "ccb ask --chain agent2 collect evidence for this task" in stdout.getvalue()
+    assert "ccb ask --chain --artifact-reply agent2 collect long evidence" in stdout.getvalue()
+    legacy_chain_flag = "--" + "call" + "back"
+    assert legacy_chain_flag not in stdout.getvalue()
     assert "ccb ask get <job_id>    diagnostics-only: inspect one submitted job" in stdout.getvalue()
     assert stderr.getvalue() == ""
 

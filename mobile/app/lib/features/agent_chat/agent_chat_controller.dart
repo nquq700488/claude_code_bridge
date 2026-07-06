@@ -214,14 +214,18 @@ class AgentChatController {
     required CcbAgentConversation conversation,
     required bool shouldScroll,
   }) {
+    final nextConversation = _conversationWithLocalTimingFallback(
+      agentName,
+      conversation,
+    );
     final previousSignature = conversationSignature(
       _remoteConversations[agentName],
     );
-    final nextSignature = conversationSignature(conversation);
+    final nextSignature = conversationSignature(nextConversation);
     final changed = previousSignature != nextSignature;
-    _remoteConversations[agentName] = conversation;
+    _remoteConversations[agentName] = nextConversation;
     _conversationErrors.remove(agentName);
-    _pruneLocalMessagesCoveredByRemote(agentName, conversation);
+    _pruneLocalMessagesCoveredByRemote(agentName, nextConversation);
     recordTimelineAppendState(
       agentName: agentName,
       changed: changed,
@@ -258,13 +262,148 @@ class AgentChatController {
       nextCursor: conversation.nextCursor,
       generatedAt: previous.generatedAt,
     );
-    final nextSignature = conversationSignature(merged);
-    _remoteConversations[agentName] = merged;
+    final next = _conversationWithLocalTimingFallback(agentName, merged);
+    final nextSignature = conversationSignature(next);
+    _remoteConversations[agentName] = next;
     _conversationErrors.remove(agentName);
-    _pruneLocalMessagesCoveredByRemote(agentName, merged);
+    _pruneLocalMessagesCoveredByRemote(agentName, next);
     return AgentChatConversationUpdate(
       changed: previousSignature != nextSignature,
     );
+  }
+
+  CcbAgentConversation _conversationWithLocalTimingFallback(
+    String agentName,
+    CcbAgentConversation conversation,
+  ) {
+    final localItems =
+        _localMessages[agentName] ?? const <CcbConversationItem>[];
+    final localById = <String, CcbConversationItem>{};
+    final localByBody = <String, List<CcbConversationItem>>{};
+    final localWithAttachments = <CcbConversationItem>[];
+    for (final item in localItems) {
+      if (item.kind != CcbConversationItemKind.userMessage ||
+          (!_hasConversationTiming(item) && item.attachments.isEmpty)) {
+        continue;
+      }
+      localById[item.id] = item;
+      final bodyKey = messageBodyKey(item.body);
+      if (bodyKey.isNotEmpty) {
+        localByBody.putIfAbsent(bodyKey, () => []).add(item);
+      }
+      if (item.attachments.isNotEmpty) {
+        localWithAttachments.add(item);
+      }
+    }
+    final hasLocalFallback =
+        localById.isNotEmpty ||
+        localByBody.isNotEmpty ||
+        localWithAttachments.isNotEmpty;
+    var changed = false;
+    final nextItems = <CcbConversationItem>[];
+    for (final rawItem in conversation.items) {
+      final item = normalizePaneAttachmentEcho(rawItem);
+      if (item.body != rawItem.body ||
+          item.attachments.length != rawItem.attachments.length) {
+        changed = true;
+      }
+      if (!hasLocalFallback ||
+          item.kind != CcbConversationItemKind.userMessage ||
+          _hasConversationTiming(item)) {
+        nextItems.add(item);
+        continue;
+      }
+      final idFallback = localById[item.id];
+      final fallback =
+          idFallback ??
+          _takeLocalTimingForBody(localByBody, item.body) ??
+          _takeLocalAttachmentEchoFallback(localWithAttachments, item);
+      if (fallback == null) {
+        nextItems.add(item);
+        continue;
+      }
+      _removeLocalTimingForBody(localByBody, fallback);
+      _removeLocalAttachmentFallback(localWithAttachments, fallback);
+      final useLocalAttachmentPresentation =
+          remoteUserMessageIsPaneAttachmentEcho(remote: item, local: fallback);
+      changed = true;
+      nextItems.add(
+        item.copyWith(
+          body: useLocalAttachmentPresentation ? fallback.body : null,
+          sentAt: fallback.sentAt,
+          startedAt: fallback.startedAt,
+          completedAt: fallback.completedAt,
+          durationMs: fallback.durationMs,
+          attachments:
+              useLocalAttachmentPresentation ? fallback.attachments : null,
+        ),
+      );
+    }
+    if (!changed) {
+      return conversation;
+    }
+    return CcbAgentConversation(
+      projectId: conversation.projectId,
+      agentName: conversation.agentName,
+      namespaceEpoch: conversation.namespaceEpoch,
+      items: nextItems,
+      nextCursor: conversation.nextCursor,
+      generatedAt: conversation.generatedAt,
+    );
+  }
+
+  CcbConversationItem? _takeLocalTimingForBody(
+    Map<String, List<CcbConversationItem>> localByBody,
+    String body,
+  ) {
+    final candidates = localByBody[messageBodyKey(body)];
+    if (candidates == null || candidates.isEmpty) {
+      return null;
+    }
+    return candidates.removeAt(0);
+  }
+
+  void _removeLocalTimingForBody(
+    Map<String, List<CcbConversationItem>> localByBody,
+    CcbConversationItem item,
+  ) {
+    final bodyKey = messageBodyKey(item.body);
+    final candidates = localByBody[bodyKey];
+    if (candidates == null) {
+      return;
+    }
+    candidates.removeWhere((candidate) => candidate.id == item.id);
+    if (candidates.isEmpty) {
+      localByBody.remove(bodyKey);
+    }
+  }
+
+  CcbConversationItem? _takeLocalAttachmentEchoFallback(
+    List<CcbConversationItem> localItems,
+    CcbConversationItem remote,
+  ) {
+    final index = localItems.indexWhere(
+      (local) =>
+          remoteUserMessageIsPaneAttachmentEcho(remote: remote, local: local),
+    );
+    if (index < 0) {
+      return null;
+    }
+    return localItems.removeAt(index);
+  }
+
+  void _removeLocalAttachmentFallback(
+    List<CcbConversationItem> localItems,
+    CcbConversationItem item,
+  ) {
+    localItems.removeWhere((local) => local.id == item.id);
+  }
+
+  bool _hasConversationTiming(CcbConversationItem item) {
+    return item.sentAt != null ||
+        item.startedAt != null ||
+        item.completedAt != null ||
+        item.durationMs != null;
   }
 
   void _pruneLocalMessagesCoveredByRemote(

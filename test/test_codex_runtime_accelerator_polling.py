@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from completion.models import CompletionItemKind, CompletionSourceKind
-from provider_backends.codex.execution_runtime.accelerator import poll_with_accelerator
+from provider_backends.codex.execution_runtime.accelerator import codex_job_descriptor, poll_with_accelerator
 from provider_backends.codex.execution_runtime.polling import poll_submission
 from provider_execution.base import ProviderSubmission
 from runtime_accelerator.client import AcceleratorError
@@ -63,6 +63,23 @@ def test_codex_accelerator_failure_falls_back_to_python(monkeypatch, tmp_path: P
     )
 
     assert poll_with_accelerator(_submission(tmp_path), now="2026-04-06T00:01:00Z") is None
+
+
+def test_codex_accelerator_descriptor_prefers_reader_log_path_over_stale_session_path(tmp_path: Path) -> None:
+    submission = _submission(tmp_path)
+    new_session_path = str(tmp_path / "new-session.jsonl")
+    old_session_path = str(submission.runtime_state["session_path"])
+    submission.runtime_state["state"] = {
+        **submission.runtime_state["state"],
+        "log_path": new_session_path,
+    }
+    submission.runtime_state["session_path"] = old_session_path
+
+    descriptor = codex_job_descriptor(submission)
+
+    assert descriptor is not None
+    assert descriptor["session_path"] == new_session_path
+    assert descriptor["state"]["session_path"] == new_session_path
 
 
 def test_codex_accelerator_builds_poll_result(monkeypatch, tmp_path: Path) -> None:

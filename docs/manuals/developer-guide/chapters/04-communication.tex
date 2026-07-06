@@ -1,6 +1,6 @@
 \chapter{通信逻辑}
 
-通信逻辑是 CCB 的核心。用户看到的是 \cmd{ccb ask agent1 ...}、\cmd{ccb watch job_xxx}、\cmd{ccb inbox talk1}、\cmd{ccb ack talk1}，源码里实际流动的是 envelope、job、message、attempt、inbound event、reply、callback edge 和 completion decision。
+通信逻辑是 CCB 的核心。用户看到的是 \cmd{ccb ask agent1 ...}、\cmd{ccb watch job_xxx}、\cmd{ccb inbox talk1}、\cmd{ccb ack talk1}，源码里实际流动的是 envelope、job、message、attempt、inbound event、reply、chain edge 和 completion decision。
 
 \section{总览}
 
@@ -38,7 +38,7 @@ CLI tokens
 ask 解析入口在 \src{lib/cli/parser_runtime/ask.py}，提交服务在 \src{lib/cli/services/ask.py} 和 \src{lib/cli/services/ask_runtime/submission.py}。它们处理以下职责：
 
 \begin{itemize}
-  \item 解析 \cmd{--compact}、\cmd{--silence}、\cmd{--callback}、\cmd{--artifact-request}、\cmd{--artifact-reply}、\cmd{--artifact-io}。
+  \item 解析 \cmd{--compact}、\cmd{--silence}、\cmd{--chain}、\cmd{--artifact-request}、\cmd{--artifact-reply}、\cmd{--artifact-io}。
   \item 解析 target 和 message body，支持 stdin 追加。
   \item 推断 sender。当前 workspace agent 能识别时使用 agent，否则 fallback 到 user。
   \item 校验 target 和 sender 是否存在于项目配置。
@@ -55,7 +55,7 @@ flag & 语义 \\
 \midrule
 \cmd{--compact} & 请求子 agent 返回提炼结果，同时保留关键信息。 \\
 \cmd{--silence} & 成功时静默，失败或阻塞仍应暴露。适合无需结果的独立工作。 \\
-\cmd{--callback} & 把子任务结果作为 continuation 送回当前 agent。适合 parent 需要 child 结果才能完成的任务。 \\
+\cmd{--chain} & 把子任务结果作为 continuation 送回当前 agent。适合 parent 需要 child 结果才能完成的任务。 \\
 \cmd{--artifact-request} & 强制 request body 存成 CCB text artifact。 \\
 \cmd{--artifact-reply} & 强制 final reply 存成 CCB text artifact。 \\
 \cmd{--artifact-io} & 同时启用 request 和 reply artifact。 \\
@@ -87,7 +87,7 @@ dispatcher facade 位于 \src{lib/ccbd/services/dispatcher_runtime/facade.py}。
 \begin{enumerate}
   \item 验证 sender。
   \item 验证 body artifact。
-  \item 验证 callback request。
+  \item 验证 chain request。
   \item 解析 target agents。
   \item 确认 target availability。
   \item 为每个 target 生成 \src{_JobDraft}。
@@ -135,7 +135,7 @@ finalization 做的事比“保存 reply”更多：
   \item 判断自动 retry。
   \item 处理 reply artifact spill。
   \item 写入 reply record。
-  \item 解析 callback child continuation。
+  \item 解析 result chain child continuation。
   \item 解析 reply delivery terminal state。
 \end{itemize}
 
@@ -211,24 +211,24 @@ submission
 
 用户手册应建议：只要手里有任意 \src{job_id}、\src{message_id} 或 \src{reply_id}，先用 \cmd{trace} 重建上下文，再决定 retry、resubmit、ack 还是 doctor。
 
-\section{callback}
+\section{result chain}
 
-callback 不是同步等待。callback mode 由 \src{route_options["mode"] == "callback"} 表示，核心实现位于 \src{lib/ccbd/services/dispatcher_runtime/callbacks.py} 和 \src{lib/message_bureau/callback_edges.py}。
+result chain 不是同步等待。chain mode 由 \src{route_options["mode"] == "chain"} 表示，核心实现位于 \src{lib/ccbd/services/dispatcher_runtime/callbacks.py} 和 \src{lib/message_bureau/callback_edges.py}。
 
-active CCB task 内发起普通 nested ask 会被拒绝，除非它使用 \cmd{--callback} 或 \cmd{--silence}。这是因为 parent agent 如果需要 child 结果，应当显式建立 callback edge；如果不需要结果，应当显式选择 fire-and-forget。
+active CCB task 内发起普通 nested ask 会被拒绝，除非它使用 \cmd{--chain} 或 \cmd{--silence}。这是因为 parent agent 如果需要 child 结果，应当显式建立 chain edge；如果不需要结果，应当显式选择 fire-and-forget。
 
-callback 的限制包括：
+result chain 的限制包括：
 
 \begin{itemize}
   \item 必须 exactly one target。
   \item 必须存在 active parent job。
   \item 必须存在 parent message。
   \item message-bureau support 必须可用。
-  \item parent 不能已有 outstanding callback。
-  \item callback continuation job 不能再 \cmd{--callback} 回该 continuation 的 original caller；它必须直接完成当前 turn，由 CCB 把 completion 继续向上游投递。
+  \item parent 不能已有 outstanding result chain。
+  \item chain continuation job 不能再 \cmd{--chain} 回该 continuation 的 original caller；它必须直接完成当前 turn，由 CCB 把 completion 继续向上游投递。
 \end{itemize}
 
-child 完成后，CCB 不把 child reply 直接投递给 original caller。它记录 child reply，向 parent agent 提交 continuation job，并更新 callback edge。continuation job 的 final answer 才是上游投递路径；agent 不应再用 ask 把 final result 发送给 original caller。repair 和 timeout sweep 可以恢复或失败 pending callback edges。
+child 完成后，CCB 不把 child reply 直接投递给 original caller。它记录 child reply，向 parent agent 提交 continuation job，并更新 chain edge。continuation job 的 final answer 才是上游投递路径；agent 不应再用 ask 把 final result 发送给 original caller。repair 和 timeout sweep 可以恢复或失败 pending result chain edges。
 
 \section{retry 和 resubmit}
 

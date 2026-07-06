@@ -10,8 +10,10 @@ first decide whether the caller needs no result, a compact result, or a full
 text result; then decide whether request text needs artifact-backed
 preservation.
 
-This plan does not change `ccbd`, the CLI parser, or callback routing behavior.
-It only plans documentation, skill wording, examples, and validation.
+This plan originally scoped skill wording and examples only. The 2026-07-04
+landing also changed the public CLI surface so `--chain` is the only supported
+dependent-child flag, and added dispatcher validation for sequential chain
+continuation behavior.
 
 ## Current Policy Summary
 
@@ -29,13 +31,16 @@ Those answers choose the parameters:
 | Result intent | Concise status, findings, risks, blockers, or next actions | `--compact` |
 | Result intent | Consultation, analysis, report, generated doc, or full text needed | `--artifact-reply` |
 | Result intent | Short question or short handoff; inline answer is enough | plain `ask` |
-| Dependency | Active parent cannot finish until child result arrives | add `--callback` |
+| Dependency | Active parent cannot finish until child result arrives | add `--chain` |
 | Request fidelity | Exact transient logs, diff, JSON/YAML, table, or copied content | add `--artifact-request` |
 | Bidirectional fidelity | Exact request and full reply both need preservation | use `--artifact-io` |
 
 Important boundaries:
 
-- `--callback` and `--silence` describe task relationship and result delivery.
+- `--chain` and `--silence` describe task relationship and result delivery.
+- Top-level/root delegation uses plain `ask`; `--chain` is only for a child ask
+  sent from an active CCB parent task that cannot finish without the child
+  result.
 - Artifact flags describe content preservation and are orthogonal to routing.
 - The 4 KiB automatic spill is only a fallback, not the primary policy.
 - Plain `ask` is intentionally narrow after this update.
@@ -61,7 +66,10 @@ The current policy has recorded static, unit, and external runtime validation:
 
 - inherited ask skill template tests cover result-intent anchors, artifact
   policy wording, command shape, and no-Chinese drift;
-- ask route mapping tests cover callback and artifact route options;
+- ask route mapping tests cover chain and artifact route options;
+- dispatcher/message-bureau tests cover single-child sequential chain rounds
+  (`A -> B`, `B --chain -> C`, `B --chain -> C`, final reply to A) and
+  multi-hop continuation propagation (`A -> B -> C -> D`);
 - external `ccb_test` pressure tests in `/home/bfly/yunwei/test_ccb2` verified
   Codex-to-Claude and Claude-to-Codex decisions for direct, silent, callback,
   artifact-request, artifact-reply, and artifact-io scenarios;
@@ -88,6 +96,9 @@ The current policy has recorded static, unit, and external runtime validation:
   to be migrated into inherited ask skills.
 - [topics/test-and-validation-notes.md](topics/test-and-validation-notes.md):
   static, unit, and external `ccb_test` validation plan.
+- [history/chain-parameter-and-multiround-validation-2026-07-04.md](history/chain-parameter-and-multiround-validation-2026-07-04.md):
+  landed evidence for the `--chain` public flag, root/plain boundary, README
+  cleanup, and sequential B-to-C multi-round chain regression.
 - [decisions/001-keep-routing-explicit-in-skill.md](decisions/001-keep-routing-explicit-in-skill.md):
   record for keeping callback and silence as explicit skill decisions.
 - [decisions/002-treat-artifact-as-content-transport.md](decisions/002-treat-artifact-as-content-transport.md):
@@ -117,14 +128,15 @@ In scope:
 - Inherited ask skill wording for Codex, Claude, Droid, Kimi, and OpenCode.
 - Parameter decision rules and examples.
 - Static tests that keep inherited skill templates aligned.
+- Runtime tests that protect the public chain dependency semantics.
 - External `ccb_test` validation that source-managed skill projection still
   starts and exposes the updated ask skill text.
 
 Out of scope:
 
-- Automatic callback insertion by `ccbd`.
+- Automatic chain insertion by `ccbd`.
 - New CLI warnings or parser behavior.
-- Changes to callback edge, mailbox, reply delivery, or artifact storage
+- Changes to chain edge, mailbox, reply delivery, or artifact storage
   semantics.
 - Provider-specific delegation policies that would make ask behavior drift by
   provider.

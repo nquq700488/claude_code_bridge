@@ -14,6 +14,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+import mobile_gateway.service as service_module
 from mobile_gateway import (
     MobileGatewayError,
     MobileGatewayPairingError,
@@ -233,6 +234,51 @@ class _FakeCcbdClientWithConversationComms(_FakeCcbdClient):
         return payload
 
 
+class _FakeClaudeCcbdClient(_FakeCcbdClient):
+    def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+        payload = super().project_view(schema_version=schema_version)
+        payload['view']['agents'][0]['provider'] = 'claude'
+        return payload
+
+
+class _FakeActivityCcbdClient(_FakeCcbdClient):
+    def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+        payload = super().project_view(schema_version=schema_version)
+        payload['view']['agents'][0].update({
+            'activity_state': 'active',
+            'activity_reason': 'codex_working_status_line',
+            'last_progress_at': '2026-07-04T09:04:00Z',
+        })
+        payload['view']['content']['items'][0]['completed_at'] = '2026-07-04T09:02:00Z'
+        payload['view']['comms'] = [
+            {
+                'id': 'job_mobile_reply',
+                'target': 'mobile',
+                'status': 'completed',
+                'updated_at': '2026-07-04T09:03:00Z',
+                'body_preview': 'reply activity',
+            }
+        ]
+        return payload
+
+
+class _SlowActivityCcbdClient(_FakeActivityCcbdClient):
+    def __init__(self, *, sleep_seconds: float = 0.2) -> None:
+        super().__init__()
+        self.sleep_seconds = sleep_seconds
+
+    def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+        self.calls.append(('project_view_start', schema_version))
+        time.sleep(self.sleep_seconds)
+        payload = _FakeCcbdClient.project_view(self, schema_version=schema_version)
+        payload['view']['agents'][0].update({
+            'activity_state': 'active',
+            'activity_reason': 'codex_working_status_line',
+            'last_progress_at': '2026-07-04T09:30:00Z',
+        })
+        return payload
+
+
 def _service(
     fake: _FakeCcbdClient,
     *,
@@ -242,6 +288,7 @@ def _service(
     terminal_session_factory=None,
     terminal_history_factory=None,
     terminal_message_sender=None,
+    clock=None,
 ) -> MobileGatewayService:
     return MobileGatewayService(
         project_id='proj-demo',
@@ -249,7 +296,7 @@ def _service(
         ccbd_client_factory=lambda: fake,
         mobile_dir=mobile_dir,
         project_registry=project_registry,
-        clock=lambda: '2026-06-18T00:00:00Z',
+        clock=clock or (lambda: '2026-06-18T00:00:00Z'),
         terminal_session_factory=terminal_session_factory,
         terminal_history_factory=terminal_history_factory,
         terminal_message_sender=terminal_message_sender,
@@ -275,7 +322,7 @@ def test_health_and_projects_use_ccbd_without_exposing_tmux_socket() -> None:
     assert health['ccbd']['namespace_epoch'] == 4
     assert projects['projects'][0]['id'] == 'proj-demo'
     assert 'tmux.sock' not in json.dumps(projects)
-    assert fake.calls == [('ping', 'ccbd'), ('ping', 'ccbd')]
+    assert fake.calls == [('ping', 'ccbd'), ('ping', 'ccbd'), ('project_view', 1)]
 
 
 def test_projects_payload_lists_registry_projects_without_exposing_tmux_socket() -> None:
@@ -318,8 +365,209 @@ def test_projects_payload_lists_registry_projects_without_exposing_tmux_socket()
     assert projects['projects'][1]['display_name'] == 'two'
     assert projects['projects'][1]['root'] == '/srv/two'
     assert 'tmux.sock' not in json.dumps(projects)
-    assert first.calls == [('ping', 'ccbd')]
-    assert second.calls == [('ping', 'ccbd')]
+    assert first.calls == [('ping', 'ccbd'), ('project_view', 1)]
+    assert second.calls == [('ping', 'ccbd'), ('project_view', 1)]
+
+
+def test_projects_payload_sorts_by_persisted_recent_activity(tmp_path: Path) -> None:
+    older = _FakeCcbdClient(
+        project_id='proj-older',
+        project_root='/srv/older',
+        display_name='older',
+    )
+    recent = _FakeCcbdClient(
+        project_id='proj-recent',
+        project_root='/srv/recent',
+        display_name='recent',
+    )
+    service = _service(
+        older,
+        mobile_dir=tmp_path / 'mobile',
+        project_registry=MobileGatewayProjectRegistry(
+            [
+                MobileGatewayProject(
+                    project_id='proj-older',
+                    project_root=Path('/srv/older'),
+                    ccbd_client_factory=lambda: older,
+                ),
+                MobileGatewayProject(
+                    project_id='proj-recent',
+                    project_root=Path('/srv/recent'),
+                    ccbd_client_factory=lambda: recent,
+                ),
+            ]
+        ),
+    )
+    assert service._project_activity_store is not None
+    service._project_activity_store.record_summary(
+        project_id='proj-older',
+        summary={'last_activity_at': '2026-07-04T09:00:00Z'},
+        checked_at='2026-06-18T00:00:00Z',
+    )
+    service._project_activity_store.record_summary(
+        project_id='proj-recent',
+        summary={'last_activity_at': '2026-07-04T09:05:00Z'},
+        checked_at='2026-06-18T00:00:00Z',
+    )
+
+    projects = service.projects_payload()
+
+    assert [item['id'] for item in projects['projects']] == [
+        'proj-recent',
+        'proj-older',
+    ]
+
+
+def test_projects_payload_includes_project_activity_summary() -> None:
+    fake = _FakeActivityCcbdClient()
+    service = _service(fake)
+
+    projects = service.projects_payload()
+
+    assert projects['projects'][0]['has_working_agents'] is True
+    assert projects['projects'][0]['working_agent_count'] == 1
+    assert projects['projects'][0]['last_activity_at'] == '2026-07-04T09:04:00Z'
+    assert fake.calls == [('ping', 'ccbd'), ('project_view', 1)]
+
+
+def test_working_project_refresh_does_not_overwrite_recent_send_activity(
+    tmp_path: Path,
+) -> None:
+    working = _FakeActivityCcbdClient(
+        project_id='proj-working',
+        project_root='/srv/working',
+        display_name='working',
+    )
+    recent = _FakeCcbdClient(
+        project_id='proj-recent',
+        project_root='/srv/recent',
+        display_name='recent',
+    )
+    service = _service(
+        working,
+        mobile_dir=tmp_path / 'mobile',
+        project_registry=MobileGatewayProjectRegistry(
+            [
+                MobileGatewayProject(
+                    project_id='proj-working',
+                    project_root=Path('/srv/working'),
+                    ccbd_client_factory=lambda: working,
+                ),
+                MobileGatewayProject(
+                    project_id='proj-recent',
+                    project_root=Path('/srv/recent'),
+                    ccbd_client_factory=lambda: recent,
+                ),
+            ]
+        ),
+        clock=lambda: '2026-07-05T00:00:00Z',
+    )
+    assert service._project_activity_store is not None
+    service._project_activity_store.record_summary(
+        project_id='proj-recent',
+        summary={'last_activity_at': '2026-07-04T09:10:00Z'},
+        checked_at='2026-07-04T09:10:00Z',
+    )
+
+    projects = service.projects_payload()
+
+    assert [item['id'] for item in projects['projects']] == [
+        'proj-recent',
+        'proj-working',
+    ]
+    working_payload = projects['projects'][1]
+    assert working_payload['has_working_agents'] is True
+    assert working_payload['last_activity_at'] == '2026-07-04T09:04:00Z'
+
+
+def test_projects_payload_reuses_cached_project_activity_summary(tmp_path: Path) -> None:
+    fake = _FakeActivityCcbdClient()
+    service = _service(fake, mobile_dir=tmp_path / 'mobile')
+
+    first = service.projects_payload()
+    second = service.projects_payload()
+
+    assert first['projects'][0]['last_activity_at'] == '2026-07-04T09:04:00Z'
+    assert second['projects'][0]['last_activity_at'] == '2026-07-04T09:04:00Z'
+    assert fake.calls == [
+        ('ping', 'ccbd'),
+        ('project_view', 1),
+        ('ping', 'ccbd'),
+    ]
+
+
+def test_projects_payload_returns_cached_activity_when_refresh_is_slow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(service_module, '_PROJECT_ACTIVITY_REFRESH_TTL_SECONDS', 0)
+    monkeypatch.setattr(service_module, '_PROJECT_ACTIVITY_REFRESH_BUDGET_SECONDS', 0.03)
+    monkeypatch.setattr(service_module, '_PROJECT_ACTIVITY_REFRESH_PER_PROJECT_SECONDS', 0.02)
+    fake = _SlowActivityCcbdClient(sleep_seconds=0.5)
+    service = _service(
+        fake,
+        mobile_dir=tmp_path / 'mobile',
+        project_registry=MobileGatewayProjectRegistry(
+            [
+                MobileGatewayProject(
+                    project_id='proj-demo',
+                    project_root=Path('/srv/demo'),
+                    ccbd_client_factory=lambda: fake,
+                ),
+            ]
+        ),
+    )
+    assert service._project_activity_store is not None
+    service._project_activity_store.record_summary(
+        project_id='proj-demo',
+        summary={
+            'last_activity_at': '2026-07-04T09:05:00Z',
+            'has_working_agents': True,
+            'working_agent_count': 1,
+        },
+        checked_at='2026-06-17T23:59:00Z',
+    )
+
+    started = time.monotonic()
+    projects = service.projects_payload()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < fake.sleep_seconds / 2
+    assert projects['projects'][0]['last_activity_at'] == '2026-07-04T09:05:00Z'
+    assert projects['projects'][0]['has_working_agents'] is True
+    assert fake.calls[:2] == [('ping', 'ccbd'), ('project_view_start', 1)]
+
+
+def test_project_view_records_last_opened_for_project_list(tmp_path: Path) -> None:
+    fake = _FakeCcbdClient()
+    service = _service(fake, mobile_dir=tmp_path / 'mobile')
+
+    service.project_view_payload('proj-demo')
+    projects = service.projects_payload()
+
+    assert projects['projects'][0]['last_opened_at'] == '2026-06-18T00:00:00Z'
+
+
+def test_focus_agent_records_project_activity_for_project_list(tmp_path: Path) -> None:
+    fake = _FakeCcbdClient()
+    service = _service(fake, mobile_dir=tmp_path / 'mobile')
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view', 'focus'),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    service.dispatch_post(
+        '/v1/projects/proj-demo/focus-agent',
+        {'agent': 'mobile', 'namespace_epoch': 4},
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    projects = service.projects_payload()
+
+    assert projects['projects'][0]['last_activity_at'] == '2026-06-18T00:00:00Z'
 
 
 def test_projects_payload_omits_unreachable_registry_projects() -> None:
@@ -356,7 +604,7 @@ def test_projects_payload_omits_unreachable_registry_projects() -> None:
     assert projects['projects'][0]['health'] == 'healthy'
     assert projects['projects'][0]['mount_state'] == 'mounted'
     assert '/tmp/private.sock' not in json.dumps(projects)
-    assert healthy.calls == [('ping', 'ccbd')]
+    assert healthy.calls == [('ping', 'ccbd'), ('project_view', 1)]
     assert stale.calls == [('ping', 'ccbd')]
 
 
@@ -404,7 +652,7 @@ def test_projects_payload_omits_registered_projects_that_are_not_mounted_and_hea
     projects = service.projects_payload()
 
     assert [item['id'] for item in projects['projects']] == ['proj-one']
-    assert healthy.calls == [('ping', 'ccbd')]
+    assert healthy.calls == [('ping', 'ccbd'), ('project_view', 1)]
     assert unmounted.calls == [('ping', 'ccbd')]
     assert degraded.calls == [('ping', 'ccbd')]
 
@@ -453,7 +701,8 @@ def test_projects_payload_checks_many_project_health_states_concurrently() -> No
         f'proj-{index:02d}' for index in range(12)
     ]
     assert activity['max_active'] > 1
-    assert all(client.calls == [('ping', 'ccbd')] for client in clients)
+    assert all(client.calls[0] == ('ping', 'ccbd') for client in clients)
+    assert sum(('project_view', 1) in client.calls for client in clients) <= 3
 
 
 def test_project_view_redacts_server_tmux_evidence() -> None:
@@ -694,10 +943,13 @@ def test_agent_conversation_includes_completed_comms_reply_preview(tmp_path: Pat
     assert items[3]['body'] == 'older answer from mobile_probe'
     assert items[4]['kind'] == 'user_message'
     assert items[4]['body'] == 'question from phone'
+    assert items[4]['sent_at'] == '2026-06-18T00:00:02Z'
     assert items[4]['attachments'][0]['file_id'] == 'mobile-file-1'
     assert items[4]['attachments'][0]['file_name'] == 'probe.txt'
     assert items[5]['kind'] == 'agent_reply'
     assert items[5]['body'] == 'answer from mobile_probe'
+    assert items[5]['sent_at'] == '2026-06-18T00:00:02Z'
+    assert items[5]['completed_at'] == '2026-06-18T00:00:02Z'
     assert 'wrong target' not in json.dumps(payload)
 
 
@@ -818,6 +1070,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
                 },
             },
             {
+                'timestamp': '2026-06-25T12:00:00.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'user_message',
@@ -825,6 +1078,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
                 },
             },
             {
+                'timestamp': '2026-06-25T12:00:01.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'agent_message',
@@ -832,6 +1086,7 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
                 },
             },
             {
+                'timestamp': '2026-06-25T12:00:02.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'user_message',
@@ -912,6 +1167,395 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
     assert 'stale pane answer' not in public_json
 
 
+def test_agent_conversation_keeps_codex_response_assistant_with_event_user(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='thread-native',
+        records=[
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'response_item',
+                'payload': {
+                    'type': 'message',
+                    'role': 'user',
+                    'content': [{'type': 'input_text', 'text': 'hidden context'}],
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'visible prompt',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:02.000Z',
+                'type': 'response_item',
+                'payload': {
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [{'type': 'output_text', 'text': 'live partial answer'}],
+                },
+            },
+        ],
+    )
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    native_items = [
+        item for item in payload['conversation']['items']
+        if item.get('source') == 'provider_native/codex'
+    ]
+    assert [(item['kind'], item['body']) for item in native_items] == [
+        ('user_message', 'visible prompt'),
+        ('agent_reply', 'live partial answer'),
+    ]
+    assert native_items[1]['sent_at'] == '2026-06-25T12:00:02.000Z'
+    assert 'completed_at' not in native_items[1]
+    assert 'hidden context' not in json.dumps(payload)
+
+
+def test_agent_conversation_completes_codex_response_assistant_from_task_marker(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='thread-native',
+        records=[
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'visible prompt',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'response_item',
+                'payload': {
+                    'type': 'message',
+                    'role': 'assistant',
+                    'content': [{'type': 'output_text', 'text': 'completed answer'}],
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:05.000Z',
+                'type': 'event_msg',
+                'payload': {'type': 'task_complete'},
+            },
+        ],
+    )
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    native_items = [
+        item for item in payload['conversation']['items']
+        if item.get('source') == 'provider_native/codex'
+    ]
+    assert [(item['kind'], item['body']) for item in native_items] == [
+        ('user_message', 'visible prompt'),
+        ('agent_reply', 'completed answer'),
+    ]
+    assert native_items[1]['started_at'] == '2026-06-25T12:00:01.000Z'
+    assert native_items[1]['completed_at'] == '2026-06-25T12:00:05.000Z'
+    assert native_items[1]['sent_at'] == '2026-06-25T12:00:05.000Z'
+    assert native_items[1]['duration_ms'] == 4000
+
+
+def test_agent_conversation_prefers_claude_native_transcript(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    snapshot_dir = project_root / '.ccb' / 'ccbd' / 'snapshots'
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / 'job_mobile_probe.json').write_text(
+        json.dumps({'latest_decision': {'reply': 'stale ask snapshot'}}),
+        encoding='utf-8',
+    )
+    _write_claude_transcript(
+        project_root,
+        agent='mobile',
+        session_id='claude-session-native',
+        records=[
+            {
+                'type': 'system',
+                'timestamp': '2026-06-25T11:59:59.000Z',
+                'content': 'hidden system prompt',
+            },
+            {
+                'uuid': 'user-1',
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': [{'type': 'text', 'text': 'claude native question'}],
+                },
+            },
+            {
+                'uuid': 'assistant-1',
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'assistant',
+                'message': {
+                    'id': 'msg_1',
+                    'role': 'assistant',
+                    'content': [
+                        {'type': 'thinking', 'text': 'hidden thinking'},
+                        {'type': 'text', 'text': 'claude native answer'},
+                    ],
+                },
+            },
+            {
+                'uuid': 'user-2',
+                'timestamp': '2026-06-25T12:00:02.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': [
+                        {
+                            'type': 'text',
+                            'text': (
+                                'CCB_REQ_ID: job_mobile_probe\n\n'
+                                'clean claude prompt\n\n'
+                                'CCB reply guidance:\n'
+                                '- Answer directly and concisely.\n'
+                            ),
+                        }
+                    ],
+                },
+            },
+        ],
+    )
+
+    def history_factory(target):
+        return {
+            'history_scope': 'tmux_scrollback',
+            'source_pane_id': target.pane_id,
+            'blocks': [
+                {
+                    'id': 'old-input',
+                    'type': 'command',
+                    'title': 'Command',
+                    'text': 'stale claude pane prompt',
+                },
+                {
+                    'id': 'old-output',
+                    'type': 'log',
+                    'title': 'Terminal output',
+                    'text': 'stale claude pane answer',
+                },
+            ],
+        }
+
+    service = _service(
+        _FakeClaudeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+        terminal_history_factory=history_factory,
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    items = payload['conversation']['items']
+    assert [item.get('source') for item in items] == [
+        'provider_native/claude',
+        'provider_native/claude',
+        'provider_native/claude',
+    ]
+    assert [(item['kind'], item['body']) for item in items] == [
+        ('user_message', 'claude native question'),
+        ('agent_reply', 'claude native answer'),
+        ('user_message', 'clean claude prompt'),
+    ]
+    assert items[0]['sent_at'] == '2026-06-25T12:00:00.000Z'
+    assert items[1]['completed_at'] == '2026-06-25T12:00:01.000Z'
+    public_json = json.dumps(payload)
+    assert 'hidden system prompt' not in public_json
+    assert 'hidden thinking' not in public_json
+    assert 'CCB_REQ_ID' not in public_json
+    assert 'CCB reply guidance' not in public_json
+    assert 'stale ask snapshot' not in public_json
+    assert 'stale claude pane prompt' not in public_json
+    assert 'stale claude pane answer' not in public_json
+
+
+def test_agent_conversation_discovers_claude_native_transcript_from_projects_root(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    _write_claude_transcript(
+        project_root,
+        agent='mobile',
+        session_id='claude-session-discovered',
+        records=[
+            {
+                'uuid': 'user-1',
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'user',
+                'message': {
+                    'role': 'user',
+                    'content': [{'type': 'text', 'text': 'discovered question'}],
+                },
+            },
+            {
+                'uuid': 'assistant-1',
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'assistant',
+                'message': {
+                    'role': 'assistant',
+                    'content': [{'type': 'text', 'text': 'discovered answer'}],
+                },
+            },
+        ],
+        bind_session_path=False,
+        use_project_dir=True,
+    )
+
+    def history_factory(target):
+        return {
+            'history_scope': 'tmux_scrollback',
+            'source_pane_id': target.pane_id,
+            'blocks': [
+                {
+                    'id': 'stale-output',
+                    'type': 'log',
+                    'title': 'Terminal output',
+                    'text': 'stale fallback output',
+                },
+            ],
+        }
+
+    service = _service(
+        _FakeClaudeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+        terminal_history_factory=history_factory,
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    items = payload['conversation']['items']
+    assert [item.get('source') for item in items] == [
+        'provider_native/claude',
+        'provider_native/claude',
+    ]
+    assert [(item['kind'], item['body']) for item in items] == [
+        ('user_message', 'discovered question'),
+        ('agent_reply', 'discovered answer'),
+    ]
+    assert 'stale fallback output' not in json.dumps(payload)
+
+
+def test_agent_conversation_does_not_use_terminal_history_for_claude_without_native_transcript(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+
+    def history_factory(target):
+        return {
+            'history_scope': 'tmux_scrollback',
+            'source_pane_id': target.pane_id,
+            'blocks': [
+                {
+                    'id': 'stale-output',
+                    'type': 'log',
+                    'title': 'Terminal output',
+                    'text': 'stale tmux fallback output',
+                },
+            ],
+        }
+
+    service = _service(
+        _FakeClaudeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+        terminal_history_factory=history_factory,
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    items = payload['conversation']['items']
+    assert all('tmux_scrollback' not in str(item.get('source')) for item in items)
+    assert [item.get('kind') for item in items[:2]] == ['status_event', 'agent_reply']
+    assert items[1]['body'] == 'Ready for the next task.'
+    assert 'stale tmux fallback output' not in json.dumps(payload)
+
+
 def test_agent_conversation_groups_consecutive_codex_native_agent_messages(
     tmp_path: Path,
 ) -> None:
@@ -922,6 +1566,7 @@ def test_agent_conversation_groups_consecutive_codex_native_agent_messages(
         thread_id='thread-native',
         records=[
             {
+                'timestamp': '2026-06-25T12:00:00.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'user_message',
@@ -929,6 +1574,7 @@ def test_agent_conversation_groups_consecutive_codex_native_agent_messages(
                 },
             },
             {
+                'timestamp': '2026-06-25T12:00:01.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'agent_message',
@@ -936,6 +1582,7 @@ def test_agent_conversation_groups_consecutive_codex_native_agent_messages(
                 },
             },
             {
+                'timestamp': '2026-06-25T12:00:02.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'agent_message',
@@ -943,11 +1590,17 @@ def test_agent_conversation_groups_consecutive_codex_native_agent_messages(
                 },
             },
             {
+                'timestamp': '2026-06-25T12:00:03.000Z',
                 'type': 'event_msg',
                 'payload': {
                     'type': 'agent_message',
                     'message': 'final result',
                 },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:03.000Z',
+                'type': 'event_msg',
+                'payload': {'type': 'task_complete'},
             },
         ],
     )
@@ -978,6 +1631,11 @@ def test_agent_conversation_groups_consecutive_codex_native_agent_messages(
         ('user_message', 'start long task'),
         ('agent_reply', 'step one complete\n\nstep two complete\n\nfinal result'),
     ]
+    assert native_items[0]['sent_at'] == '2026-06-25T12:00:00.000Z'
+    assert native_items[1]['started_at'] == '2026-06-25T12:00:01.000Z'
+    assert native_items[1]['completed_at'] == '2026-06-25T12:00:03.000Z'
+    assert native_items[1]['sent_at'] == '2026-06-25T12:00:03.000Z'
+    assert native_items[1]['duration_ms'] == 2000
 
 
 def test_agent_conversation_starts_new_codex_agent_group_after_user_message(
@@ -1200,6 +1858,10 @@ def test_agent_conversation_pages_codex_native_by_record_timestamp_across_thread
         'fresh pane question',
         'fresh pane answer',
     ]
+    assert [item['sent_at'] for item in latest_items] == [
+        '2026-06-25T12:02:00.000Z',
+        '2026-06-25T12:02:01.000Z',
+    ]
     assert latest['conversation']['next_cursor'] == '2'
 
     _, older = service.dispatch_get(
@@ -1210,6 +1872,431 @@ def test_agent_conversation_pages_codex_native_by_record_timestamp_across_thread
     assert [item['body'] for item in older['conversation']['items']] == [
         'older backfill question',
         'older backfill answer',
+    ]
+
+
+def test_agent_conversation_tails_large_codex_rollout_without_parsing_head(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    sentinel = 'must not parse old rollout head'
+    records: list[dict[str, object]] = [
+        {
+            'timestamp': '2026-06-25T11:00:00.000Z',
+            'type': 'event_msg',
+            'payload': {'type': 'user_message', 'message': sentinel},
+        }
+    ]
+    records.extend(
+        {
+            'timestamp': f'2026-06-25T11:10:{index % 60:02d}.000Z',
+            'type': 'rollout_noise',
+            'payload': {'ignored': 'x' * 96},
+        }
+        for index in range(7000)
+    )
+    records.extend(
+        [
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'latest large rollout question',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'latest large rollout step one',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:02.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'latest large rollout final',
+                },
+            },
+        ]
+    )
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='large-thread',
+        records=records,
+    )
+    original_event_parser = service_module._codex_event_message_conversation_item
+
+    def fail_if_head_is_parsed(payload: dict[str, object], **kwargs):
+        if payload.get('message') == sentinel:
+            raise AssertionError('old rollout head was parsed')
+        return original_event_parser(payload, **kwargs)
+
+    monkeypatch.setattr(
+        service_module,
+        '_codex_event_message_conversation_item',
+        fail_if_head_is_parsed,
+    )
+    service = _service(
+        _FakeCcbdClientWithConversationComms(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    conversation = payload['conversation']
+    assert conversation['next_cursor'].startswith('codex-before:')
+    assert [(item['kind'], item['body']) for item in conversation['items']] == [
+        ('user_message', 'latest large rollout question'),
+        (
+            'agent_reply',
+            'latest large rollout step one\n\nlatest large rollout final',
+        ),
+    ]
+    assert sentinel not in json.dumps(payload)
+
+
+def test_agent_conversation_pages_older_items_from_codex_tail_cursor(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    records: list[dict[str, object]] = [
+        {
+            'timestamp': '2026-06-25T10:00:00.000Z',
+            'type': 'event_msg',
+            'payload': {
+                'type': 'user_message',
+                'message': 'older large rollout question',
+            },
+        },
+        {
+            'timestamp': '2026-06-25T10:00:01.000Z',
+            'type': 'event_msg',
+            'payload': {
+                'type': 'agent_message',
+                'message': 'older large rollout answer',
+            },
+        },
+    ]
+    records.extend(
+        {
+            'timestamp': f'2026-06-25T11:20:{index % 60:02d}.000Z',
+            'type': 'rollout_noise',
+            'payload': {'ignored': 'x' * 96},
+        }
+        for index in range(1300)
+    )
+    records.extend(
+        [
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'latest large rollout question',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'latest large rollout answer',
+                },
+            },
+        ]
+    )
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='large-thread',
+        records=records,
+    )
+    service = _service(
+        _FakeCcbdClientWithConversationComms(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+    _, latest = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2',
+        headers,
+    )
+
+    _, older = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4'
+        f'&limit=2&cursor={latest["conversation"]["next_cursor"]}',
+        headers,
+    )
+
+    assert [(item['kind'], item['body']) for item in older['conversation']['items']] == [
+        ('user_message', 'older large rollout question'),
+        ('agent_reply', 'older large rollout answer'),
+    ]
+    assert 'next_cursor' not in older['conversation']
+
+
+def test_agent_conversation_caches_codex_latest_page_until_rollout_changes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    records: list[dict[str, object]] = [
+        {
+            'timestamp': '2026-06-25T10:00:00.000Z',
+            'type': 'event_msg',
+            'payload': {
+                'type': 'user_message',
+                'message': 'older cached question',
+            },
+        },
+        {
+            'timestamp': '2026-06-25T10:00:01.000Z',
+            'type': 'event_msg',
+            'payload': {
+                'type': 'agent_message',
+                'message': 'older cached answer',
+            },
+        },
+    ]
+    records.extend(
+        {
+            'timestamp': f'2026-06-25T11:20:{index % 60:02d}.000Z',
+            'type': 'rollout_noise',
+            'payload': {'ignored': 'x' * 96},
+        }
+        for index in range(1300)
+    )
+    records.extend(
+        [
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'cached latest question',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'cached latest answer',
+                },
+            },
+        ]
+    )
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='large-cache-thread',
+        records=records,
+    )
+    service = _service(
+        _FakeCcbdClientWithConversationComms(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+
+    _, first = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2',
+        headers,
+    )
+    assert [item['body'] for item in first['conversation']['items']] == [
+        'cached latest question',
+        'cached latest answer',
+    ]
+
+    original_rollout_parser = service_module._codex_rollout_conversation_items
+
+    def fail_if_rollout_is_parsed(*args, **kwargs):
+        raise AssertionError('cached latest page should not parse rollout again')
+
+    monkeypatch.setattr(
+        service_module,
+        '_codex_rollout_conversation_items',
+        fail_if_rollout_is_parsed,
+    )
+    _, second = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2',
+        headers,
+    )
+    assert [item['body'] for item in second['conversation']['items']] == [
+        'cached latest question',
+        'cached latest answer',
+    ]
+
+    monkeypatch.setattr(
+        service_module,
+        '_codex_rollout_conversation_items',
+        original_rollout_parser,
+    )
+    rollout_path = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'mobile'
+        / 'provider-state'
+        / 'codex'
+        / 'home'
+        / 'sessions'
+        / '2026'
+        / '06'
+        / '25'
+        / 'rollout-large-cache-thread.jsonl'
+    )
+    with rollout_path.open('a', encoding='utf-8') as handle:
+        for record in [
+            {
+                'timestamp': '2026-06-25T12:01:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'fresh changed question',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:01:01.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'fresh changed answer',
+                },
+            },
+        ]:
+            handle.write(f'{json.dumps(record)}\n')
+
+    _, changed = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2',
+        headers,
+    )
+    assert [item['body'] for item in changed['conversation']['items']] == [
+        'fresh changed question',
+        'fresh changed answer',
+    ]
+
+
+def test_agent_conversation_cache_keeps_codex_limit_and_cursor_separate(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    records: list[dict[str, object]] = [
+        {
+            'timestamp': '2026-06-25T10:00:00.000Z',
+            'type': 'event_msg',
+            'payload': {'type': 'user_message', 'message': 'turn one question'},
+        },
+        {
+            'timestamp': '2026-06-25T10:00:01.000Z',
+            'type': 'event_msg',
+            'payload': {'type': 'agent_message', 'message': 'turn one answer'},
+        },
+    ]
+    records.extend(
+        {
+            'timestamp': f'2026-06-25T11:00:{index % 60:02d}.000Z',
+            'type': 'rollout_noise',
+            'payload': {'ignored': 'x' * 96},
+        }
+        for index in range(1300)
+    )
+    records.extend(
+        [
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {'type': 'user_message', 'message': 'turn two question'},
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'event_msg',
+                'payload': {'type': 'agent_message', 'message': 'turn two answer'},
+            },
+        ]
+    )
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='large-limit-cursor-thread',
+        records=records,
+    )
+    service = _service(
+        _FakeCcbdClientWithConversationComms(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+    headers = {'Authorization': f'Bearer {claim["device_token"]}'}
+
+    _, limit_one = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=1',
+        headers,
+    )
+    assert [item['body'] for item in limit_one['conversation']['items']] == [
+        'turn two answer',
+    ]
+
+    _, latest = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2',
+        headers,
+    )
+    assert [item['body'] for item in latest['conversation']['items']] == [
+        'turn two question',
+        'turn two answer',
+    ]
+    assert latest['conversation']['next_cursor'].startswith('codex-before:')
+
+    _, older = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4'
+        f'&limit=2&cursor={latest["conversation"]["next_cursor"]}',
+        headers,
+    )
+    assert [item['body'] for item in older['conversation']['items']] == [
+        'turn one question',
+        'turn one answer',
     ]
 
 
@@ -1270,6 +2357,11 @@ def test_agent_conversation_pages_completed_job_history_beyond_project_view_limi
     latest_conversation = latest['conversation']
 
     assert latest_conversation['next_cursor']
+    latest_items = latest_conversation['items']
+    assert latest_items[-2]['sent_at'] == '2026-06-18T00:55:00Z'
+    assert latest_items[-1]['started_at'] == '2026-06-18T00:55:00Z'
+    assert latest_items[-1]['completed_at'] == '2026-06-18T00:55:01Z'
+    assert latest_items[-1]['duration_ms'] == 1000
     assert any(
         item['id'] == 'reply-job_history_55'
         and item['body'] == 'history answer 55'
@@ -1535,6 +2627,8 @@ def test_agent_message_submit_sends_plain_text_to_agent_pane(tmp_path: Path) -> 
     response_json = json.dumps(payload)
     assert 'terminal_input' not in response_json
     assert 'tmux.sock' not in response_json
+    projects = service.projects_payload()
+    assert projects['projects'][0]['last_activity_at'] == '2026-06-18T00:00:00Z'
 
 
 def test_agent_message_submit_accepts_attachment_only_message(tmp_path: Path) -> None:
@@ -1901,6 +2995,30 @@ def test_pairing_claim_creates_hashed_device_records_and_audit(tmp_path: Path) -
     assert denied_view.value.status_code == 401
 
 
+def test_reusable_pairing_can_claim_multiple_devices_until_revoked(tmp_path: Path) -> None:
+    store = MobileGatewayPairingStore(tmp_path / 'mobile')
+    pairing = store.create_pairing_payload(
+        project_id='host-demo',
+        gateway_url='https://mobile.example.com',
+        route_provider='tailnet',
+        scopes=('view', 'notify'),
+        expires_seconds=None,
+        reusable_claims=True,
+    )
+    pairing_code = str(pairing['pairing_code'])
+
+    first = store.claim_pairing(pairing_code=pairing_code, device_name='Phone A')
+    second = store.claim_pairing(pairing_code=pairing_code, device_name='Phone B')
+
+    assert first['device']['device_id'] != second['device']['device_id']
+    assert store.pairing_code_is_claimable(pairing_code)
+    store.revoke_pairing(str(pairing['pairing_id']), reason='mobile_update_refreshed')
+    assert not store.pairing_code_is_claimable(pairing_code)
+    with pytest.raises(MobileGatewayPairingError) as denied:
+        store.claim_pairing(pairing_code=pairing_code, device_name='Phone C')
+    assert denied.value.reason == 'revoked'
+
+
 def test_host_local_device_revoke_lists_devices_and_revokes_terminal_handles(tmp_path: Path) -> None:
     store = MobileGatewayPairingStore(tmp_path / 'mobile')
     pairing = store.create_pairing_payload(
@@ -1938,6 +3056,38 @@ def test_host_local_device_revoke_lists_devices_and_revokes_terminal_handles(tmp
     assert 'device_revoked' in audit
     assert 'terminal_revoked' in audit
     assert str(handle['terminal_token']) not in audit
+
+
+def test_terminal_replacement_handle_rejects_previous_handle_resume_cursor(tmp_path: Path) -> None:
+    store = MobileGatewayPairingStore(tmp_path / 'mobile')
+    first = store.create_terminal_handle(
+        project_id='proj-demo',
+        device_id='dev-demo',
+        target_epoch=4,
+        target_summary={'project_id': 'proj-demo', 'agent': 'mobile'},
+        geometry={'columns': 80, 'rows': 24},
+    )
+    store.record_terminal_output_sequence(
+        terminal_id=str(first['terminal_id']),
+        terminal_token=str(first['terminal_token']),
+        sequence=7,
+    )
+    replacement = store.create_terminal_handle(
+        project_id='proj-demo',
+        device_id='dev-demo',
+        target_epoch=4,
+        target_summary={'project_id': 'proj-demo', 'agent': 'mobile'},
+        geometry={'columns': 80, 'rows': 24},
+    )
+
+    with pytest.raises(MobileGatewayPairingError) as denied:
+        store.authenticate_terminal_token(
+            terminal_id=str(replacement['terminal_id']),
+            terminal_token=str(replacement['terminal_token']),
+            resume_cursor=7,
+        )
+
+    assert denied.value.reason == 'stale_resume_cursor'
 
 
 def test_terminal_open_requires_terminal_scope_and_mints_hashed_token(tmp_path: Path) -> None:
@@ -2127,10 +3277,15 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
             'tmux',
             '-S',
             '/tmp/ccb-demo/tmux.sock',
-            'attach-session',
+            'capture-pane',
+            '-p',
+            '-e',
             '-t',
             '%2',
+            '-S',
+            '-30',
         ]
+        assert 'attach-session' not in sessions[0].target.command
         assert sessions[0].target.geometry.columns == 100
         assert sessions[0].target.geometry.rows == 30
 
@@ -2138,6 +3293,8 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
         _wait_for(lambda: sessions[0].writes == [b'a'])
         _websocket_send_json(sock, {'type': 'paste', 'seq': 2, 'text': 'hello paste'})
         _wait_for(lambda: sessions[0].pastes == ['hello paste'])
+        projects = service.projects_payload()
+        assert projects['projects'][0]['last_activity_at'] == '2026-06-18T00:00:00Z'
         _websocket_send_json(sock, {'type': 'resize', 'columns': 120, 'rows': 36})
         _wait_for(lambda: len(sessions[0].resizes) == 1)
         assert sessions[0].resizes[0].columns == 120
@@ -2250,7 +3407,7 @@ def test_terminal_websocket_resumes_after_transport_disconnect_with_matching_cur
         thread.join(timeout=2)
 
 
-def test_terminal_websocket_rejects_stale_resume_cursor(tmp_path: Path) -> None:
+def test_terminal_websocket_accepts_stale_output_resume_cursor(tmp_path: Path) -> None:
     sessions: list[_FakeTerminalSession] = []
     service = _service(
         _FakeCcbdClient(),
@@ -2289,6 +3446,9 @@ def test_terminal_websocket_rejects_stale_resume_cursor(tmp_path: Path) -> None:
         sock = None
         _wait_for(lambda: sessions[0].closed)
 
+        stored_after_disconnect = (tmp_path / 'mobile' / 'terminal-tokens.jsonl').read_text(encoding='utf-8')
+        assert '"last_output_seq": 1' in stored_after_disconnect
+
         stale_sock = _websocket_connect(host, port, f'/v1/terminals/{handle["terminal_id"]}')
         _websocket_send_json(
             stale_sock,
@@ -2299,16 +3459,83 @@ def test_terminal_websocket_rejects_stale_resume_cursor(tmp_path: Path) -> None:
                 'resume_cursor': 0,
             },
         )
-        error = _websocket_read_until(stale_sock, 'error')
-        assert error['code'] == 'stale_resume_cursor'
-        closed = _websocket_read_until(stale_sock, 'closed')
-        assert closed['reason'] == 'stale_resume_cursor'
-        assert len(sessions) == 1
+        open_ack = _websocket_read_until(stale_sock, 'open')
+        assert open_ack['resume_cursor'] == 1
+        output = _websocket_read_until(stale_sock, 'output')
+        assert output['seq'] == 2
+        assert len(sessions) == 2
+        stored_after_resume = (tmp_path / 'mobile' / 'terminal-tokens.jsonl').read_text(encoding='utf-8')
+        assert '"last_resume_cursor": 0' in stored_after_resume
+        assert '"last_resume_gap": 1' in stored_after_resume
     finally:
         if sock is not None:
             sock.close()
         if stale_sock is not None:
             stale_sock.close()
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+
+def test_terminal_websocket_rejects_future_resume_cursor(tmp_path: Path) -> None:
+    sessions: list[_FakeTerminalSession] = []
+    service = _service(
+        _FakeCcbdClient(),
+        mobile_dir=tmp_path / 'mobile',
+        terminal_session_factory=lambda target: sessions.append(_FakeTerminalSession(target)) or sessions[-1],
+    )
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post('/v1/pairing/claim', {'pairing_code': str(pairing['pairing_code'])})
+    _, handle = service.dispatch_post(
+        '/v1/projects/proj-demo/terminals',
+        {
+            'project_id': 'proj-demo',
+            'namespace_epoch': 4,
+            'target': {'kind': 'agent', 'agent': 'mobile', 'window': 'main'},
+        },
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    server = build_mobile_gateway_server(parse_listen_address('127.0.0.1:0'), service)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    sock = None
+    future_sock = None
+    try:
+        thread.start()
+        host, port = server.server_address[:2]
+        sock = _websocket_connect(host, port, f'/v1/terminals/{handle["terminal_id"]}')
+        _websocket_send_json(
+            sock,
+            {
+                'type': 'open',
+                'terminal_id': handle['terminal_id'],
+                'token': handle['terminal_token'],
+            },
+        )
+        assert _websocket_read_until(sock, 'output')['seq'] == 1
+        sock.close()
+        sock = None
+        _wait_for(lambda: sessions[0].closed)
+
+        future_sock = _websocket_connect(host, port, f'/v1/terminals/{handle["terminal_id"]}')
+        _websocket_send_json(
+            future_sock,
+            {
+                'type': 'open',
+                'terminal_id': handle['terminal_id'],
+                'token': handle['terminal_token'],
+                'resume_cursor': 99,
+            },
+        )
+        error = _websocket_read_until(future_sock, 'error')
+        assert error['code'] == 'stale_resume_cursor'
+        closed = _websocket_read_until(future_sock, 'closed')
+        assert closed['reason'] == 'stale_resume_cursor'
+        assert len(sessions) == 1
+    finally:
+        if sock is not None:
+            sock.close()
+        if future_sock is not None:
+            future_sock.close()
         server.shutdown()
         server.server_close()
         thread.join(timeout=2)
@@ -2617,6 +3844,60 @@ def _write_codex_rollout(
         connection.commit()
     finally:
         connection.close()
+
+
+def _write_claude_transcript(
+    project_root: Path,
+    *,
+    agent: str,
+    session_id: str,
+    records: list[dict[str, object]],
+    bind_session_path: bool = True,
+    use_project_dir: bool = False,
+) -> None:
+    if use_project_dir:
+        from provider_backends.claude.registry_support.pathing import (
+            project_key_for_path,
+        )
+
+        session_parent = project_key_for_path(project_root)
+    else:
+        session_parent = ''
+    projects_root = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / agent
+        / 'provider-state'
+        / 'claude'
+        / 'home'
+        / '.claude'
+        / 'projects'
+    )
+    transcript_path = (
+        projects_root
+        / session_parent
+        / f'{session_id}.jsonl'
+    )
+    transcript_path.parent.mkdir(parents=True, exist_ok=True)
+    transcript_path.write_text(
+        ''.join(f'{json.dumps(record)}\n' for record in records),
+        encoding='utf-8',
+    )
+    session_file = project_root / '.ccb' / f'.claude-{agent}-session'
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        'active': True,
+        'work_dir': str(project_root),
+        'claude_session_id': session_id,
+        'claude_projects_root': str(projects_root),
+    }
+    if bind_session_path:
+        payload['claude_session_path'] = str(transcript_path)
+    session_file.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding='utf-8',
+    )
 
 
 def _websocket_connect(host: str, port: int, path: str) -> socket.socket:

@@ -2,91 +2,125 @@
 
 ## Unreleased
 
-## v8.0.7 (2026-06-30)
+## v8.0.16 (2026-07-05)
 
-### CCB Mobile Notifications And Theme Stabilization
+### Mobile Reconnect And Activity
 
-- **Task Completion Notifications**: adds the server-wide mobile notification SSE stream and Android local notifications for pane-backed task completion, with low-sensitive payloads and real emulator tap-routing validation.
-- **Provider Status For Mobile**: carries the Codex/provider pane status detection used by mobile activity indicators and sidebar runtime state.
-- **Mobile App Polish**: updates the Android app to the steel-blue/slate theme, improved content text styles, long-bubble limits, notification tap routing, and release-channel update wiring.
-- **Release Surface Synchronized**: VERSION, package metadata, mobile app version metadata, README links, workflow defaults, and APK download URLs are aligned for 8.0.7.
+- **Mobile Terminal Reconnect Hardened**: CCB Mobile terminal sessions now show
+  explicit reconnecting state, disable unsafe input while disconnected, and
+  recover through the existing fresh-handle path when the gateway comes back.
+- **Mobile Pane Activity Recorded**: gateway-side pane input now bumps project
+  activity so server-wide project recency can reflect Terminal-mode usage.
+- **Release Surface Synchronized**: VERSION, package.json, mobile app version
+  metadata, update links, mobile release manifest, and release workflow
+  defaults are aligned for 8.0.16.
 
-## v8.0.6 (2026-06-30)
+## v8.0.15 (2026-07-05)
 
-### CCB Mobile Real Project Chat Stabilization
+### Ask Routing And Mobile Runtime
 
-- **Mobile App Chat Polished**: improves real-project pane-native message
-  sending, status recovery, terminal stream handling, QR/manual pairing, input
-  ergonomics, localization, and noisy timeline filtering for Android.
-- **Server-Wide Mobile Gateway Integrated**: includes the latest server-wide
-  project listing, native provider transcript, provider runtime status, and
-  mobile terminal pane input fixes from the CCB source line.
-- **Mobile Pairing Polished**: `ccb update mobile` now prints a compact
-  terminal QR instead of a full-screen QR, the Android APK restores the CCB
-  bridge launcher icon, and the QR scanner shows actionable retry/manual setup
-  fallback instead of raw native camera errors.
-- **Release Surface Synchronized**: VERSION, package metadata, mobile app
-  version metadata, README links, workflow defaults, and APK download URLs are
-  aligned for 8.0.6.
+- **Ask Chain Terminology Simplified**: inter-agent dependent work now uses
+  `chain` terminology consistently across CLI help, skills, manuals, and
+  tests, removing the older callback wording from user-facing guidance.
+- **Ask Project Boundary Hardened**: `ask` routing is constrained to the
+  current `.ccb` project by default so provider cwd drift cannot silently send
+  work into another mounted project.
+- **Mobile Terminal Pane Snapshots Stabilized**: CCB Mobile terminal streaming
+  now reads the selected tmux pane snapshot directly and requires pane evidence
+  before opening a terminal session.
+- **Mobile Conversation Loading Cache Included**: this release carries the
+  server-side mobile conversation page cache, reducing repeated
+  provider-native transcript parsing during mobile refreshes.
+- **Mobile Project Activity Improved**: server project activity and mobile
+  status payloads better reflect provider pane state, running jobs, and stale
+  terminal output recovery.
+- **Release Surface Synchronized**: VERSION, package.json, mobile app version
+  metadata, update links, README variants, and release workflow defaults are
+  aligned for 8.0.15.
 
-## v8.0.4 (2026-06-28)
+## v8.0.14 (2026-07-04)
 
-### CCB Mobile Project List Stability
+### Mobile Runtime Polish
 
-- **Server-Wide Project Listing Accelerated**: `/v1/projects` now checks
-  mounted project health concurrently while preserving registry order, avoiding
-  phone-side aborts when many CCB projects are registered.
-- **Client Disconnect Noise Reduced**: mobile gateway responses now quietly
-  ignore ordinary BrokenPipe/connection-reset writes after a phone disconnects
-  or times out.
-- **Release Surface Synchronized**: VERSION, package metadata, mobile app
-  version metadata, README links, workflow defaults, and APK download URLs are
-  aligned for 8.0.4.
+- **Pairing QR Scanner Safety Restored**: `ccb update mobile` now keeps the
+  full pairing payload and scanner-safe quiet zone in both managed and direct
+  mobile gateway paths.
+- **Running Project Attention Strengthened**: CCB Mobile now uses brighter
+  card-level working highlights and recency-aware project ordering for active
+  agents.
+- **Working Reply Readability Preserved**: active reply bubbles keep the normal
+  readable interior surface while showing working state through border/glow
+  treatment.
+- **Conversation Pages Cached**: server-side mobile conversation paging caches
+  provider-native pages to reduce repeated Codex rollout parsing for large
+  agents such as `lead`.
+- **Release Surface Synchronized**: VERSION, package.json, mobile app version
+  metadata, update links, and the mobile release manifest are aligned for
+  8.0.14.
 
-## v8.0.3 (2026-06-28)
+## v8.0.13 (2026-07-03)
 
-### npm Release Metadata Fix
+### Mobile Pairing QR
 
-- **npm Provenance Metadata Fixed**: package metadata now points to the
-  canonical GitHub repository used by GitHub Actions, allowing npm provenance
-  validation to match the release workflow source.
-- **Release Surface Synchronized**: VERSION, package metadata, mobile app
-  version metadata, README links, workflow defaults, and APK download URLs are
-  aligned for 8.0.3.
+- **Pairing QR Restored For Managed Mobile Update**: `ccb update mobile` now prints the pairing QR when reusing the host-wide background mobile gateway instead of only printing the pairing code.
+- **Pairing QR Display Tightened**: the terminal QR keeps the original full JSON payload but removes the extra quiet-zone border so it takes less space without changing app-side QR semantics.
+- **Mobile App Link Updated**: `ccb update mobile`, README links, package metadata, and the mobile release manifest now point to the 8.0.13 APK.
 
-## v8.0.2 (2026-06-28)
+## v8.0.12 (2026-07-03)
 
-### CCB Mobile Tailnet Onboarding Fixes
+### Release CI Portability
 
-- **Tailscale Serve Approval Flow Fixed**: `ccb update mobile` now recognizes
-  the one-time Tailscale Serve enable URL and prints actionable next steps
-  instead of surfacing a raw timeout.
-- **Existing Serve Config Reused**: if the correct tailnet HTTPS proxy already
-  points to the loopback mobile gateway, `ccb update mobile` reuses it and
-  proceeds directly to the pairing QR instead of requiring operator privileges
-  on every run.
-- **Worktree Install Guard Fixed**: source worktree installs no longer copy the
-  `.git` worktree marker into the release install prefix, preventing installed
-  `ccb` from being mistaken for a source checkout.
-- **Release Surface Synchronized**: VERSION, package metadata, mobile app
-  version metadata, README links, workflow defaults, and APK download URLs are
-  aligned for 8.0.2.
+- **macOS Socket Test Fixed**: mobile host registry tests now bind their
+  temporary Unix sockets under a short `/tmp/ccb-sock-*` path so macOS CI does
+  not fail on `AF_UNIX path too long`.
+- **Mobile App Link Updated**: `ccb update mobile`, README links, package
+  metadata, and the mobile release manifest now point to the 8.0.12 APK.
 
-## v8.0.1 (2026-06-28)
+## v8.0.11 (2026-07-03)
 
-### Simplified CCB Mobile Onboarding
+### Release CI And Mobile APK
 
-- **One-Command Mobile Setup**: `ccb update mobile` now checks Tailscale,
-  optionally guides install/login, starts the server-wide loopback mobile
-  gateway, starts Tailscale Serve, and prints a terminal pairing QR directly.
-- **Phone First Launch Simplified**: CCB Mobile now opens to setup guidance,
-  Tailscale download instructions, and a QR scan action when no pairing profile
-  is stored, instead of defaulting ordinary users into the demo project.
-- **Stored Pairing Auto-Activation**: when a saved gateway profile exists, the
-  app activates it on launch and opens the server-wide mounted project list.
-- **Release Surface Synchronized**: VERSION, package metadata, mobile app
-  version metadata, README links, workflow defaults, and APK download URLs are
-  aligned for 8.0.1.
+- **CI Smoke Roots Fixed**: tag and main test workflows now pass explicit
+  `CCB_TEST_ROOTS` for temporary dynamic-layout smoke projects, matching the
+  hardened `ccb_test` source-test boundary.
+- **Mobile App Link Updated**: `ccb update mobile`, README links, package
+  metadata, and the mobile release manifest now point to the 8.0.11 APK.
+
+## v8.0.10 (2026-07-03)
+
+### Release Metadata
+
+- **Release Workflow Default Updated**: the release-artifacts workflow manual
+  default tag now follows the package version so full CI release checks pass.
+- **Mobile App Link Updated**: `ccb update mobile`, README links, package
+  metadata, and the mobile release manifest now point to the 8.0.10 APK.
+
+## v8.0.9 (2026-07-03)
+
+### Mobile Gateway And Conversation Refresh
+
+- **Mobile Update Reconnect Stabilized**: `ccb update mobile` now reuses a
+  healthy host-wide mobile gateway, refreshes stale pairing handoffs without
+  restarting the gateway, and returns instead of occupying the foreground.
+- **Lead Conversation Refresh Fixed**: CCB Mobile keeps the visible agent
+  selected across ProjectView refreshes, so large native Codex transcripts such
+  as `ccb_mobile / lead` keep loading and refreshing without drifting to the
+  active tmux pane.
+- **Provider Status Improved**: Claude provider runtime status reporting is
+  available to the mobile and project-view surfaces alongside the existing
+  Codex paths.
+- **Mobile App Link Updated**: `ccb update mobile`, README links, package
+  metadata, and the mobile release manifest now point to the 8.0.9 APK.
+
+## v8.0.8 (2026-07-01)
+
+### Mobile Status And Transcript Polish
+
+- **Running Output Highlighted**: CCB Mobile now highlights the active terminal-derived output bubble when an agent is working, while avoiding stale historical reply markers.
+- **Conversation Timestamps Preserved**: submitted messages, native transcripts, comms fallback, and job-history fallback records now keep stable `sent_at` / `completed_at` / duration metadata through refreshes.
+- **Codex Runtime Status Stabilized**: source-side Codex session and pane status handling now reports interrupted turns explicitly and collapses stale no-progress display state without hiding raw diagnostics.
+- **Mobile Source Synchronized**: the Flutter app source under `mobile/app` is updated from the active mobile worktree, including scanner, theme, notification, file, transcript, and chat interaction fixes.
+- **Release Surface Synchronized**: VERSION, package.json, README mobile links, mobile app version metadata, and release notes are aligned for 8.0.8.
 
 ## v8.0.0 (2026-06-27)
 
@@ -686,7 +720,7 @@
 
 - **Ask Skills Use Result Intent First**: inherited Claude, Codex, and Droid
   ask skills now choose `--silence`, `--compact`, `--artifact-reply`, or plain
-  `ask` from the desired result shape first, then add `--callback` only for
+  `ask` from the desired result shape first, then add `--chain` only for
   active parent dependency chains and artifact request/io flags only when exact
   content preservation is needed.
 - **Artifact Transport Guidance Tightened**: ask skill guidance now separates
@@ -1199,8 +1233,8 @@
 
 ### Callback Ask Chain Release
 
-- **Callback Ask Chains Added**: `ccb ask --callback <agent>` lets an active agent delegate work whose result is needed before finishing the original task; CCB resumes the parent as a continuation task when the child reply is ready.
-- **Nested Ask Guardrails Enforced**: plain nested `ask` from an active CCB task is rejected; use `--callback` for needed child results or `--silence` for independent no-result-needed work.
+- **Callback Ask Chains Added**: `ccb ask --chain <agent>` lets an active agent delegate work whose result is needed before finishing the original task; CCB resumes the parent as a continuation task when the child reply is ready.
+- **Nested Ask Guardrails Enforced**: plain nested `ask` from an active CCB task is rejected; use `--chain` for needed child results or `--silence` for independent no-result-needed work.
 - **Durable Callback Routing Added**: callback edges persist parent/child routing state, repair crash windows, and support chained continuations across multiple agents.
 - **Ask Skills And Memory Updated**: Claude, Codex, and Droid ask skills plus generated project memory now document callback delegation and stop-after-submit behavior.
 

@@ -79,7 +79,7 @@ def _resolved_terminal_status(job, *, latest_decision) -> str:
 
 def _persisted_visible_reply(layout: PathLayout, job, *, latest_decision) -> tuple[str, str]:
     terminal = getattr(job, 'terminal_decision', None)
-    if isinstance(terminal, dict) and bool(terminal.get('delegated') or terminal.get('callback_edge_id')):
+    if isinstance(terminal, dict) and bool(terminal.get('delegated') or terminal.get('chain_edge_id')):
         reply = _latest_reply_for_job_message(layout, job)
         if reply is not None:
             return reply.reply, 'message_bureau_reply'

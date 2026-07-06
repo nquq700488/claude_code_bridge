@@ -15,7 +15,7 @@ Expected coverage:
 - inherited shell ask skills still use `command ask`
 - inherited ask skills do not contain Chinese text
 - inherited ask skills preserve submit-only diagnostics rules
-- parser and submit service still map `--callback`, `--artifact-request`,
+- parser and submit service still map `--chain`, `--artifact-request`,
   `--artifact-reply`, and `--artifact-io` into route options correctly
 
 ## External Source Runtime Validation
@@ -135,10 +135,10 @@ Observed on 2026-06-07 with real `/home/bfly` provider home:
 | --- | --- | --- | --- | --- |
 | Direct answer | `job_4552d628eebd` | no child ask | no child ask | parent replied `DIRECT_BASELINE_OK` |
 | Independent delegation | `job_30d2583e1dbe` | `--silence` | `--silence` | child message `msg_10153f7df64a` had `silence_on_success=true` |
-| Dependent delegation | `job_38b9381f2b85` | `--callback` | `--callback` | child reply `CHILD_S2_RESULT_OK` reached parent final reply |
-| Exact transient JSON input | `job_b4ddc8c18112` | `--callback --artifact-request` | `--callback --artifact-request` | `codexer-to-clauder-art_0de9170ab5524bd2.txt` preserved the JSON block |
-| Structured long child report | `job_dc603ec8454e` | `--callback --artifact-reply` | `--callback --artifact-reply` | child completion reply artifact `job_dd3cf16f5d85-art_691e383e09a44c4e.txt` |
-| Exact input plus long report | `job_f31a4862a9bd` | `--callback --artifact-io` | `--callback --artifact-io` | request artifact `codexer-to-clauder-art_f34caf4bea2d44c0.txt` and reply artifact `job_c1b6c1e8cd91-art_b5b832b8e8a64890.txt` |
+| Dependent delegation | `job_38b9381f2b85` | `--chain` | `--chain` | child reply `CHILD_S2_RESULT_OK` reached parent final reply |
+| Exact transient JSON input | `job_b4ddc8c18112` | `--chain --artifact-request` | `--chain --artifact-request` | `codexer-to-clauder-art_0de9170ab5524bd2.txt` preserved the JSON block |
+| Structured long child report | `job_dc603ec8454e` | `--chain --artifact-reply` | `--chain --artifact-reply` | child completion reply artifact `job_dd3cf16f5d85-art_691e383e09a44c4e.txt` |
+| Exact input plus long report | `job_f31a4862a9bd` | `--chain --artifact-io` | `--chain --artifact-io` | request artifact `codexer-to-clauder-art_f34caf4bea2d44c0.txt` and reply artifact `job_c1b6c1e8cd91-art_b5b832b8e8a64890.txt` |
 
 Important observation: ask-request artifacts are best verified from
 `.ccb/ccbd/artifacts/text/ask-request/`. The raw message record `payload_ref`
@@ -168,10 +168,10 @@ Codex-parent pressure group submitted six queued parent jobs to `codexer`:
 | --- | --- | --- |
 | Direct answer | `job_22afb3177cf4` | replied `ASK_STRESS_C0_DIRECT_OK`, no child ask |
 | Independent delegation | `job_bebc06ce1c12` | selected `--silence`; child message `msg_8e2994e516e1` had `silence_on_success=true` |
-| Dependent delegation | `job_0802e88f72ca` | selected `--callback`; parent received `ASK_STRESS_C2_CHILD_OK` |
-| Exact JSON input | `job_412de1c6d982` | selected `--callback --artifact-request`; request artifact `codexer-to-clauder-art_1e345280de83411e.txt` |
-| Long child report | `job_40890e657b91` | selected `--callback --artifact-reply`; child reply artifact `job_6fa5edd440cc-art_193f154be5264c92.txt` |
-| Exact input plus long report | `job_6c272148bc92` | selected `--callback --artifact-io`; request artifact `codexer-to-clauder-art_9a9fef02cf814495.txt`, reply artifact `job_474950d59d1d-art_d8f98fe685a749e0.txt` |
+| Dependent delegation | `job_0802e88f72ca` | selected `--chain`; parent received `ASK_STRESS_C2_CHILD_OK` |
+| Exact JSON input | `job_412de1c6d982` | selected `--chain --artifact-request`; request artifact `codexer-to-clauder-art_1e345280de83411e.txt` |
+| Long child report | `job_40890e657b91` | selected `--chain --artifact-reply`; child reply artifact `job_6fa5edd440cc-art_193f154be5264c92.txt` |
+| Exact input plus long report | `job_6c272148bc92` | selected `--chain --artifact-io`; request artifact `codexer-to-clauder-art_9a9fef02cf814495.txt`, reply artifact `job_474950d59d1d-art_d8f98fe685a749e0.txt` |
 
 Claude-parent reverse pressure group submitted four queued parent jobs to
 `clauder`:
@@ -180,8 +180,8 @@ Claude-parent reverse pressure group submitted four queued parent jobs to
 | --- | --- | --- |
 | Direct answer | `job_642d726e8af1` | replied `ASK_STRESS_R0_DIRECT_OK`, no child ask |
 | Independent delegation | `job_522180f8bd41` | selected `--silence`; child message `msg_78d58e03ed16` had `silence_on_success=true` |
-| Dependent delegation | `job_d05240daf518` | selected `--callback`; parent received `ASK_STRESS_R2_CHILD_OK` |
-| Exact input plus long report | `job_d2b5b2caebf0` | selected `--callback --artifact-io`; request artifact `clauder-to-codexer-art_d4cbd2dba5044820.txt`, reply artifact `job_f01c0b5e2d10-art_ea042060d374470e.txt` |
+| Dependent delegation | `job_d05240daf518` | selected `--chain`; parent received `ASK_STRESS_R2_CHILD_OK` |
+| Exact input plus long report | `job_d2b5b2caebf0` | selected `--chain --artifact-io`; request artifact `clauder-to-codexer-art_d4cbd2dba5044820.txt`, reply artifact `job_f01c0b5e2d10-art_ea042060d374470e.txt` |
 
 Final state:
 
@@ -209,8 +209,8 @@ Targeted parent jobs to `codexer`:
 | Scenario | Parent Job | Observed Result |
 | --- | --- | --- |
 | Publish-only task | `job_3d30cb5f7514` | selected `--silence`; child message `msg_94323742fc98` had `silence_on_success=true` |
-| Short result wanted | `job_719ff27843be` | selected `--callback --compact`; parent received `RESULT_INTENT_COMPACT_CHILD_OK` |
-| Full consultation analysis | `job_c04197619749` | selected `--callback --artifact-reply`; child message `msg_6b1fd86d5079` had `reply_artifact=true`, artifact `job_d099d7ac440f-art_a2726319eb1b407a.txt` |
+| Short result wanted | `job_719ff27843be` | selected `--chain --compact`; parent received `RESULT_INTENT_COMPACT_CHILD_OK` |
+| Full consultation analysis | `job_c04197619749` | selected `--chain --artifact-reply`; child message `msg_6b1fd86d5079` had `reply_artifact=true`, artifact `job_d099d7ac440f-art_a2726319eb1b407a.txt` |
 
 Final state:
 

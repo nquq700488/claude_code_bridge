@@ -172,7 +172,7 @@ def test_current_turn_req_id_follows_queue_operation_parent_to_callback_anchor()
             "type": "queue-operation",
             "content": (
                 "CCB_REQ_ID: job_callback123\n\n"
-                "CCB callback continuation.\n\n"
+                "CCB result-chain continuation.\n\n"
                 "Forwarded body mentions CCB_REQ_ID: job_old456."
             ),
         },

@@ -44,7 +44,7 @@ suppression:
 
 - plain `ask A -> B` while B is idle
 - queued asks to the same target preserve order
-- `ask --callback` chain `A -> B -> C -> B -> A` completes once without loops
+- `ask --chain` chain `A -> B -> C -> B -> A` completes once without loops
 - `ask --silence` independent child work does not wait for a reply body
 - first ask after warm-idle/deep-idle/suspended state wakes the target or reports
   a clear wake failure

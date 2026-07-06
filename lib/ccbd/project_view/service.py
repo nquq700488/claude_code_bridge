@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from time import monotonic
@@ -17,8 +19,22 @@ from ccbd.services.dispatcher_runtime import comms_recoverability_for_job
 from ccbd.system import parse_utc_timestamp, utc_now
 from message_bureau import CallbackEdgeState
 from provider_backends.codex.launcher_runtime.command_runtime.home import resolve_codex_home_layout
-from provider_pane_status.codex_pane import parse_codex_pane_status
+from provider_pane_status.codex_pane import (
+    ACTIVE_STATES as CODEX_ACTIVE_STATES,
+    normalize_screen,
+    parse_codex_pane_status,
+)
+from provider_pane_status.claude_pane import (
+    ACTIVE_STATES as CLAUDE_ACTIVE_STATES,
+    parse_claude_pane_status,
+)
 from provider_pane_status.codex_session import CodexRuntimeStatus, compose_codex_runtime_status, read_codex_session_status
+from provider_pane_status.claude_session import (
+    ClaudeRuntimeStatus,
+    claude_activity_status,
+    compose_claude_runtime_status,
+    read_claude_session_status,
+)
 from storage.paths import PathLayout
 
 from .activity import (
@@ -37,6 +53,8 @@ PROJECT_VIEW_SCHEMA_VERSION = 1
 PROJECT_VIEW_TTL_MS = 1000
 PROJECT_VIEW_IDLE_TTL_MS = 5000
 PROJECT_VIEW_COMMS_LIMIT = 8
+CODEX_ACTIVE_NO_PROGRESS_FREE_AFTER_S = 60.0
+CLAUDE_ACTIVE_NO_PROGRESS_FREE_AFTER_S = 60.0
 _RECENT_JOB_RESULT_LIMIT = PROJECT_VIEW_COMMS_LIMIT * 8
 _RECENT_JOB_SCAN_LIMIT_PER_AGENT = 128
 _RECENT_JOB_INITIAL_SCAN_MIN = 8
@@ -250,10 +268,126 @@ class _CachedProjectViewResponse:
     drain_revision: tuple[int, int] | None
 
 
+@dataclass
+class _CodexPaneProgressRecord:
+    digest: str
+    changed_at_s: float
+
+
+class _CodexPaneProgressTracker:
+    def __init__(self, *, stale_after_s: float = CODEX_ACTIVE_NO_PROGRESS_FREE_AFTER_S) -> None:
+        self._stale_after_s = max(0.0, float(stale_after_s))
+        self._records: dict[tuple[str, str], _CodexPaneProgressRecord] = {}
+
+    def status_for(
+        self,
+        *,
+        agent_name: str,
+        pane_id: object,
+        pane_text: str | None,
+        raw_status: CodexRuntimeStatus,
+        generated_at: str,
+    ) -> CodexRuntimeStatus:
+        key = self._key(agent_name, pane_id)
+        if raw_status.pane_state in CODEX_ACTIVE_STATES:
+            self._records.pop(key, None)
+            return raw_status
+        if raw_status.state not in {'unknown', 'working', 'tool_running'}:
+            self._records.pop(key, None)
+            return raw_status
+        now_s = _timestamp_s(generated_at)
+        if now_s is None:
+            return raw_status
+        digest = _pane_digest(pane_text)
+        record = self._records.get(key)
+        if record is None or record.digest != digest:
+            self._records[key] = _CodexPaneProgressRecord(digest=digest, changed_at_s=now_s)
+            return raw_status
+        stale_s = max(0.0, now_s - record.changed_at_s)
+        if stale_s < self._stale_after_s:
+            return raw_status
+        return CodexRuntimeStatus(
+            'free',
+            'codex_pane_no_active_stale_no_progress',
+            'stabilizer',
+            raw_status.pane_state,
+            raw_status.pane_reason,
+            raw_status.session_state,
+            raw_status.session_reason,
+            notes=(
+                *raw_status.notes,
+                f'raw_state={raw_status.state}',
+                f'raw_reason={raw_status.reason}',
+                f'no_progress_s={round(stale_s, 3)}',
+            ),
+        )
+
+    @staticmethod
+    def _key(agent_name: str, pane_id: object) -> tuple[str, str]:
+        return (str(agent_name or '').strip(), str(pane_id or '').strip())
+
+
+class _ClaudePaneProgressTracker:
+    def __init__(self, *, stale_after_s: float = CLAUDE_ACTIVE_NO_PROGRESS_FREE_AFTER_S) -> None:
+        self._stale_after_s = max(0.0, float(stale_after_s))
+        self._records: dict[tuple[str, str], _CodexPaneProgressRecord] = {}
+
+    def status_for(
+        self,
+        *,
+        agent_name: str,
+        pane_id: object,
+        pane_text: str | None,
+        raw_status: ClaudeRuntimeStatus,
+        generated_at: str,
+    ) -> ClaudeRuntimeStatus:
+        key = self._key(agent_name, pane_id)
+        if raw_status.pane_state in CLAUDE_ACTIVE_STATES:
+            self._records.pop(key, None)
+            return raw_status
+        if raw_status.pane_state != 'terminal_summary' or raw_status.state not in {'working', 'tool_running'}:
+            self._records.pop(key, None)
+            return raw_status
+        now_s = _timestamp_s(generated_at)
+        if now_s is None:
+            return raw_status
+        digest = _pane_digest(pane_text)
+        record = self._records.get(key)
+        if record is None or record.digest != digest:
+            self._records[key] = _CodexPaneProgressRecord(digest=digest, changed_at_s=now_s)
+            return raw_status
+        stale_s = max(0.0, now_s - record.changed_at_s)
+        if stale_s < self._stale_after_s:
+            return raw_status
+        return ClaudeRuntimeStatus(
+            'free',
+            'claude_pane_no_active_stale_no_progress',
+            'stabilizer',
+            raw_status.activity_state,
+            raw_status.activity_reason,
+            raw_status.session_state,
+            raw_status.session_reason,
+            raw_status.pane_state,
+            raw_status.pane_reason,
+            notes=(
+                *raw_status.notes,
+                f'raw_state={raw_status.state}',
+                f'raw_reason={raw_status.reason}',
+                f'no_progress_s={round(stale_s, 3)}',
+            ),
+        )
+
+    @staticmethod
+    def _key(agent_name: str, pane_id: object) -> tuple[str, str]:
+        return (str(agent_name or '').strip(), str(pane_id or '').strip())
+
+
 class ProjectViewService:
     def __init__(self, deps: ProjectViewDependencies) -> None:
         self._deps = deps
         self._sequence_cache = deps.sequence_cache or ProjectViewSequenceCache()
+        self._codex_pane_progress = _CodexPaneProgressTracker()
+        self._claude_pane_progress = _ClaudePaneProgressTracker()
         self._cached_response: _CachedProjectViewResponse | None = None
         self._sidebar_refresh_lock = threading.Lock()
         self._sidebar_refresh_pending = False
@@ -297,7 +431,13 @@ class ProjectViewService:
             did_refresh_sidebar = self._refresh_sidebar_panes(refresh_started=sidebar_refresh_started)
         generated_at = self._deps.clock()
         build_started = monotonic()
-        view = build_project_view(self._deps, generated_at=generated_at, metrics_context=metrics_context)
+        view = build_project_view(
+            self._deps,
+            generated_at=generated_at,
+            metrics_context=metrics_context,
+            codex_pane_progress=self._codex_pane_progress,
+            claude_pane_progress=self._claude_pane_progress,
+        )
         response = {
             'view': view,
             'cache': {
@@ -361,6 +501,8 @@ def build_project_view(
     *,
     generated_at: str,
     metrics_context: _ProjectViewMetricsContext | None = None,
+    codex_pane_progress: _CodexPaneProgressTracker | None = None,
+    claude_pane_progress: _ClaudePaneProgressTracker | None = None,
 ) -> dict[str, object]:
     lease = deps.mount_manager.load_state()
     namespace = deps.namespace_state_store.load()
@@ -391,6 +533,8 @@ def build_project_view(
             callback_wait=callback_waits.get(agent_name),
             provider_runtimes=provider_runtime_by_agent.get(agent_name, ()),
             reload_drain=active_drain_by_agent.get(agent_name),
+            codex_pane_progress=codex_pane_progress,
+            claude_pane_progress=claude_pane_progress,
         )
         for order, agent_name in enumerate(_agent_order(deps.config))
     ]
@@ -531,10 +675,13 @@ def _agent_view(
     active: bool = False,
     provider_runtimes: tuple[dict[str, object], ...] = (),
     reload_drain: dict[str, object] | None = None,
+    codex_pane_progress: _CodexPaneProgressTracker | None = None,
+    claude_pane_progress: _ClaudePaneProgressTracker | None = None,
 ) -> dict[str, object]:
     spec = deps.config.agents[agent_name]
     runtime = deps.registry.get(agent_name)
     provider_is_codex = _is_codex_provider(spec.provider)
+    provider_is_claude = _is_claude_provider(spec.provider)
     provider_activity = None
     if not provider_is_codex:
         provider_activity = context.provider_activity_hint(
@@ -550,13 +697,13 @@ def _agent_view(
         current_job_id=getattr(job, 'job_id', None) if job is not None else None,
     )
     queue_depth = len(queued_jobs) + (1 if _is_top_activity_job(active_job) else 0)
-    callback_child_agent = _callback_child_agent(callback_wait)
+    chain_child_agent = _callback_child_agent(callback_wait)
     pane_text = None
-    codex_runtime_status = None
+    provider_runtime_status = None
     if provider_is_codex:
         pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
         if pane_text is not None:
-            codex_runtime_status = _codex_runtime_status(
+            provider_runtime_status = _codex_runtime_status(
                 deps=deps,
                 agent_name=agent_name,
                 provider=spec.provider,
@@ -564,9 +711,22 @@ def _agent_view(
                 runtime=runtime,
                 pane_text=pane_text,
                 current_job=job,
+                generated_at=generated_at,
+                progress_tracker=codex_pane_progress,
             )
+    elif provider_is_claude:
+        pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
+        provider_runtime_status = _claude_runtime_status(
+            runtime=runtime,
+            provider_activity=provider_activity,
+            pane_text=pane_text,
+            current_job=job,
+            generated_at=generated_at,
+            progress_tracker=claude_pane_progress,
+        )
     elif provider_activity is None or _provider_activity_needs_pane_error_probe(provider_activity, generated_at):
         pane_text = context.pane_text_hint(getattr(runtime, 'pane_id', None) if runtime is not None else None)
+    provider_runtime_source = _provider_runtime_source(spec.provider, provider_runtime_status)
     activity = resolve_agent_activity(
         AgentActivityFacts(
             namespace_mounted=namespace_mounted,
@@ -582,17 +742,17 @@ def _agent_view(
             current_job_id=job.job_id if job is not None else None,
             current_job_updated_at=job.updated_at if job is not None else None,
             queue_depth=queue_depth,
-            callback_waiting_state=callback_wait.state.value if callback_wait is not None else None,
-            callback_child_job_id=callback_wait.child_job_id if callback_wait is not None else None,
-            callback_child_agent=callback_child_agent,
-            callback_updated_at=callback_wait.updated_at if callback_wait is not None else None,
+            chain_waiting_state=callback_wait.state.value if callback_wait is not None else None,
+            chain_child_job_id=callback_wait.child_job_id if callback_wait is not None else None,
+            chain_child_agent=chain_child_agent,
+            chain_updated_at=callback_wait.updated_at if callback_wait is not None else None,
             provider_activity_state=getattr(provider_activity, 'state', None),
             provider_activity_source=getattr(provider_activity, 'source', None),
             provider_activity_reason=getattr(provider_activity, 'reason', None),
             provider_activity_updated_at=getattr(provider_activity, 'updated_at', None),
-            provider_runtime_state=getattr(codex_runtime_status, 'state', None),
-            provider_runtime_source='codex_runtime' if codex_runtime_status is not None else None,
-            provider_runtime_reason=getattr(codex_runtime_status, 'reason', None),
+            provider_runtime_state=getattr(provider_runtime_status, 'state', None),
+            provider_runtime_source=provider_runtime_source,
+            provider_runtime_reason=getattr(provider_runtime_status, 'reason', None),
         ),
         now=generated_at,
     )
@@ -614,9 +774,9 @@ def _agent_view(
         'active': bool(active),
         'queue_depth': queue_depth,
         **activity.to_record(),
-        'callback_waiting_child_job_id': callback_wait.child_job_id if callback_wait is not None else None,
-        'callback_waiting_child_agent': callback_child_agent,
-        'callback_waiting_state': callback_wait.state.value if callback_wait is not None else None,
+        'chain_waiting_child_job_id': callback_wait.child_job_id if callback_wait is not None else None,
+        'chain_waiting_child_agent': chain_child_agent,
+        'chain_waiting_state': callback_wait.state.value if callback_wait is not None else None,
         'runtime_state': _runtime_state(runtime),
         'runtime_health': getattr(runtime, 'health', None) if runtime is not None else None,
         'reconcile_state': getattr(runtime, 'reconcile_state', None) if runtime is not None else None,
@@ -626,13 +786,26 @@ def _agent_view(
     }
     if provider_runtime is not None:
         record['provider_runtime'] = provider_runtime
-    if codex_runtime_status is not None:
-        record['provider_runtime_status'] = codex_runtime_status.to_record()
+    if provider_runtime_status is not None:
+        record['provider_runtime_status'] = provider_runtime_status.to_record()
     return record
 
 
 def _is_codex_provider(provider: object) -> bool:
     return str(provider or '').strip().lower() == 'codex'
+
+
+def _is_claude_provider(provider: object) -> bool:
+    return str(provider or '').strip().lower() == 'claude'
+
+
+def _provider_runtime_source(provider: object, runtime_status: object | None) -> str | None:
+    if runtime_status is None:
+        return None
+    provider_name = str(provider or '').strip().lower()
+    if provider_name in {'codex', 'claude'}:
+        return f'{provider_name}_runtime'
+    return None
 
 
 def _codex_runtime_status(
@@ -644,6 +817,8 @@ def _codex_runtime_status(
     runtime: object | None,
     pane_text: str | None,
     current_job,
+    generated_at: str,
+    progress_tracker: _CodexPaneProgressTracker | None = None,
 ) -> CodexRuntimeStatus | None:
     if not _is_codex_provider(provider):
         return None
@@ -663,6 +838,34 @@ def _codex_runtime_status(
         min_mtime_s=_job_updated_epoch_for_session_floor(current_job),
     )
     raw_status = compose_codex_runtime_status(pane_status, session_status)
+    if progress_tracker is not None:
+        raw_status = progress_tracker.status_for(
+            agent_name=agent_name,
+            pane_id=getattr(runtime, 'pane_id', None) if runtime is not None else None,
+            pane_text=pane_text,
+            raw_status=raw_status,
+            generated_at=generated_at,
+        )
+    if (
+        _job_is_running(current_job)
+        and raw_status.state == 'free'
+        and raw_status.source == 'session'
+        and raw_status.pane_state == 'unknown'
+    ):
+        return CodexRuntimeStatus(
+            'start',
+            'prompt_submitted_waiting_for_first_signal',
+            'stabilizer',
+            raw_status.pane_state,
+            raw_status.pane_reason,
+            raw_status.session_state,
+            raw_status.session_reason,
+            notes=(
+                *raw_status.notes,
+                f'raw_state={raw_status.state}',
+                f'raw_reason={raw_status.reason}',
+            ),
+        )
     if (
         _job_is_running(current_job)
         and raw_status.state == 'unknown'
@@ -682,6 +885,79 @@ def _codex_runtime_status(
             ),
         )
     return raw_status
+
+
+def _claude_runtime_status(
+    *,
+    runtime: object | None,
+    provider_activity: object | None,
+    pane_text: str | None,
+    current_job,
+    generated_at: str,
+    progress_tracker: _ClaudePaneProgressTracker | None = None,
+) -> ClaudeRuntimeStatus:
+    activity_status = claude_activity_status(provider_activity)
+    session_status = read_claude_session_status(
+        _claude_transcript_path(runtime),
+        min_mtime_s=_job_updated_epoch_for_session_floor(current_job),
+    )
+    pane_state = _clean_pane_state(getattr(runtime, 'pane_state', None) if runtime is not None else None)
+    pane_status = parse_claude_pane_status(
+        pane_text,
+        pane_dead=pane_state in {'missing', 'dead'},
+    )
+    raw_status = compose_claude_runtime_status(
+        activity_status,
+        session_status,
+        job_running=_job_is_running(current_job),
+        pane_status=pane_status,
+    )
+    if progress_tracker is not None:
+        raw_status = progress_tracker.status_for(
+            agent_name=getattr(runtime, 'agent_name', None) if runtime is not None else None,
+            pane_id=getattr(runtime, 'pane_id', None) if runtime is not None else None,
+            pane_text=pane_text,
+            raw_status=raw_status,
+            generated_at=generated_at,
+        )
+    return raw_status
+
+
+def _claude_transcript_path(runtime: object | None) -> Path | None:
+    if runtime is None:
+        return None
+    for value in (
+        getattr(runtime, 'session_file', None),
+        getattr(runtime, 'session_ref', None),
+    ):
+        path = _claude_transcript_path_from_value(value)
+        if path is not None:
+            return path
+    return None
+
+
+def _claude_transcript_path_from_value(value: object) -> Path | None:
+    text = str(value or '').strip()
+    if not text:
+        return None
+    path = Path(text).expanduser()
+    if path.suffix == '.jsonl':
+        return path
+    payload = _read_claude_session_payload(path)
+    if payload is None:
+        return None
+    transcript = str(payload.get('claude_session_path') or '').strip()
+    if transcript:
+        return Path(transcript).expanduser()
+    return None
+
+
+def _read_claude_session_payload(path: Path) -> dict[str, object] | None:
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except Exception:
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _codex_session_root(
@@ -719,6 +995,18 @@ def _clean_pane_state(value: object) -> str:
     return str(value or '').strip().lower()
 
 
+def _timestamp_s(value: str) -> float | None:
+    try:
+        return parse_utc_timestamp(str(value or '')).timestamp()
+    except ValueError:
+        return None
+
+
+def _pane_digest(pane_text: str | None) -> str:
+    normalized = normalize_screen(pane_text or '')
+    return hashlib.sha256(normalized.encode('utf-8', errors='replace')).hexdigest()
+
+
 def _active_reload_drains_by_agent(reload_drains: dict[str, object]) -> dict[str, dict[str, object]]:
     records: dict[str, dict[str, object]] = {}
     for item in tuple(reload_drains.get('active_records') or ()):
@@ -753,10 +1041,18 @@ def _record_inferred_provider_failure(
         return
     if getattr(activity, 'state', None) != 'failed':
         return
-    if getattr(activity, 'source', None) not in {'provider_pane', 'codex_runtime'}:
+    if getattr(activity, 'source', None) not in {'provider_pane', 'codex_runtime', 'claude_runtime'}:
         return
     reason = str(getattr(activity, 'reason', '') or '').strip()
-    if reason not in {'provider_terminal_error', 'provider_api_error', 'provider_auth_failed', 'provider_config_error', 'provider_error_text'}:
+    if reason not in {
+        'provider_terminal_error',
+        'provider_api_error',
+        'provider_auth_failed',
+        'provider_config_error',
+        'provider_error_text',
+        'claude_activity_api_error',
+        'claude_session_api_error',
+    }:
         return
     record_provider_activity_failure(
         project_root=deps.project_root,
@@ -1682,7 +1978,7 @@ def _comm_record(
         'body_preview': _body_preview(job.request.body),
         'reply_status': reply_status,
         'reply_delivery_job_id': reply_delivery.job_id if reply_delivery is not None else None,
-        'callback': bool(getattr(job.request, 'reply_to', None)),
+        'chain': bool(getattr(job.request, 'reply_to', None)),
         'short_reason': _short_reason(job),
         **({'attachments': attachments} if attachments else {}),
         **recoverability.to_record(),

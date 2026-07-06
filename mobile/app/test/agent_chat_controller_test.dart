@@ -87,6 +87,113 @@ void main() {
       expect(controller.hasNewMessages('lead'), isFalse);
     });
 
+    test(
+      'keeps local send time when matching remote user message lacks timing',
+      () {
+        final controller = AgentChatController();
+        final sentAt = DateTime.utc(2026, 7, 1, 3, 42);
+        final pending = _user(
+          id: 'local-pending',
+          body: 'same',
+          sentAt: sentAt,
+        );
+        controller.addLocalMessage('lead', pending);
+
+        controller.applyRemoteConversation(
+          agentName: 'lead',
+          conversation: _conversation([
+            _user(
+              id: 'remote-user',
+              body: 'same',
+              state: CcbConversationDeliveryState.sent,
+            ),
+          ]),
+          shouldScroll: true,
+        );
+
+        expect(controller.localMessagesFor('lead'), isEmpty);
+        expect(
+          controller.remoteConversationFor('lead')!.items.single.sentAt,
+          sentAt,
+        );
+      },
+    );
+
+    test('merges local attachment presentation into remote pane echo', () {
+      final controller = AgentChatController();
+      final sentAt = DateTime.utc(2026, 7, 1, 11, 30);
+      final local = CcbConversationItem.userMessage(
+        id: 'local-image',
+        agentName: 'lead',
+        body: 'please inspect',
+        attachments: const [
+          CcbMessageAttachment(
+            fileId: 'mobile-file-1',
+            fileName: 'photo.png',
+            mimeType: 'image/png',
+            sizeBytes: 68,
+            kind: CcbMessageAttachmentKind.image,
+            state: CcbMessageAttachmentState.available,
+          ),
+        ],
+        state: CcbConversationDeliveryState.sent,
+        sentAt: sentAt,
+      );
+      controller.addLocalMessage('lead', local);
+
+      controller.applyRemoteConversation(
+        agentName: 'lead',
+        conversation: _conversation([
+          _user(
+            id: 'remote-image-echo',
+            body:
+                'please inspect\n'
+                'Attached files:\n'
+                '- photo.png (image/png, 68 bytes, file id: mobile-file-1)',
+            state: CcbConversationDeliveryState.sent,
+          ),
+        ]),
+        shouldScroll: true,
+      );
+
+      expect(controller.localMessagesFor('lead'), isEmpty);
+      final remote = controller.remoteConversationFor('lead')!.items.single;
+      expect(remote.id, 'remote-image-echo');
+      expect(remote.body, 'please inspect');
+      expect(remote.sentAt, sentAt);
+      expect(remote.attachments, hasLength(1));
+      expect(remote.attachments.single.fileName, 'photo.png');
+      expect(
+        remote.attachments.single.effectiveKind,
+        CcbMessageAttachmentKind.image,
+      );
+    });
+
+    test('normalizes remote pane attachment echo without local fallback', () {
+      final controller = AgentChatController();
+
+      controller.applyRemoteConversation(
+        agentName: 'lead',
+        conversation: _conversation([
+          _user(
+            id: 'remote-image-echo',
+            body:
+                'please inspect\n'
+                'Attached files:\n'
+                '- photo.png (image/png, 68 bytes, file id: mobile-file-1)',
+            state: CcbConversationDeliveryState.sent,
+          ),
+        ]),
+        shouldScroll: true,
+      );
+
+      final remote = controller.remoteConversationFor('lead')!.items.single;
+      expect(remote.body, 'please inspect');
+      expect(remote.attachments, hasLength(1));
+      expect(remote.attachments.single.fileId, 'mobile-file-1');
+      expect(remote.attachments.single.fileName, 'photo.png');
+    });
+
     test('prepends older remote page and dedupes overlapping items', () {
       final controller = AgentChatController();
       controller.applyRemoteConversation(
@@ -202,12 +309,14 @@ CcbConversationItem _user({
   required String id,
   required String body,
   CcbConversationDeliveryState state = CcbConversationDeliveryState.pending,
+  DateTime? sentAt,
 }) {
   return CcbConversationItem.userMessage(
     id: id,
     agentName: 'lead',
     body: body,
     state: state,
+    sentAt: sentAt,
   );
 }
 

@@ -77,7 +77,7 @@ Deliverables:
   no-op JSON skips, heartbeat persists, provider RSS, provider idle age, socket
   request latency, wake latency, and callback continuation pending age.
 - A reusable ask-stability test matrix covering plain ask, queued asks,
-  `ask --callback`, `ask --silence`, cancel/resubmit, and first ask after idle.
+  `ask --chain`, `ask --silence`, cancel/resubmit, and first ask after idle.
 - Plan-tree evidence showing the baseline measurement command and result shape.
 
 Minimum tests:

@@ -28,7 +28,7 @@ ccb ask --silence ops run smoke check
 如果当前 agent 需要另一个 agent 的结果才能继续：
 
 \begin{lstlisting}
-ccb ask --callback archi collect evidence
+ccb ask --chain archi collect evidence
 \end{lstlisting}
 
 callback 不是同步等待。CCB 会记录 parent/child 关系，child 完成后把结果作为 continuation 任务送回 parent agent。

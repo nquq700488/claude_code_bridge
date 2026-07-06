@@ -806,7 +806,7 @@ and queue a `TASK_REPLY` back to A, but that reply cannot be delivered while
 A's active request is still the mailbox head. Agents must not wait or poll for
 that child reply inside the same turn.
 
-`ccb ask --callback <target>` provides the stable handoff for this case:
+`ccb ask --chain <target>` provides the stable handoff for this case:
 
 - it is valid only from an agent that currently owns an active parent job
 - the child request is recorded with a durable callback edge
@@ -821,9 +821,9 @@ that child reply inside the same turn.
   normal final reply routing path
 
 While an agent owns an active parent job, CCB rejects plain nested `ask`
-submissions unless they are explicitly `--callback` or `--silence`. This guard
+submissions unless they are explicitly `--chain` or `--silence`. This guard
 keeps accidental nested dependencies from completing into an undeliverable
-`TASK_REPLY`; `--callback` is for needed child results, and `--silence` is for
+`TASK_REPLY`; `--chain` is for needed child results, and `--silence` is for
 independent no-result-needed work.
 
 The first supported callback model is intentionally narrow:
@@ -835,7 +835,7 @@ The first supported callback model is intentionally narrow:
 - nested callback chains are supported because each level is a normal
   delegated parent plus later continuation
 - a `callback_continuation` job must finish in its current turn; it may not
-  create a new `--callback` edge back to that continuation's original caller
+  create a new `--chain` edge back to that continuation's original caller
 
 Durability is owned by callback edge records under the ccbd mailbox state. A
 callback edge records the parent job/message, child job/message, original
@@ -851,7 +851,7 @@ parent message, and deliver that failure to the original caller when the caller
 owns a mailbox. Callback submission must enforce a bounded chain depth and
 reject actor cycles before creating the child job. Callback submission from a
 continuation job must resolve `route_options.callback_edge_id` through callback
-edge storage and reject attempts to `--callback` the edge's original caller; the
+edge storage and reject attempts to `--chain` the edge's original caller; the
 continuation completion itself is the upstream delivery path. If continuation
 submission fails after the child has completed, the edge must transition to a
 terminal failed state and the parent message must not remain indefinitely

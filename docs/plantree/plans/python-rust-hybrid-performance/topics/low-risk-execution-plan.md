@@ -210,7 +210,7 @@ Gate:
   - expected tests;
   - fallback requirement;
   - plan-tree update requirement if evidence changes.
-- Use `ask --callback --artifact-reply` only when the main agent needs the
+- Use `ask --chain --artifact-reply` only when the main agent needs the
   result to continue; otherwise use `ask --silence` for independent work.
 - Do not ask a worker to both design and implement a broad phase. Design
   review and implementation slices stay separate.

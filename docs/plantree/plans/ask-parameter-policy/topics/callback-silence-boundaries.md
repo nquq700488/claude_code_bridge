@@ -1,32 +1,41 @@
-# Callback And Silence Boundaries
+# Chain And Silence Boundaries
 
 Date: 2026-06-07
 
-## Callback Boundary
+## Chain Boundary
 
-`--callback` is not a parent-task flag. It is a child-dependency flag used by
+`--chain` is not a parent-task flag. It is a child-dependency flag used by
 the current active agent when the current task cannot finish until the child
 result is available.
 
-CCB automatically delivers the continuation only after a callback edge exists.
-Each waiting hop in a chain creates its own edge:
+Top-level delegation uses plain `ask`:
 
 ```text
-A --callback -> B
-B --callback -> C
+A -> B
 ```
 
-The B-to-C callback continues B. A receives a continuation only after B later
-finishes its own callback continuation.
+Nested dependency delegation uses `--chain` only from the active parent task:
 
-## Callback Continuation Finalization Boundary
+```text
+A is running an active task from user
+A --chain -> B
 
-When an agent receives a CCB callback continuation, that continuation is not a
+B is running an active task from A
+B --chain -> C
+```
+
+CCB automatically delivers the continuation only after a chain edge exists. The
+B-to-C chain continues B. A receives a continuation only after B later finishes
+its own chain continuation.
+
+## Chain Continuation Finalization Boundary
+
+When an agent receives a CCB chain continuation, that continuation is not a
 new delegation request to the original caller. The agent should finish the
 current task directly with the final result. CCB owns delivery of that
 continuation result upstream.
 
-Do not use `ask`, `--callback`, or `--silence` to send the final continuation
+Do not use `ask`, `--chain`, or `--silence` to send the final continuation
 result to the original caller. The runtime safety plan for this boundary lives
 in
 [callback-continuation-safety](../../callback-continuation-safety/README.md).
@@ -53,12 +62,12 @@ An upstream silent edge does not decide downstream routing:
 A --silence -> B
 ```
 
-B still runs an active job. If B needs C's result to finish, B uses callback. If
+B still runs an active job. If B needs C's result to finish, B uses chain. If
 B is only dispatching independent work to C, B uses silence.
 
 ## Discouraged Combination
 
-Avoid combining `--callback` and `--silence` in normal skill guidance. The
+Avoid combining `--chain` and `--silence` in normal skill guidance. The
 intents conflict: callback says the current task needs the result, while silence
 says successful completion should not interrupt the caller. This is a guidance
 rule, not a claim that the CLI rejects the combination.

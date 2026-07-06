@@ -30,6 +30,7 @@ test/dir1/.ccb/
 .ccb-requests/
 .gemini/
 dist/
+dist-mobile/
 opencode.json
 .claude/
 *.mp4

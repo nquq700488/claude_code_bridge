@@ -172,7 +172,7 @@ Date: 2026-06-10
   `fake-gemini`, and `fake-legacy` all surfaced as `status: incomplete` with
   the expected reason rather than `completed`. `--silence` success stayed
   `completed`, `--silence` abnormal completion stayed diagnosable as
-  `incomplete`, standalone `--callback` failed with the expected parent-job
+  `incomplete`, standalone `--chain` failed with the expected parent-job
   guard, active-parent callback produced the intentional
   `callback_pending` empty parent reply and then a normal callback
   continuation, and active-parent `--silence` fire-and-forget completed

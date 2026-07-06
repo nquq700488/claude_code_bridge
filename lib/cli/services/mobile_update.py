@@ -21,8 +21,8 @@ TAILSCALE_LOGIN_URL = "https://login.tailscale.com/start"
 DEFAULT_MOBILE_GATEWAY_LISTEN = "127.0.0.1:8787"
 CCB_MOBILE_APP_DOWNLOAD_URL_ENV = "CCB_MOBILE_APP_DOWNLOAD_URL"
 DEFAULT_CCB_MOBILE_APP_DOWNLOAD_URL = (
-    "https://github.com/bfly123/claude_code_bridge/releases/download/"
-    "v8.0.7/ccb-mobile-v8.0.7.apk"
+    "https://github.com/SeemSeam/claude_codex_bridge/releases/download/"
+    "v8.0.16/ccb-mobile-v8.0.16.apk"
 )
 TAILSCALE_LINUX_INSTALL_COMMAND = (
     "sh",
@@ -60,6 +60,7 @@ def run_mobile_update_onboarding(
     run_fn: Callable[..., subprocess.CompletedProcess[object]] | None = None,
     open_url_fn: Callable[[str], object] | None = None,
     prompt_fn: Callable[[str], str] | None = None,
+    start_service_fn: Callable[[TailnetOnboardingCommands, TailscaleStatus], Mapping[str, object]] | None = None,
     environ: Mapping[str, str] | None = None,
     print_fn: Callable[[str], None] = print,
     serve_forever: bool = True,
@@ -115,6 +116,46 @@ def run_mobile_update_onboarding(
 
     print_fn("Tailscale: logged in")
     commands = build_tailnet_onboarding_commands(status=status)
+    if start_service_fn is not None:
+        print_fn("")
+        print_fn("Starting or refreshing the loopback-only CCB Mobile gateway:")
+        try:
+            service = start_service_fn(commands, status)
+            if not isinstance(service, Mapping):
+                raise TypeError('mobile service starter must return a mapping')
+            _print_mobile_service_summary(print_fn, service)
+            qr_payload = _pairing_qr_text(service)
+        except Exception as exc:
+            print_fn(f"❌ CCB Mobile gateway update failed: {type(exc).__name__}: {exc}")
+            return 1
+        print_fn("")
+        print_fn("Expose that loopback gateway to your tailnet:")
+        print_fn(f"   {_shell_join(commands.tailscale_serve)}")
+        print_fn("   This uses Tailscale Serve only; it does not enable Funnel.")
+        print_fn("")
+        _print_mobile_app_steps(print_fn, environ=env, qr_ready=True)
+        print_fn("")
+        print_fn("Scan this QR in CCB Mobile:")
+        use_ansi = (
+            (print_fn is print and sys.stdout.isatty()) if qr_ansi is None else qr_ansi
+        )
+        for line in render_terminal_qr(
+            qr_payload,
+            ansi=use_ansi,
+            quiet_zone=2,
+            compact=True,
+        ):
+            print_fn(line)
+        print_fn("")
+        _print_pairing_fallback(service, print_fn=print_fn)
+        print_fn("")
+        print_fn("Dry-run/simulated smoke command shapes:")
+        print_fn(f"   health:       {_shell_join(commands.health_smoke)}")
+        print_fn(f"   diagnostics:  {_shell_join(commands.route_diagnostics_smoke)}")
+        print_fn(f"   terminal WS:  {_shell_join(commands.terminal_websocket_smoke)}")
+        print_fn(f"   revoke gate:  {_shell_join(commands.revoke_gate_smoke)}")
+        return 0
+
     public_url = _public_url_from_commands(commands)
     handle = None
     try:
@@ -618,6 +659,34 @@ def _print_mobile_app_steps(
         print_fn(
             "   4. After the next `ccb update mobile` prints a QR, open CCB Mobile and scan it."
         )
+
+
+def _print_mobile_service_summary(print_fn: Callable[[str], None], service: Mapping[str, object]) -> None:
+    print_fn(f"   status: {service.get('service_status') or service.get('mobile_status') or 'unknown'}")
+    if service.get("pid"):
+        print_fn(f"   pid: {service.get('pid')}")
+    if service.get("listen"):
+        print_fn(f"   listen: {service.get('listen')}")
+    if service.get("gateway_url"):
+        print_fn(f"   gateway_url: {service.get('gateway_url')}")
+    if service.get("local_gateway_url"):
+        print_fn(f"   local_gateway_url: {service.get('local_gateway_url')}")
+    if service.get("route_provider"):
+        print_fn(f"   route_provider: {service.get('route_provider')}")
+    if service.get("mobile_state_dir"):
+        print_fn(f"   mobile_state_dir: {service.get('mobile_state_dir')}")
+    if service.get("service_log_path"):
+        print_fn(f"   service_log: {service.get('service_log_path')}")
+    if service.get("replaced_pid"):
+        print_fn(f"   replaced_pid: {service.get('replaced_pid')}")
+    pairing = service.get("pairing")
+    if isinstance(pairing, Mapping):
+        if pairing.get("pairing_code"):
+            print_fn(f"   pairing_code: {pairing.get('pairing_code')}")
+        if pairing.get("expires_at"):
+            print_fn(f"   pairing_expires_at: {pairing.get('expires_at')}")
+        if pairing.get("claim_endpoint"):
+            print_fn(f"   pairing_claim_endpoint: {pairing.get('claim_endpoint')}")
 
 
 def _should_open_login(environ: Mapping[str, str]) -> bool:

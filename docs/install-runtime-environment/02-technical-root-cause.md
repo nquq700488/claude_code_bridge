@@ -441,7 +441,7 @@ reply: empty
 当前 `ask` usage：
 
 ```text
-ask [--compact] [--silence] [--callback] <target> [--] <message...>
+ask [--compact] [--silence] [--chain] <target> [--] <message...>
 ask get <job_id>
 ask cancel <job_id>
 ```

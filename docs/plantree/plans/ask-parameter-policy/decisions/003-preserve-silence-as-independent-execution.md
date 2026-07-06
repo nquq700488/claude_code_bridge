@@ -20,7 +20,7 @@ actions.
 ## Consequences
 
 - `A --silence -> B` does not decide B-to-C routing.
-- B uses `--callback` for C only when B needs C's result to finish B's current
+- B uses `--chain` for C only when B needs C's result to finish B's current
   task.
 - B uses `--silence` for C when C is independent execution and success should
   not interrupt B.

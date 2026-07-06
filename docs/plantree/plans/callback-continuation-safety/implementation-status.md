@@ -10,24 +10,24 @@ source-test runtime is available.
 
 ## Active TODO
 
-- Run a real Codex/Claude callback chain from `/home/bfly/yunwei/test_ccb2` or
+- Run a real Codex/Claude multi-hop chain from `/home/bfly/yunwei/test_ccb2` or
   another allowed external test project after the stale/degraded ccbd state is
   repaired or a clean project is prepared.
 - Watch for any user-facing need to reject plain `ask` or `--silence` from a
-  callback continuation to the upstream caller.
+  chain continuation to the upstream caller.
 
 ## Done This Phase
 
-- Added a callback validation guard that rejects `ask --callback` from a
-  `callback_continuation` job to the edge's original caller.
-- Made missing continuation edge metadata fail closed for callback requests
+- Added a chain validation guard that rejects `ask --chain` from a
+  `chain_continuation` job to the edge's original caller.
+- Made missing continuation edge metadata fail closed for chain requests
   from continuation jobs.
-- Rewrote callback continuation prompt text to require direct finalization and
-  prohibit `ask`, `--callback`, or `--silence` to the original caller.
+- Rewrote chain continuation prompt text to require direct finalization and
+  prohibit `ask`, `--chain`, or `--silence` to the original caller.
 - Updated inherited ask skills and generated runtime memory coordination rules.
-- Updated callback behavior docs and manuals.
-- Added regression tests for the bad second callback edge, allowed different
-  child callback, missing edge metadata, prompt wording, and three-hop
+- Updated chain behavior docs and manuals.
+- Added regression tests for the bad second chain edge, allowed different
+  child result chain, missing edge metadata, prompt wording, and three-hop
   propagation.
 
 ## Blockers

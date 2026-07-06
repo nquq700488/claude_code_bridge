@@ -106,10 +106,11 @@ class MobileGatewayPairingStore:
         gateway_url: str,
         route_provider: str = 'lan',
         scopes: Iterable[str] = _DEFAULT_DEVICE_SCOPES,
-        expires_seconds: int = _DEFAULT_PAIRING_EXPIRES_SECONDS,
+        expires_seconds: int | None = _DEFAULT_PAIRING_EXPIRES_SECONDS,
+        reusable_claims: bool = False,
     ) -> dict[str, object]:
         now = self._clock()
-        expires_at = now + timedelta(seconds=max(1, int(expires_seconds)))
+        expires_at = None if expires_seconds is None else now + timedelta(seconds=max(1, int(expires_seconds)))
         pairing_code = self._token_factory(18)
         pairing_id = self._id_factory('pair')
         scope_list = _scope_list(scopes)
@@ -122,7 +123,8 @@ class MobileGatewayPairingStore:
             'route_provider': str(route_provider),
             'gateway_url': str(gateway_url),
             'created_at': _iso(now),
-            'expires_at': _iso(expires_at),
+            'expires_at': _iso(expires_at) if expires_at is not None else None,
+            'reusable_claims': bool(reusable_claims),
             'claimed_at': None,
             'claimed_by_device_id': None,
             'revoked_at': None,
@@ -146,8 +148,32 @@ class MobileGatewayPairingStore:
             'gateway_url': str(gateway_url),
             'claim_endpoint': f'{str(gateway_url).rstrip("/")}/v1/pairing/claim',
             'scopes': scope_list,
-            'expires_at': _iso(expires_at),
+            'expires_at': _iso(expires_at) if expires_at is not None else None,
+            'reusable_claims': bool(reusable_claims),
         }
+
+    def revoke_pairing(self, pairing_id: str, *, reason: str = 'revoked') -> dict[str, object] | None:
+        requested = str(pairing_id or '').strip()
+        if not requested:
+            return None
+        with self._lock:
+            record = self._pairing_state_by_id().get(requested)
+            if record is None:
+                return None
+            if record.get('revoked_at'):
+                return dict(record)
+            updated = dict(record)
+            updated['revoked_at'] = _iso(self._clock())
+            updated['revoked_reason'] = str(reason or 'revoked')
+            _append_jsonl(self.pairing_tokens_path, updated)
+            self._append_audit(
+                event='pairing_token_revoked',
+                result='ok',
+                project_id=str(updated.get('project_id') or ''),
+                pairing_id=requested,
+                reason=updated['revoked_reason'],
+            )
+            return updated
 
     def claim_pairing(
         self,
@@ -182,7 +208,8 @@ class MobileGatewayPairingStore:
                     reason='revoked',
                 )
                 raise MobileGatewayPairingError('pairing_code revoked', status_code=410, reason='revoked')
-            if record.get('claimed_at') or record.get('claimed_by_device_id'):
+            reusable_claims = bool(record.get('reusable_claims'))
+            if not reusable_claims and (record.get('claimed_at') or record.get('claimed_by_device_id')):
                 self._append_audit(
                     event='pairing_claim_denied',
                     result='denied',
@@ -264,6 +291,26 @@ class MobileGatewayPairingStore:
                 'scopes': list(device_record['scopes']),
             },
         }
+
+    def pairing_code_is_claimable(self, pairing_code: str) -> bool:
+        code = str(pairing_code or '').strip()
+        if not code:
+            return False
+        token_hash = _token_hash(_PAIRING_HASH_PREFIX, code)
+        now = self._clock()
+        with self._lock:
+            record = next(
+                (item for item in self._pairing_state_by_id().values() if item.get('token_hash') == token_hash),
+                None,
+            )
+            if record is None:
+                return False
+            if record.get('revoked_at'):
+                return False
+            if not bool(record.get('reusable_claims')) and (record.get('claimed_at') or record.get('claimed_by_device_id')):
+                return False
+            expires_at = _parse_utc(record.get('expires_at'))
+            return expires_at is None or now <= expires_at
 
     def authenticate_device(
         self,
@@ -468,7 +515,7 @@ class MobileGatewayPairingStore:
             )
         if resume_cursor is not None:
             cursor = int(resume_cursor)
-            if cursor != last_output_seq:
+            if cursor > last_output_seq:
                 self._append_audit(
                     event='terminal_resume_denied',
                     result='denied',
@@ -488,6 +535,7 @@ class MobileGatewayPairingStore:
             updated['disconnected_at'] = None
             updated['resumed_at'] = _iso(self._clock())
             updated['last_resume_cursor'] = cursor
+            updated['last_resume_gap'] = max(0, last_output_seq - cursor)
             _append_jsonl(self.terminal_tokens_path, updated)
             self._append_audit(
                 event='terminal_resume_ok',
@@ -496,6 +544,8 @@ class MobileGatewayPairingStore:
                 device_id=device_id,
                 terminal_id=terminal_id,
                 resume_cursor=cursor,
+                last_output_seq=last_output_seq,
+                skipped_output_count=updated['last_resume_gap'],
             )
             return updated
         return record

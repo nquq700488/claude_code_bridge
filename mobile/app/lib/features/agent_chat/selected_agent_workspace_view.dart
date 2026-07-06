@@ -41,7 +41,6 @@ class SelectedAgentWorkspaceView extends StatelessWidget {
     required this.enableComposerCollapse,
     required this.onRetry,
     required this.onToggleExpanded,
-    required this.onRefreshLatest,
     required this.onNearEnd,
     required this.onUserNearEnd,
     required this.onNearStart,
@@ -57,6 +56,7 @@ class SelectedAgentWorkspaceView extends StatelessWidget {
     required this.onRemoveAttachment,
     required this.onDownloadAttachment,
     required this.onOpenAttachment,
+    required this.onDeleteFailedMessage,
     required this.onSend,
     required this.onSendTab,
     required this.onSendEscape,
@@ -72,7 +72,6 @@ class SelectedAgentWorkspaceView extends StatelessWidget {
   final bool enableComposerCollapse;
   final ValueChanged<CcbConversationItem> onRetry;
   final ValueChanged<String> onToggleExpanded;
-  final VoidCallback onRefreshLatest;
   final VoidCallback onNearEnd;
   final VoidCallback onUserNearEnd;
   final VoidCallback onNearStart;
@@ -88,83 +87,95 @@ class SelectedAgentWorkspaceView extends StatelessWidget {
   final ValueChanged<String> onRemoveAttachment;
   final ValueChanged<CcbMessageAttachment> onDownloadAttachment;
   final ValueChanged<CcbMessageAttachment> onOpenAttachment;
+  final ValueChanged<CcbConversationItem> onDeleteFailedMessage;
   final VoidCallback onSend;
   final VoidCallback onSendTab;
   final VoidCallback onSendEscape;
 
   @override
   Widget build(BuildContext context) {
-    final strings = CcbMobileLocalizations.of(context);
     return Column(
       key: const ValueKey('selected-agent-workspace'),
       children: [
         Expanded(
-          child: _ComposerDismissRegion(
-            key: const ValueKey('agent-compose-dismiss-region'),
-            onDismiss: onCollapseComposer,
-            child: ConversationTimeline(
-              key: ValueKey('agent-chat-timeline-${model.agent.name}'),
-              repository: repository,
-              view: view,
-              agent: model.agent,
-              contentItems: model.contentItems,
-              initialHistory: model.initialHistory,
-              items: model.timelineItems,
-              isLoading: model.isLoadingConversation,
-              controller: timelineController,
-              expandedItemIds: model.expandedItemIds,
-              downloadingAttachmentIds: downloadingAttachmentIds,
-              downloadedAttachmentIds: downloadedAttachmentIds,
-              onRetry: onRetry,
-              onToggleExpanded: onToggleExpanded,
-              onNearEnd: onNearEnd,
-              onUserNearEnd: onUserNearEnd,
-              onNearStart: onNearStart,
-              onUserScrollDirectionChanged: onUserScrollDirectionChanged,
-              hasOlderItems: model.hasOlderConversation,
-              onDownloadAttachment: onDownloadAttachment,
-              onOpenAttachment: onOpenAttachment,
-            ),
-          ),
-        ),
-        const SizedBox(height: 4),
-        SizedBox(
-          height: 36,
-          child: Row(
-            children: [
-              IconButton(
-                key: const ValueKey('agent-conversation-refresh-action'),
-                tooltip: strings.refreshConversation,
-                onPressed: model.isLoadingConversation ? null : onRefreshLatest,
-                icon: const Icon(Icons.refresh),
-                iconSize: 20,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints.tightFor(
-                  width: 36,
-                  height: 36,
-                ),
-              ),
-              if (model.executionStatus != null)
-                _AgentWorkingStatus(status: model.executionStatus!),
-              const Spacer(),
-              if (model.hasNewMessages)
-                TextButton.icon(
-                  key: const ValueKey('agent-new-messages-jump'),
-                  onPressed: onJumpToLatest,
-                  icon: const Icon(Icons.south, size: 18),
-                  label: Text(strings.newMessages),
-                  style: TextButton.styleFrom(
-                    visualDensity: VisualDensity.compact,
+          child: ListenableBuilder(
+            listenable: draftFocusNode,
+            builder: (context, _) {
+              final flutterView = View.of(context);
+              final keyboardOverlapsView =
+                  flutterView.viewInsets.bottom / flutterView.devicePixelRatio >
+                  conversationTimelineKeyboardInsetThreshold;
+              final composerExpanded =
+                  enableComposerCollapse && !model.isComposerCollapsed;
+              final bottomRevealPadding =
+                  keyboardOverlapsView
+                      ? conversationTimelineComposerRevealPadding
+                      : composerExpanded
+                      ? conversationTimelineExpandedComposerRevealPadding
+                      : conversationTimelineFollowLatestPadding;
+              return Stack(
+                children: [
+                  Positioned.fill(
+                    child: _ComposerDismissRegion(
+                      key: const ValueKey('agent-compose-dismiss-region'),
+                      onDismiss: onCollapseComposer,
+                      child: ConversationTimeline(
+                        key: ValueKey(
+                          'agent-chat-timeline-${model.agent.name}',
+                        ),
+                        repository: repository,
+                        view: view,
+                        agent: model.agent,
+                        contentItems: model.contentItems,
+                        initialHistory: model.initialHistory,
+                        items: model.timelineItems,
+                        isLoading: model.isLoadingConversation,
+                        controller: timelineController,
+                        expandedItemIds: model.expandedItemIds,
+                        bottomRevealPadding: bottomRevealPadding,
+                        workingItemId: model.workingReplyItemId,
+                        downloadingAttachmentIds: downloadingAttachmentIds,
+                        downloadedAttachmentIds: downloadedAttachmentIds,
+                        onRetry: onRetry,
+                        onDeleteFailedMessage: onDeleteFailedMessage,
+                        onToggleExpanded: onToggleExpanded,
+                        onNearEnd: onNearEnd,
+                        onUserNearEnd: onUserNearEnd,
+                        onNearStart: onNearStart,
+                        onUserScrollDirectionChanged:
+                            onUserScrollDirectionChanged,
+                        hasOlderItems: model.hasOlderConversation,
+                        onDownloadAttachment: onDownloadAttachment,
+                        onOpenAttachment: onOpenAttachment,
+                      ),
+                    ),
                   ),
-                ),
-            ],
+                  if (model.commsItems.isNotEmpty)
+                    Positioned(
+                      top: 8,
+                      left: 8,
+                      right: 8,
+                      child: IgnorePointer(
+                        child: Align(
+                          alignment: Alignment.topLeft,
+                          child: _AgentCommsStatusStrip(
+                            item: model.commsItems.last,
+                          ),
+                        ),
+                      ),
+                    ),
+                  if (model.hasNewMessages)
+                    Positioned(
+                      right: 8,
+                      bottom: 8,
+                      child: _NewMessagesButton(onJumpToLatest: onJumpToLatest),
+                    ),
+                ],
+              );
+            },
           ),
         ),
-        if (model.commsItems.isNotEmpty) ...[
-          const SizedBox(height: 6),
-          _AgentCommsStatusStrip(item: model.commsItems.last),
-        ],
-        const SizedBox(height: 8),
+        const SizedBox(height: 6),
         AgentMessageComposer(
           agentName: model.agent.name,
           controller: draftController,
@@ -183,6 +194,34 @@ class SelectedAgentWorkspaceView extends StatelessWidget {
           onSendEscape: onSendEscape,
         ),
       ],
+    );
+  }
+}
+
+class _NewMessagesButton extends StatelessWidget {
+  const _NewMessagesButton({required this.onJumpToLatest});
+
+  final VoidCallback onJumpToLatest;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final strings = CcbMobileLocalizations.of(context);
+    return Material(
+      color: colorScheme.surfaceContainerHigh,
+      shape: const StadiumBorder(),
+      elevation: 2,
+      child: TextButton.icon(
+        key: const ValueKey('agent-new-messages-jump'),
+        onPressed: onJumpToLatest,
+        icon: const Icon(Icons.south, size: 18),
+        label: Text(strings.newMessages),
+        style: TextButton.styleFrom(
+          visualDensity: VisualDensity.compact,
+          foregroundColor: colorScheme.primary,
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        ),
+      ),
     );
   }
 }
@@ -249,54 +288,6 @@ class _ComposerDismissRegionState extends State<_ComposerDismissRegion> {
   }
 }
 
-class _AgentWorkingStatus extends StatelessWidget {
-  const _AgentWorkingStatus({required this.status});
-
-  final AgentExecutionStatus status;
-
-  @override
-  Widget build(BuildContext context) {
-    final colorScheme = Theme.of(context).colorScheme;
-    final textTheme = Theme.of(context).textTheme;
-    final statusColor = switch (status.state) {
-      'exception' => colorScheme.error,
-      'idle' => colorScheme.onSurfaceVariant,
-      _ => colorScheme.primary,
-    };
-    return Padding(
-      key: const ValueKey('agent-working-status'),
-      padding: const EdgeInsets.only(left: 4),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          SizedBox.square(
-            dimension: 14,
-            child: _statusIcon(status, statusColor),
-          ),
-          const SizedBox(width: 6),
-          Text(
-            CcbMobileLocalizations.of(context).executionStatus(status.label),
-            style: textTheme.labelMedium?.copyWith(color: statusColor),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _statusIcon(AgentExecutionStatus status, Color color) {
-    if (status.isRefreshing) {
-      return CircularProgressIndicator(strokeWidth: 2, color: color);
-    }
-    if (status.state == 'working') {
-      return Icon(Icons.hourglass_top, size: 14, color: color);
-    }
-    if (status.state == 'exception') {
-      return Icon(Icons.error_outline, size: 14, color: color);
-    }
-    return Icon(Icons.check_circle_outline, size: 14, color: color);
-  }
-}
-
 class _AgentCommsStatusStrip extends StatelessWidget {
   const _AgentCommsStatusStrip({required this.item});
 
@@ -308,33 +299,37 @@ class _AgentCommsStatusStrip extends StatelessWidget {
     final textTheme = Theme.of(context).textTheme;
     final strings = CcbMobileLocalizations.of(context);
     final summary = _summaryText(item);
-    return Padding(
+    return Material(
       key: const ValueKey('agent-comms-status'),
-      padding: const EdgeInsets.symmetric(horizontal: 4),
-      child: Row(
-        children: [
-          Icon(Icons.forum_outlined, size: 18, color: colorScheme.primary),
-          const SizedBox(width: 6),
-          Text(
-            strings.communicating,
-            style: textTheme.labelLarge?.copyWith(color: colorScheme.primary),
-          ),
-          if (summary.isNotEmpty) ...[
-            const SizedBox(width: 8),
-            Expanded(
-              child: Text(
-                summary,
-                key: const ValueKey('agent-comms-status-summary'),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: textTheme.bodySmall?.copyWith(
-                  color: colorScheme.onSurfaceVariant,
+      color: colorScheme.surfaceContainerHigh,
+      shape: const StadiumBorder(),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.forum_outlined, size: 18, color: colorScheme.primary),
+            const SizedBox(width: 6),
+            Text(
+              strings.communicating,
+              style: textTheme.labelLarge?.copyWith(color: colorScheme.primary),
+            ),
+            if (summary.isNotEmpty) ...[
+              const SizedBox(width: 8),
+              Flexible(
+                child: Text(
+                  summary,
+                  key: const ValueKey('agent-comms-status-summary'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: textTheme.bodySmall?.copyWith(
+                    color: colorScheme.onSurfaceVariant,
+                  ),
                 ),
               ),
-            ),
-          ] else
-            const Spacer(),
-        ],
+            ],
+          ],
+        ),
       ),
     );
   }

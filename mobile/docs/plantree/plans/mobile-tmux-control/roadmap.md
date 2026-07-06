@@ -35,7 +35,8 @@ Recommended direction:
 Work:
 
 - decide whether the mobile app may be AGPL;
-- use this dedicated `ccb_mobile` workspace outside `ccb_source`;
+- keep one authoritative mobile implementation subtree under
+  `ccb_source/mobile`;
 - preserve upstream license notices and attribution;
 - strip or hide generic server-management surfaces in the CCB profile;
 - define the Flutter data model: host, project, window, agent, terminal target,
@@ -52,8 +53,8 @@ Acceptance criteria:
 
 Current landing batch:
 
-- treat this repository as the dedicated mobile workspace and create the app
-  under `app/` unless a later repository decision supersedes it;
+- treat `ccb_source/mobile/` as the only authoritative mobile workspace and
+  keep the Flutter app under `app/`;
 - finalize the architecture/reuse gate in
   [topics/architecture-and-reuse-plan.md](topics/architecture-and-reuse-plan.md)
   before app scaffold or upstream code import;
@@ -191,6 +192,11 @@ Current landing batch:
   Android debug APK builds successfully;
 - validate the first terminal path only against an isolated CCB test project,
   not `/home/bfly/yunwei/ccb_source` or this project's active runtime.
+- land per-agent Terminal mode from
+  [topics/agent-terminal-mode-remote-pane-control.md](topics/agent-terminal-mode-remote-pane-control.md):
+  reuse the existing gateway `TerminalView`/WebSocket transport inside the
+  selected-agent workspace, complete direct pane input controls, and require
+  real Android Emulator screenshots/recording before acceptance.
 
 ## Phase 1: Gateway Contract And Native Tmux Terminal Vertical Slice
 

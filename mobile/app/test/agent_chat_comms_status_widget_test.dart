@@ -17,6 +17,9 @@ void main() {
     addTearDown(focusNode.dispose);
 
     final agent = _agent();
+    final workingPlaceholder = syntheticAgentWorkingConversationItem(
+      agent.name,
+    );
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
@@ -38,6 +41,7 @@ void main() {
                     body: 'real backend answer',
                     source: 'completion_snapshot',
                   ),
+                  workingPlaceholder,
                 ],
                 commsItems: [
                   CcbConversationItem(
@@ -61,6 +65,7 @@ void main() {
                   isAwaitingAgentResponse: true,
                   isLoadingConversation: false,
                 ),
+                workingReplyItemId: workingPlaceholder.id,
               ),
               timelineController: scrollController,
               draftController: draftController,
@@ -68,7 +73,6 @@ void main() {
               enableComposerCollapse: false,
               onRetry: (_) {},
               onToggleExpanded: (_) {},
-              onRefreshLatest: () {},
               onNearEnd: () {},
               onUserNearEnd: () {},
               onNearStart: () {},
@@ -84,6 +88,7 @@ void main() {
               onRemoveAttachment: (_) {},
               onDownloadAttachment: (_) {},
               onOpenAttachment: (_) {},
+              onDeleteFailedMessage: (_) {},
               onSend: () {},
               onSendTab: () {},
               onSendEscape: () {},
@@ -95,9 +100,23 @@ void main() {
 
     expect(find.byKey(const ValueKey('agent-comms-status')), findsOneWidget);
     expect(find.text('Communicating'), findsOneWidget);
-    expect(find.byKey(const ValueKey('agent-working-status')), findsOneWidget);
-    expect(find.text('Working'), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('conversation-working-status-text')),
+      findsOneWidget,
+    );
     expect(find.text('project view updated'), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('agent-conversation-refresh-action')),
+      findsNothing,
+    );
+    expect(_composerGap(tester), lessThanOrEqualTo(8));
+    expect(
+      tester.getTopLeft(find.byKey(const ValueKey('agent-comms-status'))).dy,
+      lessThan(
+        tester.getTopLeft(find.byKey(const ValueKey('agent-chat-composer'))).dy,
+      ),
+    );
     expect(
       find.byKey(const ValueKey('conversation-item-comms-1')),
       findsNothing,
@@ -107,6 +126,16 @@ void main() {
       findsOneWidget,
     );
   });
+}
+
+double _composerGap(WidgetTester tester) {
+  final timelineBottom =
+      tester
+          .getBottomLeft(find.byKey(const ValueKey('agent-chat-timeline')))
+          .dy;
+  final composerTop =
+      tester.getTopLeft(find.byKey(const ValueKey('agent-chat-composer'))).dy;
+  return composerTop - timelineBottom;
 }
 
 CcbProjectView _view() {

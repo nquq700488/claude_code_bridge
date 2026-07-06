@@ -239,7 +239,7 @@ def _pending_callback_blockers(app, *, agent_name: str) -> tuple[dict[str, objec
         child_job_id = _clean(getattr(edge, 'child_job_id', None))
         if child_job_id:
             detail += f' child_job={child_job_id}'
-        blockers.append({'reason': 'pending_callback_continuation', 'detail': detail})
+        blockers.append({'reason': 'pending_chain_continuation', 'detail': detail})
     return tuple(blockers)
 
 

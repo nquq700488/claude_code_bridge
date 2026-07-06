@@ -6,6 +6,10 @@ plugins {
     id("dev.flutter.flutter-gradle-plugin")
 }
 
+dependencies {
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0")
+}
+
 val releaseSigningPropertiesFile = rootProject.file("release-signing.properties")
 val releaseSigningProperties = Properties().apply {
     if (releaseSigningPropertiesFile.isFile) {

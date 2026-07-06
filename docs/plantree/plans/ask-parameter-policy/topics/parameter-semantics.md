@@ -8,9 +8,9 @@ Date: 2026-06-07
 inline text is enough. It should not be the broad default for execution,
 consultation, analysis, or report-style work.
 
-`--callback` is for a child ask submitted from an active CCB task when the
+`--chain` is for a child ask submitted from an active CCB task when the
 current task cannot finish correctly until that child result is available. CCB
-records a callback edge and later submits the continuation automatically after
+records a chain edge and later submits the continuation automatically after
 the child result is terminal.
 
 `--silence` is for publish/execute work where a successful result is not needed.
@@ -39,7 +39,7 @@ Result intent:
 
 Dependency:
 
-- active-task child dependency: add `--callback`
+- active-task child dependency: add `--chain`
 - callback can combine with `--compact`, `--artifact-reply`, or
   `--artifact-io`
 - callback submit stops the current turn until CCB delivers continuation
@@ -51,7 +51,7 @@ Content preservation:
 
 ## Non-Goals
 
-These semantics do not make `--callback` and `--silence` syntactically
+These semantics do not make `--chain` and `--silence` syntactically
 exclusive. They are an intent conflict in normal use: one says the current task
 needs the result, while the other says successful completion does not need to
 interrupt the caller.

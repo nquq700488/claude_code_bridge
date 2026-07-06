@@ -45,7 +45,7 @@ def _legacy_v4_project_memory_template() -> str:
         'EOF\n'
         '```\n\n'
         '- Submit once, then stop. Do not wait, poll, or run `pend`/`watch`/`ping` unless diagnostics were requested.\n'
-        '- During an active CCB ask task, use `ask --callback` when a child result is needed to finish; use `ask --silence` only for independent no-result-needed work.\n'
+        '- During an active CCB ask task, use `ask --chain` when a child result is needed to finish the current task; use `ask --silence` only for independent no-result-needed work.\n'
         '- Plain nested `ask` from an active task is rejected by CCB.\n'
     )
 
@@ -291,9 +291,9 @@ def test_materialize_runtime_memory_bundle_writes_generated_bundle(tmp_path: Pat
     assert '## CCB Runtime Coordination Rules' in text
     assert 'CCB `ask` is submit-only' in text
     assert 'Do not wait, poll, or run `pend`/`watch`/`ping`' in text
-    assert 'use `ask --callback` when a child result is needed' in text
-    assert 'During a CCB callback continuation, answer directly with the final result' in text
-    assert 'do not use `ask`, `--callback`, or `--silence`' in text
+    assert 'use `ask --chain` when a child result is needed' in text
+    assert 'During a CCB result-chain continuation, answer directly with the final result' in text
+    assert 'do not use `ask`, `--chain`, or `--silence`' in text
     assert '## CCB Shared Project Memory' in text
     assert 'shared ask rules' in text
     assert text.index('## CCB Runtime Coordination Rules') < text.index('## CCB Shared Project Memory')

@@ -4,9 +4,9 @@ Date: 2026-06-22
 
 ## Summary
 
-Implemented the callback-continuation safety slice in the working tree. The
+Implemented the chain-continuation safety slice in the working tree. The
 change blocks the observed second-edge loop where a continuation receiver uses
-`ask --callback` to send the final result back to the continuation's original
+`ask --chain` to send the final result back to the continuation's original
 caller.
 
 ## Landed Surface
@@ -56,5 +56,5 @@ ccb_test doctor: completed, but current test project ccbd is stale/degraded
 
 Live mixed-provider provider-pane validation was not completed in this
 checkpoint because the existing external source-test project has stale/degraded
-ccbd state. The dispatcher-level tests cover the callback semantics directly,
+ccbd state. The dispatcher-level tests cover the result chain semantics directly,
 including the Claude-triggered bad edge pattern.

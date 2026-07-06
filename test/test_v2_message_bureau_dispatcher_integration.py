@@ -677,7 +677,7 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -705,10 +705,10 @@ def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path
     continuation_job = dispatcher.get(edge.continuation_job_id)
     assert continuation_job is not None
     assert continuation_job.request.from_actor == 'user'
-    assert continuation_job.request.message_type == 'callback_continuation'
+    assert continuation_job.request.message_type == 'chain_continuation'
     assert 'evidence found' in continuation_job.request.body
     assert 'Finish this current response with the final result.' in continuation_job.request.body
-    assert 'Do not call ask, --callback, or --silence to the original caller' in continuation_job.request.body
+    assert 'Do not call ask, --chain, or --silence to the original caller' in continuation_job.request.body
 
     dispatcher.complete(edge.continuation_job_id, _decision(reply='final answer'))
     final_edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
@@ -757,7 +757,7 @@ def test_dispatcher_callback_continuation_uses_artifact_for_large_child_reply(tm
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -815,7 +815,7 @@ def test_dispatcher_callback_continuation_uses_forced_artifact_for_short_child_r
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback', 'artifact_reply': True},
+            route_options={'mode': 'chain', 'artifact_reply': True},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -858,7 +858,7 @@ def test_dispatcher_callback_rejects_without_active_parent(tmp_path: Path) -> No
                 reply_to=None,
                 message_type='ask',
                 delivery_scope=DeliveryScope.SINGLE,
-                route_options={'mode': 'callback'},
+                route_options={'mode': 'chain'},
             )
         )
     assert MessageStore(layout).list_all() == []
@@ -889,7 +889,7 @@ def test_dispatcher_rejects_plain_nested_ask_from_active_parent(tmp_path: Path) 
     )
     dispatcher.tick()
 
-    with pytest.raises(DispatchError, match='plain ask from an active CCB task requires --callback'):
+    with pytest.raises(DispatchError, match='plain ask from an active CCB task requires --chain'):
         dispatcher.submit(
             MessageEnvelope(
                 project_id=ctx.project_id,
@@ -984,7 +984,7 @@ def test_dispatcher_rejects_callback_from_continuation_to_original_caller(tmp_pa
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -999,7 +999,7 @@ def test_dispatcher_rejects_callback_from_continuation_to_original_caller(tmp_pa
     assert edge.continuation_job_id
     dispatcher.tick()
 
-    with pytest.raises(DispatchError, match='callback continuation job .* original caller codex'):
+    with pytest.raises(DispatchError, match='result-chain continuation job .* original caller codex'):
         dispatcher.submit(
             MessageEnvelope(
                 project_id=ctx.project_id,
@@ -1010,7 +1010,7 @@ def test_dispatcher_rejects_callback_from_continuation_to_original_caller(tmp_pa
                 reply_to=None,
                 message_type='ask',
                 delivery_scope=DeliveryScope.SINGLE,
-                route_options={'mode': 'callback'},
+                route_options={'mode': 'chain'},
             )
         )
 
@@ -1058,7 +1058,7 @@ def test_dispatcher_allows_callback_from_continuation_to_different_child(tmp_pat
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1080,7 +1080,7 @@ def test_dispatcher_allows_callback_from_continuation_to_different_child(tmp_pat
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
 
@@ -1109,14 +1109,14 @@ def test_dispatcher_rejects_callback_from_continuation_with_missing_edge(tmp_pat
             body='orphan continuation',
             task_id='task-continuation-missing-edge',
             reply_to=None,
-            message_type='callback_continuation',
+            message_type='chain_continuation',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback_continuation', 'callback_edge_id': 'cb_missing'},
+            route_options={'mode': 'chain_continuation', 'chain_edge_id': 'cb_missing'},
         )
     )
     dispatcher.tick()
 
-    with pytest.raises(DispatchError, match='could not resolve callback edge cb_missing'):
+    with pytest.raises(DispatchError, match='could not resolve chain edge cb_missing'):
         dispatcher.submit(
             MessageEnvelope(
                 project_id=ctx.project_id,
@@ -1127,7 +1127,7 @@ def test_dispatcher_rejects_callback_from_continuation_with_missing_edge(tmp_pat
                 reply_to=None,
                 message_type='ask',
                 delivery_scope=DeliveryScope.SINGLE,
-                route_options={'mode': 'callback'},
+                route_options={'mode': 'chain'},
             )
         )
 
@@ -1168,7 +1168,7 @@ def test_dispatcher_callback_child_failure_still_continues_parent(tmp_path: Path
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1229,7 +1229,7 @@ def test_dispatcher_callback_chain_waits_for_nested_child_message(tmp_path: Path
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge_ab = CallbackEdgeStore(layout).get_latest_for_child_job(b_job)
@@ -1247,7 +1247,7 @@ def test_dispatcher_callback_chain_waits_for_nested_child_message(tmp_path: Path
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge_bc = CallbackEdgeStore(layout).get_latest_for_child_job(c_job)
@@ -1277,6 +1277,104 @@ def test_dispatcher_callback_chain_waits_for_nested_child_message(tmp_path: Path
     continuation_a = dispatcher.get(edge_ab.continuation_job_id)
     assert continuation_a is not None
     assert 'middle final' in continuation_a.request.body
+
+
+def test_dispatcher_allows_same_child_chain_across_multiple_continuations(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-chain-same-child-multi-round'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    registry.upsert(_runtime('gemini', project_id=ctx.project_id, layout=layout, pid=103))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    b_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='answer after consulting gemini until ready',
+            task_id='task-chain-same-child-multi-round',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    first_c_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='gemini',
+            from_actor='claude',
+            body='first evidence pass',
+            task_id='task-chain-same-child-multi-round',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'chain'},
+        )
+    ).jobs[0].job_id
+    first_edge = CallbackEdgeStore(layout).get_latest_for_child_job(first_c_job)
+    assert first_edge is not None
+    assert first_edge.parent_job_id == b_job
+    dispatcher.complete(b_job, _decision(reply='delegated first pass'))
+    dispatcher.tick()
+    dispatcher.complete(first_c_job, _decision(reply='first evidence'))
+
+    first_edge = CallbackEdgeStore(layout).get_latest(first_edge.edge_id)
+    assert first_edge is not None
+    assert first_edge.continuation_job_id
+    dispatcher.tick()
+    first_continuation = dispatcher.get(first_edge.continuation_job_id)
+    assert first_continuation is not None
+    assert first_continuation.request.message_type == 'chain_continuation'
+    assert 'first evidence' in first_continuation.request.body
+
+    second_c_job = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='gemini',
+            from_actor='claude',
+            body='second evidence pass',
+            task_id='task-chain-same-child-multi-round',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'chain'},
+        )
+    ).jobs[0].job_id
+    second_edge = CallbackEdgeStore(layout).get_latest_for_child_job(second_c_job)
+    assert second_edge is not None
+    assert second_edge.parent_job_id == first_edge.continuation_job_id
+    dispatcher.complete(first_edge.continuation_job_id, _decision(reply='delegated second pass'))
+    dispatcher.tick()
+    dispatcher.complete(second_c_job, _decision(reply='second evidence'))
+
+    second_edge = CallbackEdgeStore(layout).get_latest(second_edge.edge_id)
+    assert second_edge is not None
+    assert second_edge.continuation_job_id
+    dispatcher.tick()
+    second_continuation = dispatcher.get(second_edge.continuation_job_id)
+    assert second_continuation is not None
+    assert second_continuation.request.message_type == 'chain_continuation'
+    assert 'second evidence' in second_continuation.request.body
+
+    dispatcher.complete(second_edge.continuation_job_id, _decision(reply='final answer after two gemini passes'))
+
+    first_edge = CallbackEdgeStore(layout).get_latest(first_edge.edge_id)
+    second_edge = CallbackEdgeStore(layout).get_latest(second_edge.edge_id)
+    assert first_edge is not None
+    assert second_edge is not None
+    assert first_edge.state is CallbackEdgeState.DONE
+    assert second_edge.state is CallbackEdgeState.DONE
+
+    root_snapshot = dispatcher.watch(b_job, start_line=0)
+    assert root_snapshot['reply'] == 'final answer after two gemini passes'
+    assert root_snapshot['visible_reply_source'] == 'message_bureau_reply'
+    assert root_snapshot['completion_reason'] == 'task_complete'
 
 
 def test_dispatcher_three_hop_callback_chain_propagates_sequential_continuations(tmp_path: Path) -> None:
@@ -1315,7 +1413,7 @@ def test_dispatcher_three_hop_callback_chain_propagates_sequential_continuations
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge_ab = CallbackEdgeStore(layout).get_latest_for_child_job(b_job)
@@ -1333,7 +1431,7 @@ def test_dispatcher_three_hop_callback_chain_propagates_sequential_continuations
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge_bc = CallbackEdgeStore(layout).get_latest_for_child_job(c_job)
@@ -1351,7 +1449,7 @@ def test_dispatcher_three_hop_callback_chain_propagates_sequential_continuations
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge_cd = CallbackEdgeStore(layout).get_latest_for_child_job(d_job)
@@ -1423,7 +1521,7 @@ def test_dispatcher_callback_repair_submits_missing_continuation_once(tmp_path: 
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1495,7 +1593,7 @@ def test_dispatcher_callback_repair_uses_persisted_child_reply_from_pending_edge
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1570,7 +1668,7 @@ def test_dispatcher_callback_repair_reuses_existing_continuation_job(tmp_path: P
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1642,7 +1740,7 @@ def test_dispatcher_callback_timeout_fails_parent_message_and_notifies_original_
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1662,7 +1760,7 @@ def test_dispatcher_callback_timeout_fails_parent_message_and_notifies_original_
     replies = ReplyStore(layout).list_message(edge.parent_message_id)
     assert len(replies) == 1
     assert replies[0].terminal_status is ReplyTerminalStatus.FAILED
-    assert replies[0].diagnostics.get('callback_failure') is True
+    assert replies[0].diagnostics.get('chain_failure') is True
 
 
 def test_dispatcher_callback_rejects_depth_limit(tmp_path: Path) -> None:
@@ -1699,7 +1797,7 @@ def test_dispatcher_callback_rejects_depth_limit(tmp_path: Path) -> None:
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     dispatcher.complete(a_job, _decision(reply='delegated to b'))
@@ -1714,13 +1812,13 @@ def test_dispatcher_callback_rejects_depth_limit(tmp_path: Path) -> None:
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     dispatcher.complete(b_job, _decision(reply='delegated to c'))
     dispatcher.tick()
 
-    with pytest.raises(DispatchError, match='max callback depth 2'):
+    with pytest.raises(DispatchError, match='max chain depth 2'):
         dispatcher.submit(
             MessageEnvelope(
                 project_id=ctx.project_id,
@@ -1731,7 +1829,7 @@ def test_dispatcher_callback_rejects_depth_limit(tmp_path: Path) -> None:
                 reply_to=None,
                 message_type='ask',
                 delivery_scope=DeliveryScope.SINGLE,
-                route_options={'mode': 'callback'},
+                route_options={'mode': 'chain'},
             )
         )
 
@@ -1773,7 +1871,7 @@ def test_dispatcher_callback_rejects_actor_cycle(tmp_path: Path) -> None:
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     dispatcher.complete(a_job, _decision(reply='delegated to b'))
@@ -1788,7 +1886,7 @@ def test_dispatcher_callback_rejects_actor_cycle(tmp_path: Path) -> None:
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     )
     dispatcher.complete(b_job, _decision(reply='delegated to c'))
@@ -1805,7 +1903,7 @@ def test_dispatcher_callback_rejects_actor_cycle(tmp_path: Path) -> None:
                 reply_to=None,
                 message_type='ask',
                 delivery_scope=DeliveryScope.SINGLE,
-                route_options={'mode': 'callback'},
+                route_options={'mode': 'chain'},
             )
         )
 
@@ -1843,7 +1941,7 @@ def test_dispatcher_callback_continuation_submit_failure_marks_edge_failed(tmp_p
             reply_to=None,
             message_type='ask',
             delivery_scope=DeliveryScope.SINGLE,
-            route_options={'mode': 'callback'},
+            route_options={'mode': 'chain'},
         )
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
@@ -1864,7 +1962,7 @@ def test_dispatcher_callback_continuation_submit_failure_marks_edge_failed(tmp_p
     replies = ReplyStore(layout).list_message(edge.parent_message_id)
     assert len(replies) == 1
     assert replies[0].terminal_status is ReplyTerminalStatus.FAILED
-    assert replies[0].diagnostics.get('reason') == 'callback_continuation_submit_failed'
+    assert replies[0].diagnostics.get('reason') == 'chain_continuation_submit_failed'
 
 
 def test_dispatcher_rejects_cmd_sender(tmp_path: Path) -> None:

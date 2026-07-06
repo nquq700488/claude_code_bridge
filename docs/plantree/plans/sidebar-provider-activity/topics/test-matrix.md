@@ -161,13 +161,34 @@ Required scenarios:
 - one ProjectView build reads each activity artifact at most once per agent
 - repeated ProjectView builds do not oscillate `runtime_status.state` when raw
   evidence alternates within the configured smoothing windows
+- Codex visible `working`/`tool_running`/`reconnecting` pane status remains
+  active even when the status line is unchanged for more than 60s
+- Codex pane without an active status line becomes display `free` after 60s of
+  unchanged pane content with reason `codex_pane_no_active_stale_no_progress`
+- Codex pane without an active status line resets the 60s no-progress timer
+  when pane content changes
+- Claude runtime status is derived from provider activity hooks, the bound
+  Claude JSONL session path, and narrow explicit Claude pane status shapes
+- Claude running job with no hook/session signal renders `start`/pending
+  instead of being inferred as active or idle
+- Claude runtime with no active job and no session path renders `free` by
+  explicit clean-start rule; malformed or unclassified session evidence remains
+  `unknown`
+- Claude visible `Thinking ..., running N shell command`, spinner status rows,
+  scheduled tasks, and shell-still-running rows render active/tool-running even
+  if a stale hook/session says idle
+- Claude `Thought for ... ran ...` and `Sautéed for ...` rows are terminal
+  summaries only; they do not complete jobs, but they can release stale active
+  hook evidence after the no-progress window
+- Claude prompt visibility (`❯`) is not idle/free authority
 
 Performance assertions:
 
 - no global tmux session scan
 - no global provider-home scan
 - no large transcript scan from the sidebar refresh path
-- no additional per-agent `capture-pane` calls when provider activity is fresh
+- Codex and Claude use one cached per-pane `capture-pane` read per ProjectView
+  build when runtime status needs pane evidence
 - per-pane `capture-pane` fallback is throttled and reused within the configured
   minimum capture interval
 

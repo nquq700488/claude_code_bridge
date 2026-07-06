@@ -27,8 +27,8 @@ _BENIGN_PENDING_REASONS = {
     'pane_missing_recovering',
 }
 _CONCERN_PENDING_REASONS = {
-    'callback_child_completed',
-    'callback_waiting_child',
+    'chain_child_completed',
+    'chain_waiting_child',
     'job_running_stale',
     'provider_prompt_idle',
     'provider_prompt_input_stuck',

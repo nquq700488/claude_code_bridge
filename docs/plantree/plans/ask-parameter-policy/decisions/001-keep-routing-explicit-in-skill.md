@@ -4,7 +4,7 @@ Date: 2026-06-07
 
 ## Context
 
-`--callback` and `--silence` describe task relationship. `--callback` means a
+`--chain` and `--silence` describe task relationship. `--chain` means a
 child result is required before the current active task can finish. `--silence`
 means independent execution where success should not interrupt the caller.
 

@@ -94,10 +94,10 @@ Primary files:
 
 Observed command surface:
 
-- `ccb ask [--compact] [--silence] [--callback] [--artifact-request]
+- `ccb ask [--compact] [--silence] [--chain] [--artifact-request]
   [--artifact-reply] [--artifact-io] <target> [--] <message...>`.
 - `--artifact-io` enables both explicit request and reply artifact behavior.
-- Nested asks from active tasks must use `--callback` or `--silence`.
+- Nested asks from active tasks must use `--chain` or `--silence`.
 - `ask get <job_id>` and `ask cancel <job_id>` remain diagnostics-oriented
   aliases.
 

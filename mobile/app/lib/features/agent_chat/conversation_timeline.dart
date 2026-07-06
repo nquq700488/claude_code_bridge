@@ -11,6 +11,13 @@ import 'content_reader.dart';
 import 'conversation_bubble.dart';
 import 'readable_terminal_history_panel.dart';
 
+const double conversationTimelineFollowLatestPadding = 6;
+const double conversationTimelineExpandedComposerRevealPadding = 20;
+const double conversationTimelineComposerRevealPadding = 32;
+const double conversationTimelineExpandedRevealPadding = 64;
+const double conversationTimelineNearEndThreshold = 120;
+const double conversationTimelineKeyboardInsetThreshold = 80;
+
 class ConversationTimeline extends StatelessWidget {
   const ConversationTimeline({
     required this.repository,
@@ -25,6 +32,7 @@ class ConversationTimeline extends StatelessWidget {
     required this.downloadingAttachmentIds,
     required this.downloadedAttachmentIds,
     required this.onRetry,
+    required this.onDeleteFailedMessage,
     required this.onToggleExpanded,
     required this.onNearEnd,
     required this.onUserNearEnd,
@@ -33,6 +41,8 @@ class ConversationTimeline extends StatelessWidget {
     required this.hasOlderItems,
     required this.onDownloadAttachment,
     required this.onOpenAttachment,
+    this.bottomRevealPadding = conversationTimelineFollowLatestPadding,
+    this.workingItemId,
     super.key,
   });
 
@@ -48,6 +58,7 @@ class ConversationTimeline extends StatelessWidget {
   final Set<String> downloadingAttachmentIds;
   final Set<String> downloadedAttachmentIds;
   final ValueChanged<CcbConversationItem> onRetry;
+  final ValueChanged<CcbConversationItem> onDeleteFailedMessage;
   final ValueChanged<String> onToggleExpanded;
   final VoidCallback onNearEnd;
   final VoidCallback onUserNearEnd;
@@ -56,6 +67,8 @@ class ConversationTimeline extends StatelessWidget {
   final bool hasOlderItems;
   final ValueChanged<CcbMessageAttachment> onDownloadAttachment;
   final ValueChanged<CcbMessageAttachment> onOpenAttachment;
+  final double bottomRevealPadding;
+  final String? workingItemId;
 
   @override
   Widget build(BuildContext context) {
@@ -83,36 +96,50 @@ class ConversationTimeline extends StatelessWidget {
         }
         return false;
       },
-      child: ListView.separated(
-        key: const ValueKey('agent-chat-timeline'),
-        controller: controller,
-        primary: false,
-        scrollCacheExtent: const ScrollCacheExtent.pixels(420),
-        itemCount: items.length + loadingOffset,
-        separatorBuilder: (context, index) => const SizedBox(height: 8),
-        itemBuilder: (context, index) {
-          if (isLoading && index == 0) {
-            return const LinearProgressIndicator(
-              key: ValueKey('agent-conversation-loading'),
-            );
-          }
-          final item = items[index - loadingOffset];
-          return _ConversationTimelineItem(
-            key: ValueKey('conversation-timeline-item-${item.id}'),
-            item: item,
-            content:
-                item.contentId == null ? null : contentById[item.contentId],
-            repository: repository,
-            view: view,
-            agent: agent,
-            initialHistory: initialHistory,
-            expanded: expandedItemIds.contains(item.id),
-            downloadingAttachmentIds: downloadingAttachmentIds,
-            downloadedAttachmentIds: downloadedAttachmentIds,
-            onRetry: onRetry,
-            onToggleExpanded: onToggleExpanded,
-            onDownloadAttachment: onDownloadAttachment,
-            onOpenAttachment: onOpenAttachment,
+      child: LayoutBuilder(
+        builder: (context, constraints) {
+          final bottomReadPadding =
+              (expandedItemIds.isEmpty
+                      ? bottomRevealPadding
+                      : conversationTimelineExpandedRevealPadding)
+                  .clamp(0.0, constraints.maxHeight)
+                  .toDouble();
+          return ListView.separated(
+            key: const ValueKey('agent-chat-timeline'),
+            controller: controller,
+            primary: false,
+            padding: EdgeInsets.only(bottom: bottomReadPadding),
+            scrollCacheExtent: const ScrollCacheExtent.pixels(420),
+            itemCount: items.length + loadingOffset,
+            separatorBuilder: (context, index) => const SizedBox(height: 8),
+            itemBuilder: (context, index) {
+              if (isLoading && index == 0) {
+                return const LinearProgressIndicator(
+                  key: ValueKey('agent-conversation-loading'),
+                );
+              }
+              final item = items[index - loadingOffset];
+              return _ConversationTimelineItem(
+                key: conversationTimelineItemKey(item.id),
+                item: item,
+                timelineViewportHeight: constraints.maxHeight,
+                content:
+                    item.contentId == null ? null : contentById[item.contentId],
+                repository: repository,
+                view: view,
+                agent: agent,
+                initialHistory: initialHistory,
+                expanded: expandedItemIds.contains(item.id),
+                isWorking: item.id == workingItemId,
+                downloadingAttachmentIds: downloadingAttachmentIds,
+                downloadedAttachmentIds: downloadedAttachmentIds,
+                onRetry: onRetry,
+                onDeleteFailedMessage: onDeleteFailedMessage,
+                onToggleExpanded: onToggleExpanded,
+                onDownloadAttachment: onDownloadAttachment,
+                onOpenAttachment: onOpenAttachment,
+              );
+            },
           );
         },
       ),
@@ -120,18 +147,30 @@ class ConversationTimeline extends StatelessWidget {
   }
 }
 
+final _conversationTimelineItemKeys = <String, GlobalKey>{};
+
+GlobalKey conversationTimelineItemKey(String itemId) {
+  return _conversationTimelineItemKeys.putIfAbsent(
+    itemId,
+    () => GlobalKey(debugLabel: 'conversation-timeline-item-$itemId'),
+  );
+}
+
 class _ConversationTimelineItem extends StatelessWidget {
   const _ConversationTimelineItem({
     required this.item,
+    required this.timelineViewportHeight,
     required this.content,
     required this.repository,
     required this.view,
     required this.agent,
     required this.initialHistory,
     required this.expanded,
+    required this.isWorking,
     required this.downloadingAttachmentIds,
     required this.downloadedAttachmentIds,
     required this.onRetry,
+    required this.onDeleteFailedMessage,
     required this.onToggleExpanded,
     required this.onDownloadAttachment,
     required this.onOpenAttachment,
@@ -139,15 +178,18 @@ class _ConversationTimelineItem extends StatelessWidget {
   });
 
   final CcbConversationItem item;
+  final double timelineViewportHeight;
   final CcbContentItem? content;
   final MobileCcbRepository repository;
   final CcbProjectView view;
   final CcbAgent agent;
   final ReadableTerminalHistory? initialHistory;
   final bool expanded;
+  final bool isWorking;
   final Set<String> downloadingAttachmentIds;
   final Set<String> downloadedAttachmentIds;
   final ValueChanged<CcbConversationItem> onRetry;
+  final ValueChanged<CcbConversationItem> onDeleteFailedMessage;
   final ValueChanged<String> onToggleExpanded;
   final ValueChanged<CcbMessageAttachment> onDownloadAttachment;
   final ValueChanged<CcbMessageAttachment> onOpenAttachment;
@@ -158,6 +200,8 @@ class _ConversationTimelineItem extends StatelessWidget {
       return ConversationBubble(
         item: item,
         expanded: expanded,
+        timelineViewportHeight: timelineViewportHeight,
+        isWorking: isWorking,
         onToggleExpanded: onToggleExpanded,
         child: AgentReadableHistoryLoader(
           repository: repository,
@@ -177,6 +221,8 @@ class _ConversationTimelineItem extends StatelessWidget {
       return ConversationBubble(
         item: item,
         expanded: expanded,
+        timelineViewportHeight: timelineViewportHeight,
+        isWorking: isWorking,
         onToggleExpanded: onToggleExpanded,
         child: AgentContentReader(items: [contentItem]),
         onDownloadAttachment: onDownloadAttachment,
@@ -188,11 +234,19 @@ class _ConversationTimelineItem extends StatelessWidget {
     return ConversationBubble(
       item: item,
       expanded: expanded,
+      timelineViewportHeight: timelineViewportHeight,
+      isWorking: isWorking,
       onToggleExpanded: onToggleExpanded,
       onRetry:
           item.state == CcbConversationDeliveryState.failed
               ? () {
                 onRetry(item);
+              }
+              : null,
+      onDelete:
+          item.state == CcbConversationDeliveryState.failed
+              ? () {
+                onDeleteFailedMessage(item);
               }
               : null,
       onDownloadAttachment: onDownloadAttachment,
@@ -238,7 +292,8 @@ ScrollDirection userScrollDirectionForNotification(
 }
 
 bool isScrollMetricsNearEnd(ScrollMetrics metrics) {
-  return metrics.maxScrollExtent - metrics.pixels <= 72;
+  return metrics.maxScrollExtent - metrics.pixels <=
+      conversationTimelineNearEndThreshold;
 }
 
 bool isScrollMetricsNearStart(ScrollMetrics metrics) {

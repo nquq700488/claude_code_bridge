@@ -86,6 +86,8 @@ def print_start_help(*, file=None) -> None:
                                     Safely release one dynamic agent through role policy.
               ccb loop capacity ensure --loop-id ID --profile worker=1 --profile code_reviewer=1 --json
                                     Plan dynamic loop workers from configured loop.role_profiles.
+              ccb loop topology propose|commit|reconcile|status|release --loop-id ID --json
+                                    Manage runtime workflow graph desired/observed topology.
               ccb loop run-once --loop-id ID --task TEXT --json
                                     Run one worker/reviewer/orchestrator/round-checker round and write loop artifacts.
               ccb kill             Stop the current project's background runtime.
@@ -367,6 +369,17 @@ _COMMAND_HELP = {
           - This sends the provider-native /clear command into each pane.
           - It does not delete .ccb state, workspaces, auth, sessions, or logs.
           - Use `ccb kill` or the sidebar restart control when you need process restart.
+    """
+    "restart": """
+        usage: ccb restart <agent_name>
+
+        Guarded single-agent runtime restart:
+          ccb restart agent1   Restart one configured mounted agent pane through ccbd.
+
+        Safety:
+          - Target authority comes from the current mounted daemon graph.
+          - Refuses when the agent is busy, queued, delivering a reply, or waiting on result-chain continuation.
+          - Does not support `restart all`, window-level restart, or raw tmux mutation.
     """,
     "maintenance": """
         usage: ccb maintenance <status|tick|schedule>

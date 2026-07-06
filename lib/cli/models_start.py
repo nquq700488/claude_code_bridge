@@ -105,6 +105,20 @@ class ParsedLoopCapacityCommand:
 
 
 @dataclass(frozen=True)
+class ParsedLoopTopologyCommand:
+    project: str | None
+    action: str
+    loop_id: str
+    from_path: str | None = None
+    proposal_id: str | None = None
+    apply: bool = False
+    policy: str = 'auto'
+    idle_only: bool = False
+    json_output: bool = False
+    kind: str = 'loop-topology'
+
+
+@dataclass(frozen=True)
 class ParsedLoopRunOnceCommand:
     project: str | None
     loop_id: str | None = None
@@ -124,6 +138,7 @@ class ParsedLoopRunnerCommand:
     project: str | None
     once: bool = True
     timeout_s: float | None = None
+    consume_role_output: bool = False
     json_output: bool = False
     kind: str = 'loop-runner'
 
@@ -221,6 +236,7 @@ __all__ = [
     'ParsedLayoutCommand',
     'ParsedLogsCommand',
     'ParsedLoopCapacityCommand',
+    'ParsedLoopTopologyCommand',
     'ParsedLoopRunOnceCommand',
     'ParsedLoopRunnerCommand',
     'ParsedMaintenanceCommand',

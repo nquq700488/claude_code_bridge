@@ -160,6 +160,8 @@ void main() {
     expect(projects.single.displayName, 'demo');
     expect(projects.single.root, '');
     expect(projects.single.health, 'healthy');
+    expect(projects.single.lastOpenedAt, DateTime.utc(2026, 7, 4, 9));
+    expect(projects.single.lastActivityAt, DateTime.utc(2026, 7, 4, 9, 2));
     expect(requests, ['/v1/projects']);
   });
 
@@ -846,6 +848,8 @@ _GatewayResponse _payloadForRequest(
           'id': 'proj-demo',
           'display_name': 'demo',
           'health': 'healthy',
+          'last_opened_at': '2026-07-04T09:00:00Z',
+          'last_activity_at': '2026-07-04T09:02:00Z',
           'capabilities': ['http_json', 'project_view'],
         },
       ],

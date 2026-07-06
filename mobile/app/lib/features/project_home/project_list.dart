@@ -11,6 +11,8 @@ class ProjectListScaffold extends StatelessWidget {
     required this.onOpenProject,
     required this.onOpenNotifications,
     required this.onOpenConnectionDetails,
+    this.hasUnreadTaskCompletion = false,
+    this.hasWorkingAgents = false,
     super.key,
   });
 
@@ -19,6 +21,8 @@ class ProjectListScaffold extends StatelessWidget {
   final VoidCallback onOpenProject;
   final VoidCallback onOpenNotifications;
   final VoidCallback onOpenConnectionDetails;
+  final bool hasUnreadTaskCompletion;
+  final bool hasWorkingAgents;
 
   @override
   Widget build(BuildContext context) {
@@ -65,6 +69,8 @@ class ProjectListScaffold extends StatelessWidget {
                       view: view,
                       selectedAgent: selectedAgent,
                       selected: false,
+                      hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+                      hasWorkingAgents: hasWorkingAgents,
                       onOpen: onOpenProject,
                     );
                   },
@@ -84,6 +90,8 @@ class ProjectListTile extends StatelessWidget {
     required this.selectedAgent,
     required this.selected,
     required this.onOpen,
+    this.hasUnreadTaskCompletion = false,
+    this.hasWorkingAgents = false,
     super.key,
   });
 
@@ -91,6 +99,8 @@ class ProjectListTile extends StatelessWidget {
   final CcbAgent? selectedAgent;
   final bool selected;
   final VoidCallback onOpen;
+  final bool hasUnreadTaskCompletion;
+  final bool hasWorkingAgents;
 
   @override
   Widget build(BuildContext context) {
@@ -99,46 +109,255 @@ class ProjectListTile extends StatelessWidget {
     final activeAgent = selectedAgent?.name ?? strings.noAgent;
     final activeWindow = view.activeWindow ?? selectedAgent?.window ?? 'main';
     final root = view.project.root.trim();
-    return ListTile(
-      key: const ValueKey('project-open-current'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      selected: selected,
-      selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
-      leading: CircleAvatar(
-        radius: 22,
-        child: Icon(view.project.favorite ? Icons.star : Icons.terminal),
+    return ProjectWorkingRowHighlight(
+      projectId: view.project.id,
+      hasWorkingAgents: hasWorkingAgents,
+      child: ListTile(
+        key: const ValueKey('project-open-current'),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        selected: selected,
+        selectedTileColor: Theme.of(context).colorScheme.secondaryContainer,
+        leading: ProjectAttentionAvatar(
+          projectId: view.project.id,
+          favorite: view.project.favorite,
+          hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+          hasWorkingAgents: hasWorkingAgents,
+        ),
+        title: Text(
+          view.project.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: textTheme.titleMedium,
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (root.isNotEmpty)
+              Text(root, maxLines: 1, overflow: TextOverflow.ellipsis),
+            const SizedBox(height: 4),
+            Text(
+              'cmd $activeWindow · $activeAgent',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.onSurfaceVariant,
+              ),
+            ),
+          ],
+        ),
+        trailing: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text('${view.agents.length}'),
+            const SizedBox(width: 6),
+            const Icon(Icons.chevron_right),
+          ],
+        ),
+        onTap: onOpen,
       ),
-      title: Text(
-        view.project.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: textTheme.titleMedium,
+    );
+  }
+}
+
+class ProjectWorkingRowHighlight extends StatefulWidget {
+  const ProjectWorkingRowHighlight({
+    required this.projectId,
+    required this.hasWorkingAgents,
+    required this.child,
+    super.key,
+  });
+
+  final String projectId;
+  final bool hasWorkingAgents;
+  final Widget child;
+
+  @override
+  State<ProjectWorkingRowHighlight> createState() =>
+      _ProjectWorkingRowHighlightState();
+}
+
+class _ProjectWorkingRowHighlightState extends State<ProjectWorkingRowHighlight>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1900),
+  );
+  late final Animation<double> _pulse = CurvedAnimation(
+    parent: _controller,
+    curve: Curves.easeInOut,
+  );
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    _syncAnimation();
+  }
+
+  @override
+  void didUpdateWidget(ProjectWorkingRowHighlight oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _syncAnimation();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _syncAnimation() {
+    final shouldAnimate =
+        widget.hasWorkingAgents &&
+        !mobileWorkingAttentionAnimationDisabled(context);
+    if (shouldAnimate) {
+      if (!_controller.isAnimating) {
+        _controller.repeat(reverse: true);
+      }
+      return;
+    }
+    if (_controller.isAnimating) {
+      _controller.stop();
+    }
+    _controller.value = 0;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    if (!widget.hasWorkingAgents) {
+      return widget.child;
+    }
+    final colorScheme = Theme.of(context).colorScheme;
+    return Semantics(
+      key: ValueKey('project-working-row-${widget.projectId}'),
+      container: true,
+      hint: 'Project has working agents',
+      child: AnimatedBuilder(
+        key: ValueKey('project-working-row-pulse-${widget.projectId}'),
+        animation: _pulse,
+        child: widget.child,
+        builder: (context, child) {
+          final pulse = _pulse.value;
+          final accent = projectWorkingRowAccent(colorScheme);
+          final borderColor = projectWorkingRowBorder(accent, pulse);
+          return DecoratedBox(
+            decoration: BoxDecoration(
+              color: projectWorkingRowTint(colorScheme, pulse),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: borderColor, width: 2.2),
+              boxShadow: projectWorkingRowGlow(accent, pulse),
+            ),
+            child: DecoratedBox(
+              decoration: BoxDecoration(
+                border: Border(left: BorderSide(color: accent, width: 6)),
+              ),
+              child: Material(
+                color: Colors.transparent,
+                clipBehavior: Clip.antiAlias,
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: child,
+              ),
+            ),
+          );
+        },
       ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+    );
+  }
+}
+
+@visibleForTesting
+Color projectWorkingRowTint(ColorScheme colorScheme, double pulse) {
+  final clampedPulse = pulse.clamp(0.0, 1.0);
+  final accent = projectWorkingRowAccent(colorScheme);
+  final base =
+      colorScheme.brightness == Brightness.dark
+          ? Color.alphaBlend(
+            accent.withValues(alpha: 0.26),
+            colorScheme.surfaceContainerHighest,
+          )
+          : Color.alphaBlend(
+            accent.withValues(alpha: 0.20),
+            colorScheme.surfaceContainerLowest,
+          );
+  return Color.alphaBlend(
+    accent.withValues(alpha: 0.10 + (0.08 * clampedPulse)),
+    base,
+  );
+}
+
+@visibleForTesting
+Color projectWorkingRowAccent(ColorScheme colorScheme) {
+  return colorScheme.brightness == Brightness.dark
+      ? const Color(0xFF59DFFF)
+      : const Color(0xFF0077CC);
+}
+
+@visibleForTesting
+Color projectWorkingRowBorder(Color accent, double pulse) {
+  final clampedPulse = pulse.clamp(0.0, 1.0);
+  return accent.withValues(alpha: 0.86 + (0.14 * clampedPulse));
+}
+
+@visibleForTesting
+List<BoxShadow> projectWorkingRowGlow(Color accent, double pulse) {
+  final clampedPulse = pulse.clamp(0.0, 1.0);
+  return [
+    BoxShadow(
+      color: accent.withValues(alpha: 0.22 + (0.16 * clampedPulse)),
+      blurRadius: 8 + (4 * clampedPulse),
+      spreadRadius: 0.6 + clampedPulse,
+    ),
+  ];
+}
+
+@visibleForTesting
+bool mobileWorkingAttentionAnimationDisabled(BuildContext context) {
+  final mediaQuery = MediaQuery.maybeOf(context);
+  final isWidgetTest = WidgetsBinding.instance.runtimeType.toString().contains(
+    'Test',
+  );
+  return isWidgetTest || (mediaQuery?.disableAnimations ?? false);
+}
+
+class ProjectAttentionAvatar extends StatelessWidget {
+  const ProjectAttentionAvatar({
+    required this.projectId,
+    required this.favorite,
+    required this.hasUnreadTaskCompletion,
+    required this.hasWorkingAgents,
+    super.key,
+  });
+
+  final String projectId;
+  final bool favorite;
+  final bool hasUnreadTaskCompletion;
+  final bool hasWorkingAgents;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return SizedBox(
+      width: 52,
+      height: 52,
+      child: Stack(
+        clipBehavior: Clip.none,
         children: [
-          if (root.isNotEmpty)
-            Text(root, maxLines: 1, overflow: TextOverflow.ellipsis),
-          const SizedBox(height: 4),
-          Text(
-            'cmd $activeWindow · $activeAgent',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style: textTheme.bodySmall?.copyWith(
-              color: Theme.of(context).colorScheme.onSurfaceVariant,
+          Center(
+            child: CircleAvatar(
+              radius: 22,
+              child: Icon(favorite ? Icons.star : Icons.terminal),
             ),
           ),
+          if (hasUnreadTaskCompletion)
+            Positioned(
+              key: ValueKey('project-unread-star-$projectId'),
+              right: 0,
+              top: 0,
+              child: Icon(Icons.star, size: 15, color: colorScheme.error),
+            ),
         ],
       ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text('${view.agents.length}'),
-          const SizedBox(width: 6),
-          const Icon(Icons.chevron_right),
-        ],
-      ),
-      onTap: onOpen,
     );
   }
 }

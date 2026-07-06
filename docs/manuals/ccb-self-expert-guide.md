@@ -386,7 +386,7 @@ ccb ps
 通信：
 
 ```bash
-ccb ask [--compact] [--silence] [--callback] [--artifact-request] \
+ccb ask [--compact] [--silence] [--chain] [--artifact-request] \
   [--artifact-reply] [--artifact-io] <target> [--] <message...>
 ccb watch <agent_name|job_id>
 ccb pend [--watch|--inbox|--queue] [--detail] <target> [count]
@@ -476,13 +476,13 @@ ccb fault clear <rule_id|all>
 
 使用：
 
-- `--callback`：当前 agent 必须拿到 child result 才能完成；
+- `--chain`：当前 agent 必须拿到 child result 才能完成；
 - `--silence`：独立 fire-and-forget，不需要结果；
 - `--artifact-request`：请求体较大或需要文件化；
 - `--artifact-reply`：回复较长或需要 artifact 保存；
 - `--artifact-io`：请求和回复都显式使用 artifact 策略。
 
-Active CCB task 内部的 nested ask 必须使用 `--callback` 或 `--silence`。
+Active CCB task 内部的 nested ask 必须使用 `--chain` 或 `--silence`。
 
 ### 6.3 Observer 语义
 
@@ -601,7 +601,7 @@ Callback 需要：
 - parent message；
 - message-bureau support；
 - parent 没有未完成 callback。
-- 如果当前 active job 是 callback continuation，不能再 `--callback` 回该
+- 如果当前 active job 是 callback continuation，不能再 `--chain` 回该
   continuation 的 original caller；应直接完成当前回复，由 CCB 向上游投递。
 
 Child 完成后：

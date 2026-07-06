@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from cli.services import mobile_update
+from cli.services.terminal_qr import render_terminal_qr
 
 
 class _FakeGatewayHandle:
@@ -336,61 +337,55 @@ def test_onboarding_logged_in_starts_gateway_serve_and_prints_qr() -> None:
             route_provider="tailnet",
         )
     ]
-    assert run_commands == [
-        (
-            "tailscale",
-            "serve",
-            "status",
-            "--json",
-        ),
-        (
-            "tailscale",
-            "serve",
-            "--bg",
-            "--https=8787",
-            "http://127.0.0.1:8787",
-        )
-    ]
-    assert handle.closed is True
-    assert "CCB Mobile is ready" in text
+    assert ("tailscale", "serve", "status", "--json") in run_commands
+    assert (
+        "tailscale",
+        "serve",
+        "--bg",
+        "--https=8787",
+        "http://127.0.0.1:8787",
+    ) in run_commands
     assert "Computer gateway: https://desktop.tailnet.ts.net:8787" in text
-    assert "Mounted projects available in the app: 2" in text
-    assert "test_ccb2 (healthy)" not in text
-    assert "ccb_mobile (healthy)" not in text
+    assert "Open CCB Mobile, tap Scan computer QR" in text
     assert "Scan this QR in CCB Mobile" in text
-    qr_start = output.index("Scan this QR in CCB Mobile:") + 1
-    qr_end = output.index("", qr_start)
-    qr_lines = output[qr_start:qr_end]
-    assert len(qr_lines) <= 32
-    assert max(len(line) for line in qr_lines) <= 80
-    assert any("▀" in line or "▄" in line for line in qr_lines)
-    assert "Gateway URL: https://desktop.tailnet.ts.net:8787" in text
-    assert "Pairing Code: pair-code" in text
-    assert "no Funnel, tokens, ACLs, or grants" in text
-    assert "ccb mobile serve" not in text
-    assert "terminal WS:" not in text
+    assert "loopback-only gateway" in text
+    assert "no Funnel" in text
+    command_lines = [
+        line for line in output if line.startswith("   ccb ") or line.startswith("   tailscale ")
+    ]
+    assert all("0.0.0.0" not in line for line in command_lines)
 
 
-def test_onboarding_logged_in_reuses_existing_tailscale_serve_config() -> None:
+def test_onboarding_logged_in_starts_managed_mobile_service_when_callback_provided(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     output: list[str] = []
-    run_commands: list[tuple[str, ...]] = []
-    handle = _FakeGatewayHandle()
-    serve_status = {
-        "TCP": {"8787": {"HTTPS": True}},
-        "Web": {
-            "desktop.tailnet.ts.net:8787": {
-                "Handlers": {"/": {"Proxy": "http://127.0.0.1:8787"}}
-            }
-        },
-    }
+    calls: list[tuple[mobile_update.TailnetOnboardingCommands, mobile_update.TailscaleStatus]] = []
+    qr_payloads: list[tuple[str, dict[str, object]]] = []
 
-    def _run(command, **_kwargs):
-        run_commands.append(tuple(command))
-        if tuple(command) == ("tailscale", "serve", "status", "--json"):
-            return subprocess.CompletedProcess(
-                command, 0, stdout=json.dumps(serve_status), stderr=""
-            )
-        raise AssertionError(f"unexpected command: {command!r}")
+    def _render_qr(payload: str, **kwargs):
+        qr_payloads.append((payload, dict(kwargs)))
+        return ("QR-LINE-1", "QR-LINE-2")
+
+    monkeypatch.setattr(mobile_update, "render_terminal_qr", _render_qr)
+
+    def _start_service(commands, status):
+        calls.append((commands, status))
+        return {
+            'service_status': 'started',
+            'pid': 1234,
+            'listen': '127.0.0.1:8787',
+            'gateway_url': 'https://desktop.tailnet.ts.net:8787',
+            'local_gateway_url': 'http://127.0.0.1:8787',
+            'route_provider': 'tailnet',
+            'mobile_state_dir': '/tmp/mobile-state',
+            'service_log_path': '/tmp/mobile-state/service.log',
+            'pairing': {
+                'pairing_code': 'stable-code',
+                'expires_at': '2026-07-02T00:10:00Z',
+                'claim_endpoint': 'https://desktop.tailnet.ts.net:8787/v1/pairing/claim',
+            },
+        }
 
     code = mobile_update.run_mobile_update_onboarding(
         detect_tailscale_fn=lambda: mobile_update.TailscaleStatus(
@@ -399,27 +394,79 @@ def test_onboarding_logged_in_reuses_existing_tailscale_serve_config() -> None:
             logged_in=True,
             hostname="desktop.tailnet.ts.net.",
         ),
-        prepare_gateway_fn=lambda _command: handle,
-        run_fn=_run,
+        start_service_fn=_start_service,
         print_fn=output.append,
-        serve_forever=False,
-        qr_ansi=False,
     )
 
     text = "\n".join(output)
     assert code == 0
-    assert run_commands == [("tailscale", "serve", "status", "--json")]
-    assert handle.closed is True
-    assert "CCB Mobile is ready" in text
+    assert len(calls) == 1
+    assert calls[0][0].mobile_serve[:4] == ('ccb', 'mobile', 'serve', '--listen')
+    assert "Starting or refreshing the loopback-only CCB Mobile gateway" in text
+    assert "status: started" in text
+    assert "pid: 1234" in text
+    assert "service_log: /tmp/mobile-state/service.log" in text
+    assert "pairing_code: stable-code" in text
+    assert "pairing_expires_at: 2026-07-02T00:10:00Z" in text
+    assert "pairing_claim_endpoint: https://desktop.tailnet.ts.net:8787/v1/pairing/claim" in text
     assert "Scan this QR in CCB Mobile" in text
-    assert "Could not start Tailscale Serve" not in text
+    assert "QR-LINE-1" in text
+    assert "QR-LINE-2" in text
+    assert "If scanning fails, use Manual Pairing in CCB Mobile" in text
+    assert "Gateway URL: https://desktop.tailnet.ts.net:8787" in text
+    assert "Pairing Code: stable-code" in text
+    assert len(qr_payloads) == 1
+    payload = json.loads(qr_payloads[0][0])
+    assert payload == {
+        "claim_endpoint": "https://desktop.tailnet.ts.net:8787/v1/pairing/claim",
+        "gateway_url": "https://desktop.tailnet.ts.net:8787",
+        "pairing_code": "stable-code",
+        "route_provider": "tailnet",
+        "scopes": [],
+    }
+    assert qr_payloads[0][1]["quiet_zone"] == 2
+    assert qr_payloads[0][1]["compact"] is True
+    assert "Start the loopback-only CCB Mobile gateway in one terminal" not in text
 
 
-def test_onboarding_logged_in_requires_pairing_qr_payload() -> None:
+def test_onboarding_managed_service_qr_keeps_full_payload_and_scanner_safe_border() -> None:
+    payload = json.dumps(
+        {
+            "claim_endpoint": "https://desktop.tailnet.ts.net:8787/v1/pairing/claim",
+            "gateway_url": "https://desktop.tailnet.ts.net:8787",
+            "pairing_code": "stable-code-with-realistic-length",
+            "route_provider": "tailnet",
+            "scopes": [
+                "ask",
+                "content",
+                "file_download",
+                "file_upload",
+                "focus",
+                "lifecycle",
+                "message_submit",
+                "notify",
+                "terminal_input",
+                "view",
+            ],
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+    scanner_safe_qr = render_terminal_qr(payload, quiet_zone=2, compact=True)
+    uncompact_qr = render_terminal_qr(payload, quiet_zone=2, compact=False)
+    scanner_safe_area = len(scanner_safe_qr) * len(scanner_safe_qr[0])
+    uncompact_area = len(uncompact_qr) * len(uncompact_qr[0])
+
+    assert json.loads(payload)["pairing_code"] == "stable-code-with-realistic-length"
+    assert scanner_safe_area < uncompact_area
+    assert scanner_safe_qr[0].strip("█") == ""
+    assert scanner_safe_qr[-1].strip("█") == ""
+
+
+def test_onboarding_reports_non_mapping_mobile_service_result() -> None:
     output: list[str] = []
-    handle = _FakeGatewayHandle()
-    handle.summary = dict(handle.summary)
-    handle.summary["pairing"] = {}
 
     code = mobile_update.run_mobile_update_onboarding(
         detect_tailscale_fn=lambda: mobile_update.TailscaleStatus(
@@ -428,89 +475,10 @@ def test_onboarding_logged_in_requires_pairing_qr_payload() -> None:
             logged_in=True,
             hostname="desktop.tailnet.ts.net.",
         ),
-        prepare_gateway_fn=lambda _command: handle,
-        run_fn=lambda command, **_kwargs: subprocess.CompletedProcess(
-            command, 0, stdout="", stderr=""
-        ),
+        start_service_fn=lambda _commands, _status: None,  # type: ignore[return-value]
         print_fn=output.append,
-        serve_forever=False,
-        qr_ansi=False,
     )
 
     text = "\n".join(output)
     assert code == 1
-    assert handle.closed is True
-    assert "Could not generate CCB Mobile pairing QR" in text
-    assert "CCB Mobile is ready" not in text
-    assert "Scan this QR in CCB Mobile" not in text
-
-
-def test_onboarding_logged_in_serve_failure_closes_gateway() -> None:
-    output: list[str] = []
-    handle = _FakeGatewayHandle()
-
-    code = mobile_update.run_mobile_update_onboarding(
-        detect_tailscale_fn=lambda: mobile_update.TailscaleStatus(
-            installed=True,
-            path="/usr/bin/tailscale",
-            logged_in=True,
-            hostname="desktop.tailnet.ts.net.",
-        ),
-        prepare_gateway_fn=lambda _command: handle,
-        run_fn=lambda command, **_kwargs: subprocess.CompletedProcess(
-            command, 23, stdout="", stderr="serve failed"
-        ),
-        print_fn=output.append,
-        serve_forever=False,
-        qr_ansi=False,
-    )
-
-    assert code == 23
-    assert handle.closed is True
-    assert "Could not start Tailscale Serve: exit 23: serve failed" in "\n".join(output)
-
-
-def test_onboarding_logged_in_serve_enable_prompt_is_actionable() -> None:
-    output: list[str] = []
-    opened: list[str] = []
-    handle = _FakeGatewayHandle()
-    enable_url = "https://login.tailscale.com/f/serve?node=node123"
-
-    def _run(command, **_kwargs):
-        raise subprocess.TimeoutExpired(
-            command,
-            timeout=15,
-            output=(
-                "Serve is not enabled on your tailnet.\n"
-                "To enable, visit:\n\n"
-                f"         {enable_url}\n"
-            ),
-        )
-
-    code = mobile_update.run_mobile_update_onboarding(
-        detect_tailscale_fn=lambda: mobile_update.TailscaleStatus(
-            installed=True,
-            path="/usr/bin/tailscale",
-            logged_in=True,
-            hostname="desktop.tailnet.ts.net.",
-        ),
-        prepare_gateway_fn=lambda _command: handle,
-        run_fn=_run,
-        open_url_fn=lambda url: opened.append(url) or True,
-        print_fn=output.append,
-        serve_forever=False,
-        qr_ansi=False,
-    )
-
-    text = "\n".join(output)
-    assert code == 0
-    assert handle.closed is True
-    assert opened == [enable_url]
-    assert "Step 2/3: enable Tailscale Serve for this computer" in text
-    assert "Tailscale requires one-time approval" in text
-    assert f"Open: {enable_url}" in text
-    assert "After approving, run `ccb update mobile` again" in text
-    assert "Download APK:" in text
-    assert "Could not start Tailscale Serve" not in text
-    assert "TimeoutExpired" not in text
-    assert "Scan this QR in CCB Mobile" not in text
+    assert "CCB Mobile gateway update failed: TypeError: mobile service starter must return a mapping" in text

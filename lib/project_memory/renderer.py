@@ -15,8 +15,8 @@ $MESSAGE
 EOF
 ```
 
-- During an active CCB ask task, use `ask --callback` when a child result is needed to finish; use `ask --silence` only for independent no-result-needed work.
-- During a CCB callback continuation, answer directly with the final result; do not use `ask`, `--callback`, or `--silence` to send that final result to the original caller.
+- During an active CCB ask task, use `ask --chain` when a child result is needed to finish the current task; use `ask --silence` only for independent no-result-needed work.
+- During a CCB result-chain continuation, answer directly with the final result; do not use `ask`, `--chain`, or `--silence` to send that final result to the original caller.
 """
 
 

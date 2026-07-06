@@ -60,7 +60,7 @@ def project_root_from_submission(submission: ProviderSubmission) -> str:
 def codex_job_descriptor(submission: ProviderSubmission) -> dict[str, Any] | None:
     runtime_state = submission.runtime_state
     reader_state = runtime_state.get("state") if isinstance(runtime_state.get("state"), dict) else {}
-    session_path = str(runtime_state.get("session_path") or state_session_path(reader_state)).strip()
+    session_path = str(state_session_path(reader_state) or runtime_state.get("session_path") or "").strip()
     if not session_path:
         return None
     return {

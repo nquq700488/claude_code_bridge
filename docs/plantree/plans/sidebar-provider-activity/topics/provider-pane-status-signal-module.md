@@ -131,6 +131,14 @@ Carry forward the current hard rules:
   not imply `idle`, `working`, or `completed`;
 - `Conversation interrupted` is historical pane text unless paired with a
   current hard marker.
+- ProjectView may apply an explicitly designed display stabilizer for Codex
+  rows only after active pane evidence disappears: a visible Codex
+  `Working (...)`, tool-running, or reconnecting status line remains active no
+  matter how long it stays visible; if no active status line is present and pane
+  content is unchanged for 60s, display runtime becomes `free` with reason
+  `codex_pane_no_active_stale_no_progress`. This does not change parser
+  output, does not imply completion, and must preserve raw state/reason in
+  diagnostics.
 
 Tighten during extraction rather than preserving known weak signals:
 
@@ -273,6 +281,63 @@ Verification:
   `/home/bfly/yunwei/test_ccb2/codex-pane-status-probe/run-20260629T142024Z-4191985/artifacts/run.json`
   stayed `waiting_for_user` for an untrusted new workdir. These prove
   session-derived `free` is not a fallback over explicit pane states.
+
+Claude runtime-status slice landed after PR1 with:
+
+- `lib/provider_pane_status/claude_session.py`
+- `lib/provider_pane_status/claude_pane.py`
+- `test/test_provider_pane_status_claude_session.py`
+- `test/test_provider_pane_status_claude_pane.py`
+- ProjectView wiring that emits `provider_runtime_status` for Claude from
+  provider activity hooks, bound Claude JSONL session evidence, and visible
+  Claude pane evidence.
+
+Claude pane parsing is deliberately narrower than Codex pane parsing. It only
+classifies explicit Claude status shapes such as:
+
+- `Thinking ..., running N shell command` as `tool_running`;
+- spinner/status rows with elapsed time and token/thought metadata as
+  `working`;
+- `Running scheduled task` or `shell still running` as `tool_running`;
+- explicit permission/API/error text as waiting or failed states;
+- past-tense rows such as `Thought for ... ran ...` or `Sautéed for ...` as
+  `terminal_summary`.
+
+`terminal_summary` is observation-only. It is not a job completion signal and
+must not be passed to dispatcher completion. ProjectView uses it only to break
+stale Claude hook activity: if a Claude hook remains active while the pane shows
+a stable terminal summary for 60s, sidebar status becomes `free` with reason
+`claude_pane_no_active_stale_no_progress`. Claude prompt visibility remains
+non-authoritative because real running Claude panes can still display `❯`.
+
+Unknown session or pane evidence stays `unknown`, while a clean runtime with no
+active job and no Claude session path is displayed as `free`.
+
+Verification:
+
+- `python -m pytest -q test/test_provider_pane_status_claude_session.py
+  test/test_provider_pane_status_claude_pane.py` -> `15 passed`
+- `python -m pytest -q test/test_provider_pane_status_claude_pane.py
+  test/test_provider_pane_status_claude_session.py test/test_ccbd_project_view.py
+  -k 'claude_runtime_status or claude_activity_includes_pane_probe or
+  claude_pane_active or claude_stale_active'` -> `10 passed`
+- `python -m pytest -q test/test_ccbd_project_view.py` -> `78 passed`
+- `python -m pytest -q test/test_provider_pane_status_claude_pane.py
+  test/test_provider_pane_status_claude_session.py test/test_provider_pane_status_codex.py
+  test/test_provider_pane_status_codex_session.py test/test_codex_pane_status_probe.py`
+  -> `67 passed`
+- `python -m pytest -q test/test_provider_activity_artifacts.py
+  test/test_provider_activity_hook_script.py test/test_claude_event_reading.py
+  test/test_claude_comm_parsing.py test/test_claude_execution_polling.py`
+  -> `25 passed`
+- `python -m pytest -q test/test_provider_pane_status_codex.py
+  test/test_provider_pane_status_codex_session.py
+  test/test_codex_pane_status_probe.py
+  test/test_provider_pane_status_claude_session.py` -> `60 passed`
+- `python -m pytest -q test/test_claude_event_reading.py
+  test/test_claude_comm_parsing.py test/test_claude_execution_polling.py
+  test/test_provider_activity_hook_script.py test/test_provider_activity_artifacts.py`
+  -> `25 passed`
 - Stabilization evidence:
   `/home/bfly/yunwei/test_ccb2/codex-pane-status-probe/run-20260629T143303Z-455718/artifacts/run.json`
   kept startup display at `unknown -> working -> free` instead of allowing old
@@ -319,6 +384,10 @@ Stabilization is intentionally separate from parsing:
 - pane parser output remains strict and raw;
 - session output remains explicit and raw;
 - `runtime_status` is the only state that applies bounded time extension;
+- Codex ProjectView display may also collapse no-active pane status to `free`
+  after 60s of unchanged pane content; visible active status lines such as
+  `Working (...)`, tool-running, and reconnecting are never collapsed by this
+  timer;
 - snapshots and metrics retain raw runtime, pane, and session streams for
   diagnostics.
 
@@ -405,9 +474,9 @@ Fixture tests:
 - store sanitized committed fixtures under `test/fixtures/codex_pane/`, not as
   large inline strings in test code.
 
-## Future Claude Path
+## Claude Pane Path
 
-When Claude pane status is added, extend the same package:
+Claude pane status lives in the same package:
 
 ```text
 lib/provider_pane_status/claude_pane.py

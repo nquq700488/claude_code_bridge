@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import base64
-from concurrent.futures import ThreadPoolExecutor
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -21,6 +22,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 from ccbd.socket_client import CcbdClientError
 from .notifications import MobileNotificationSnapshot, MobileNotificationStore, encode_sse_event
 from .pairing import MobileGatewayPairingError, MobileGatewayPairingStore
+from .project_activity import MobileGatewayProjectActivityStore
 from .project_registry import MobileGatewayProject, MobileGatewayProjectRegistry
 from .terminal import (
     TerminalAttachTarget,
@@ -66,6 +68,18 @@ _DEFAULT_PAIRING_SCOPES = (
 )
 _MAX_MOBILE_FILE_BYTES = 25 * 1024 * 1024
 _NOTIFICATION_STREAM_POLL_SECONDS = 1.0
+_CODEX_NATIVE_TAIL_FILE_BYTES = 64 * 1024
+_CODEX_NATIVE_TAIL_LINE_LIMIT = 120
+_CODEX_NATIVE_TAIL_THREAD_LIMIT = 2
+_CODEX_NATIVE_TAIL_CHUNK_LIMIT = 48
+_CODEX_NATIVE_TAIL_READ_BLOCK_BYTES = 256 * 1024
+_CODEX_NATIVE_CURSOR_PREFIX = 'codex-before:'
+_PROJECT_ACTIVITY_REFRESH_LIMIT = 3
+_PROJECT_ACTIVITY_REFRESH_TTL_SECONDS = 10
+_PROJECT_ACTIVITY_REFRESH_BUDGET_SECONDS = 0.75
+_PROJECT_ACTIVITY_REFRESH_PER_PROJECT_SECONDS = 0.25
+_CONVERSATION_PAGE_CACHE_MAX_ENTRIES = 64
+_CONVERSATION_PAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -76,6 +90,29 @@ class ListenAddress:
     @property
     def text(self) -> str:
         return f'{self.host}:{self.port}'
+
+
+@dataclass(frozen=True)
+class _ConversationItemsResult:
+    items: list[dict[str, object]]
+    already_paged: bool = False
+    next_cursor: str | None = None
+
+
+@dataclass(frozen=True)
+class _ConversationPageCacheKey:
+    project_id: str
+    agent: str
+    namespace_epoch: int
+    limit: int
+    cursor: str | None
+
+
+@dataclass(frozen=True)
+class _ConversationPageCacheEntry:
+    fingerprint: tuple[tuple[str, int, int], ...]
+    page: dict[str, object]
+    byte_size: int
 
 
 class MobileGatewayError(RuntimeError):
@@ -118,6 +155,15 @@ class MobileGatewayService:
         if self._pairing_store is None and mobile_dir is not None:
             self._pairing_store = MobileGatewayPairingStore(self._mobile_dir)
         self._notification_store = MobileNotificationStore(self._mobile_dir) if mobile_dir is not None else None
+        self._project_activity_store = (
+            MobileGatewayProjectActivityStore(self._mobile_dir) if mobile_dir is not None else None
+        )
+        self._conversation_page_cache: OrderedDict[
+            _ConversationPageCacheKey,
+            _ConversationPageCacheEntry,
+        ] = OrderedDict()
+        self._conversation_page_cache_bytes = 0
+        self._conversation_page_cache_lock = threading.Lock()
 
     @property
     def project_id(self) -> str:
@@ -154,6 +200,8 @@ class MobileGatewayService:
         registry_projects = self._project_registry.projects()
         health_by_project = self._project_list_health_by_project(registry_projects)
         capabilities = self._capabilities()
+        activity_refreshes_remaining = _PROJECT_ACTIVITY_REFRESH_LIMIT
+        activity_deadline = time.monotonic() + _PROJECT_ACTIVITY_REFRESH_BUDGET_SECONDS
         for project in registry_projects:
             ccbd = health_by_project[project.project_id]
             if not _project_available_for_mobile_list(ccbd):
@@ -166,9 +214,22 @@ class MobileGatewayService:
                 'mount_state': str(ccbd.get('mount_state') or ''),
                 'capabilities': capabilities,
             }
+            allow_activity_refresh = (
+                activity_refreshes_remaining > 0
+                and time.monotonic() < activity_deadline
+            )
+            activity_summary, attempted_activity_refresh = self._project_activity_summary(
+                project,
+                allow_refresh=allow_activity_refresh,
+                deadline=activity_deadline,
+            )
+            if attempted_activity_refresh:
+                activity_refreshes_remaining -= 1
+            item.update(activity_summary)
             if ccbd.get('error'):
                 item['error'] = str(ccbd.get('error') or '')
             projects.append(item)
+        projects = _sort_project_payloads_by_recent_activity(projects)
         return {
             'schema_version': _SCHEMA_VERSION,
             'projects': projects,
@@ -177,6 +238,7 @@ class MobileGatewayService:
     def project_view_payload(self, project_id: str) -> dict[str, object]:
         project = self._require_project(project_id)
         payload = self._request_project_view(project)
+        self._record_project_opened(project.project_id)
         return _redact_project_view_payload(payload)
 
     def create_pairing_payload(
@@ -185,7 +247,8 @@ class MobileGatewayService:
         gateway_url: str,
         route_provider: str = _DEFAULT_ROUTE_PROVIDER,
         scopes: tuple[str, ...] = _DEFAULT_PAIRING_SCOPES,
-        expires_seconds: int = 10 * 60,
+        expires_seconds: int | None = 10 * 60,
+        reusable_claims: bool = False,
     ) -> dict[str, object]:
         store = self._require_pairing_store()
         store.write_gateway_state(
@@ -200,6 +263,7 @@ class MobileGatewayService:
             route_provider=route_provider,
             scopes=scopes,
             expires_seconds=expires_seconds,
+            reusable_claims=reusable_claims,
         )
 
     def dispatch_get(self, path: str, headers: Mapping[str, object] | None = None) -> tuple[int, dict[str, object]]:
@@ -213,6 +277,12 @@ class MobileGatewayService:
             return status, payload
         if route == '/v1/projects':
             return 200, self.projects_payload()
+        if route == '/v1/mobile/notifications':
+            return 200, {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'ok',
+                'events': self.notification_events_since(path, headers),
+            }
         prefix = '/v1/projects/'
         suffix = '/view'
         if route.startswith(prefix) and route.endswith(suffix):
@@ -269,7 +339,9 @@ class MobileGatewayService:
         query = parse_qs(parsed.query, keep_blank_values=True)
         self._authenticate(headers, required_scopes=('notify',))
         store = self._require_notification_store()
-        store.sync_snapshots(self._notification_snapshots())
+        emitted = store.sync_snapshots(self._notification_snapshots())
+        for event in emitted:
+            self._record_project_activity(event.project_id, activity_at=event.completed_at)
         cursor = (
             last_event_id
             if last_event_id is not None
@@ -329,39 +401,133 @@ class MobileGatewayService:
             namespace_epoch=_query_int(query, 'namespace_epoch'),
         )
         limit = min(200, max(1, _query_int(query, 'limit') or 50))
+        cursor = _query_text(query, 'cursor')
+        agent_record = _map(target.get('agent_record'))
+        provider_key = (_optional_text(agent_record.get('provider')) or '').strip().lower()
+        cache_key = _ConversationPageCacheKey(
+            project_id=project.project_id,
+            agent=str(target['agent']),
+            namespace_epoch=int(target['namespace_epoch']),
+            limit=limit,
+            cursor=cursor,
+        )
+        cache_fingerprint = _agent_native_conversation_cache_fingerprint(
+            project.project_root,
+            agent=str(target['agent']),
+            provider=provider_key,
+        )
+        if cache_fingerprint:
+            cached_page = self._conversation_page_cache_get(cache_key, cache_fingerprint)
+            if cached_page is not None:
+                return self._agent_conversation_response(
+                    project_id=project.project_id,
+                    agent=str(target['agent']),
+                    namespace_epoch=int(target['namespace_epoch']),
+                    page=cached_page,
+                )
         terminal_history = self._agent_terminal_history_for_conversation(
             project_id=project.project_id,
             view_payload=view_payload,
             agent=str(target['agent']),
             namespace_epoch=int(target['namespace_epoch']),
         )
-        page = _agent_conversation_page(
-            _agent_conversation_items(
-                view_payload,
-                project_id=project.project_id,
-                agent=target['agent'],
-                namespace_epoch=int(target['namespace_epoch']),
-                project_root=project.project_root,
-                terminal_history=terminal_history,
-                mobile_files_dir=self._mobile_files_dir(),
-            ),
+        conversation_items = _agent_conversation_items(
+            view_payload,
+            project_id=project.project_id,
+            agent=target['agent'],
+            namespace_epoch=int(target['namespace_epoch']),
+            project_root=project.project_root,
+            terminal_history=terminal_history,
+            mobile_files_dir=self._mobile_files_dir(),
             limit=limit,
-            cursor=_query_text(query, 'cursor'),
+            cursor=cursor,
         )
+        if conversation_items.already_paged:
+            page = {
+                'items': conversation_items.items,
+                'next_cursor': conversation_items.next_cursor,
+            }
+        else:
+            page = _agent_conversation_page(
+                conversation_items.items,
+                limit=limit,
+                cursor=cursor,
+            )
+        if cache_fingerprint and _conversation_page_has_provider_native_items(page):
+            self._conversation_page_cache_put(cache_key, cache_fingerprint, page)
+        return self._agent_conversation_response(
+            project_id=project.project_id,
+            agent=str(target['agent']),
+            namespace_epoch=int(target['namespace_epoch']),
+            page=page,
+        )
+
+    def _agent_conversation_response(
+        self,
+        *,
+        project_id: str,
+        agent: str,
+        namespace_epoch: int,
+        page: dict[str, object],
+    ) -> dict[str, object]:
         conversation: dict[str, object] = {
-            'project_id': project.project_id,
-            'agent': target['agent'],
-            'namespace_epoch': target['namespace_epoch'],
+            'project_id': project_id,
+            'agent': agent,
+            'namespace_epoch': namespace_epoch,
             'generated_at': self._clock(),
             'items': page['items'],
         }
-        if page['next_cursor'] is not None:
+        if page.get('next_cursor') is not None:
             conversation['next_cursor'] = page['next_cursor']
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
             'conversation': conversation,
         }
+
+    def _conversation_page_cache_get(
+        self,
+        key: _ConversationPageCacheKey,
+        fingerprint: tuple[tuple[str, int, int], ...],
+    ) -> dict[str, object] | None:
+        with self._conversation_page_cache_lock:
+            entry = self._conversation_page_cache.get(key)
+            if entry is None:
+                return None
+            if entry.fingerprint != fingerprint:
+                self._conversation_page_cache_bytes -= entry.byte_size
+                self._conversation_page_cache.pop(key, None)
+                return None
+            self._conversation_page_cache.move_to_end(key)
+            return _copy_conversation_page(entry.page)
+
+    def _conversation_page_cache_put(
+        self,
+        key: _ConversationPageCacheKey,
+        fingerprint: tuple[tuple[str, int, int], ...],
+        page: dict[str, object],
+    ) -> None:
+        page_copy = _copy_conversation_page(page)
+        byte_size = _conversation_page_byte_size(page_copy)
+        if byte_size > _CONVERSATION_PAGE_CACHE_MAX_BYTES:
+            return
+        with self._conversation_page_cache_lock:
+            old_entry = self._conversation_page_cache.pop(key, None)
+            if old_entry is not None:
+                self._conversation_page_cache_bytes -= old_entry.byte_size
+            self._conversation_page_cache[key] = _ConversationPageCacheEntry(
+                fingerprint=fingerprint,
+                page=page_copy,
+                byte_size=byte_size,
+            )
+            self._conversation_page_cache_bytes += byte_size
+            self._conversation_page_cache.move_to_end(key)
+            while (
+                len(self._conversation_page_cache) > _CONVERSATION_PAGE_CACHE_MAX_ENTRIES
+                or self._conversation_page_cache_bytes > _CONVERSATION_PAGE_CACHE_MAX_BYTES
+            ):
+                _, evicted = self._conversation_page_cache.popitem(last=False)
+                self._conversation_page_cache_bytes -= evicted.byte_size
 
     def _agent_terminal_history_for_conversation(
         self,
@@ -608,6 +774,8 @@ class MobileGatewayService:
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
         message_id = idempotency_key
+        created_at = self._clock()
+        self._record_project_activity(project.project_id, activity_at=created_at)
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
@@ -619,7 +787,7 @@ class MobileGatewayService:
                 'message_id': message_id,
                 'job_id': None,
                 'state': 'sent',
-                'created_at': self._clock(),
+                'created_at': created_at,
                 'message': {
                     'id': message_id,
                     'agent': target['agent'],
@@ -778,7 +946,9 @@ class MobileGatewayService:
             raise MobileGatewayError(str(exc), status_code=_ccbd_focus_status(exc)) from exc
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
-        return self._focused_project_view_payload(project, focus)
+        payload = self._focused_project_view_payload(project, focus)
+        self._record_project_activity(project.project_id)
+        return payload
 
     def _project_lifecycle(
         self,
@@ -881,7 +1051,9 @@ class MobileGatewayService:
             raise MobileGatewayError(str(exc), status_code=_ccbd_focus_status(exc)) from exc
         except Exception as exc:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
-        return self._focused_project_view_payload(project, focus)
+        payload = self._focused_project_view_payload(project, focus)
+        self._record_project_activity(project.project_id)
+        return payload
 
     def _open_terminal(
         self,
@@ -941,6 +1113,16 @@ class MobileGatewayService:
         if self._notification_store is None:
             raise MobileGatewayError('mobile notification store is not configured', status_code=503)
         return self._notification_store
+
+    def _notification_snapshots(self) -> list[MobileNotificationSnapshot]:
+        snapshots: list[MobileNotificationSnapshot] = []
+        for project in self._project_registry.projects():
+            try:
+                payload = self._request_project_view(project)
+            except MobileGatewayError:
+                continue
+            snapshots.extend(_notification_snapshots_for_project(project, payload, observed_at=self._clock()))
+        return snapshots
 
     def _mobile_file_dir(self, project_id: str, agent: str, file_id: str) -> Path:
         return (
@@ -1020,6 +1202,81 @@ class MobileGatewayService:
                 'error': 'project unavailable',
             }
 
+    def _project_activity_summary(
+        self,
+        project: MobileGatewayProject,
+        *,
+        allow_refresh: bool,
+        deadline: float,
+    ) -> tuple[dict[str, object], bool]:
+        store_record = (
+            self._project_activity_store.project(project.project_id)
+            if self._project_activity_store is not None
+            else {}
+        )
+        summary = _project_activity_summary_from_record(store_record)
+        if not allow_refresh:
+            return summary, False
+        if self._project_activity_store is not None and not _project_activity_record_stale(
+            store_record,
+            now_text=self._clock(),
+            max_age_seconds=_PROJECT_ACTIVITY_REFRESH_TTL_SECONDS,
+        ):
+            return summary, False
+        if time.monotonic() >= deadline:
+            return summary, False
+
+        attempted_refresh = True
+        timeout_seconds = min(
+            _PROJECT_ACTIVITY_REFRESH_PER_PROJECT_SECONDS,
+            max(0.01, deadline - time.monotonic()),
+        )
+        try:
+            view_payload = self._request_project_view_with_timeout(
+                project,
+                timeout_seconds=timeout_seconds,
+            )
+        except MobileGatewayError:
+            return summary, attempted_refresh
+        except Exception:
+            return summary, attempted_refresh
+        fresh_summary = _project_activity_summary_from_view(view_payload)
+        checked_at = self._clock()
+        if self._project_activity_store is not None:
+            try:
+                self._project_activity_store.record_summary(
+                    project_id=project.project_id,
+                    summary=fresh_summary,
+                    checked_at=checked_at,
+                )
+            except Exception:
+                pass
+        merged = dict(summary)
+        merged.update(fresh_summary)
+        return merged, attempted_refresh
+
+    def _record_project_opened(self, project_id: str) -> None:
+        if self._project_activity_store is None:
+            return
+        try:
+            self._project_activity_store.record_opened(
+                project_id=project_id,
+                opened_at=self._clock(),
+            )
+        except Exception:
+            pass
+
+    def _record_project_activity(self, project_id: str, *, activity_at: str | None = None) -> None:
+        if self._project_activity_store is None:
+            return
+        try:
+            self._project_activity_store.record_activity(
+                project_id=project_id,
+                activity_at=activity_at or self._clock(),
+            )
+        except Exception:
+            pass
+
     def _request_project_view(self, project: MobileGatewayProject) -> dict[str, object]:
         try:
             payload = project.client().project_view(schema_version=1)
@@ -1029,15 +1286,23 @@ class MobileGatewayService:
             raise MobileGatewayError(_error_text(exc), status_code=503) from exc
         return dict(payload or {}) if isinstance(payload, dict) else {}
 
-    def _notification_snapshots(self) -> list[MobileNotificationSnapshot]:
-        snapshots: list[MobileNotificationSnapshot] = []
-        for project in self._project_registry.projects():
-            try:
-                payload = self._request_project_view(project)
-            except MobileGatewayError:
-                continue
-            snapshots.extend(_notification_snapshots_for_project(project, payload, observed_at=self._clock()))
-        return snapshots
+    def _request_project_view_with_timeout(
+        self,
+        project: MobileGatewayProject,
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        if self._project_activity_store is None:
+            return self._request_project_view(project)
+        executor = ThreadPoolExecutor(max_workers=1)
+        future = executor.submit(self._request_project_view, project)
+        try:
+            return future.result(timeout=max(0.01, timeout_seconds))
+        except FutureTimeoutError as exc:
+            future.cancel()
+            raise MobileGatewayError('project activity unavailable', status_code=503) from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _terminal_attach_target(self, record: dict[str, object]) -> TerminalAttachTarget:
         project = self._require_project(str(record.get('project_id') or ''))
@@ -1053,13 +1318,17 @@ class MobileGatewayService:
         if not socket_path or not session_name:
             raise MobileGatewayError('ProjectView tmux evidence is not attachable', status_code=409)
         _validate_terminal_summary(record, view)
+        target_summary = _map(record.get('target_summary'))
+        pane_id = _terminal_summary_pane_id(target_summary, view)
+        if not pane_id:
+            raise MobileGatewayError('terminal target pane evidence is required', status_code=409)
         return TerminalAttachTarget(
             terminal_id=str(record.get('terminal_id') or ''),
             socket_path=socket_path,
             session_name=session_name,
-            pane_id=_optional_text(_map(record.get('target_summary')).get('pane_id')),
+            pane_id=pane_id,
             geometry=TerminalGeometry.from_mapping(record.get('geometry')),
-            target_summary=_map(record.get('target_summary')),
+            target_summary=target_summary,
         )
 
     def _handle_terminal_frame(
@@ -1075,21 +1344,23 @@ class MobileGatewayService:
         if frame_type == 'input':
             seq = _required_positive_int(frame.get('seq'), 'seq')
             data = base64.b64decode(str(frame.get('bytes_b64') or ''), validate=True)
-            self._require_pairing_store().record_terminal_input_sequence(
+            record = self._require_pairing_store().record_terminal_input_sequence(
                 terminal_id=terminal_id,
                 terminal_token=terminal_token,
                 sequence=seq,
             )
             session.write(data)
+            self._record_project_activity(str(record.get('project_id') or ''))
             return ''
         if frame_type == 'paste':
             seq = _required_positive_int(frame.get('seq'), 'seq')
-            self._require_pairing_store().record_terminal_input_sequence(
+            record = self._require_pairing_store().record_terminal_input_sequence(
                 terminal_id=terminal_id,
                 terminal_token=terminal_token,
                 sequence=seq,
             )
             session.paste(str(frame.get('text') or ''))
+            self._record_project_activity(str(record.get('project_id') or ''))
             return ''
         if frame_type == 'resize':
             session.resize(TerminalGeometry.from_mapping(frame))
@@ -1204,6 +1475,58 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
             except (BrokenPipeError, ConnectionResetError):
                 return
 
+        def _send_notification_stream(self) -> None:
+            once = service.notification_stream_once_from_path(self.path)
+            try:
+                events = service.notification_events_since(self.path, self.headers)
+            except MobileGatewayError as exc:
+                self._send_json(exc.status_code, {
+                    'schema_version': _SCHEMA_VERSION,
+                    'status': 'error',
+                    'error': _error_text(exc),
+                })
+                return
+            self.send_response(200)
+            self.send_header('content-type', 'text/event-stream; charset=utf-8')
+            self.send_header('cache-control', 'no-cache')
+            self.send_header('connection', 'close' if once else 'keep-alive')
+            self.end_headers()
+            last_event_id = self._write_notification_events(events)
+            if once:
+                self.close_connection = True
+                return
+            while True:
+                try:
+                    time.sleep(_NOTIFICATION_STREAM_POLL_SECONDS)
+                    events = service.notification_events_since(
+                        self.path,
+                        self.headers,
+                        last_event_id=last_event_id,
+                    )
+                    next_id = self._write_notification_events(events)
+                    if next_id is not None:
+                        last_event_id = next_id
+                    elif not self._write_sse_bytes(b': keepalive\n\n'):
+                        return
+                except (BrokenPipeError, ConnectionError, OSError):
+                    return
+
+        def _write_notification_events(self, events: list[dict[str, object]]) -> str | None:
+            last_event_id = None
+            for event in events:
+                if not self._write_sse_bytes(encode_sse_event(event)):
+                    return last_event_id
+                last_event_id = str(event.get('id') or '') or last_event_id
+            return last_event_id
+
+        def _write_sse_bytes(self, body: bytes) -> bool:
+            try:
+                self.wfile.write(body)
+                self.wfile.flush()
+                return True
+            except (BrokenPipeError, ConnectionError, OSError):
+                return False
+
         def _send_bytes(self, status: int, body: bytes, headers: dict[str, str]) -> None:
             self.send_response(status)
             for key, value in headers.items():
@@ -1305,6 +1628,165 @@ def _redact_project_view_payload(payload: dict[str, object]) -> dict[str, object
             for key in _REDACTED_NAMESPACE_KEYS:
                 namespace.pop(key, None)
     return redacted
+
+
+def _project_activity_summary_from_view(payload: dict[str, object]) -> dict[str, object]:
+    view = _map(payload.get('view'))
+    agents = [_map(item) for item in _iterable(view.get('agents'))]
+    working_agents = [agent for agent in agents if _agent_has_working_activity(agent)]
+    timestamps: list[object] = []
+    for agent in agents:
+        timestamps.extend(
+            [
+                agent.get('last_progress_at'),
+                agent.get('updated_at'),
+                agent.get('created_at'),
+            ]
+        )
+    content = _map(view.get('content'))
+    for item in _iterable(content.get('items')):
+        content_item = _map(item)
+        timestamps.extend(
+            [
+                content_item.get('completed_at'),
+                content_item.get('finished_at'),
+                content_item.get('execution_completed_at'),
+                content_item.get('sent_at'),
+                content_item.get('updated_at'),
+                content_item.get('created_at'),
+            ]
+        )
+    for item in _iterable(view.get('comms')):
+        comm = _map(item)
+        timestamps.extend(
+            [
+                comm.get('completed_at'),
+                comm.get('finished_at'),
+                comm.get('sent_at'),
+                comm.get('updated_at'),
+                comm.get('created_at'),
+            ]
+        )
+    summary: dict[str, object] = {}
+    if working_agents:
+        summary['has_working_agents'] = True
+        summary['working_agent_count'] = len(working_agents)
+    last_activity_at = _latest_mobile_timestamp(timestamps)
+    if last_activity_at:
+        summary['last_activity_at'] = last_activity_at
+    return summary
+
+
+def _sort_project_payloads_by_recent_activity(
+    projects: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    indexed = list(enumerate(projects))
+    indexed.sort(key=lambda item: _project_payload_sort_key(item[0], item[1]))
+    return [project for _, project in indexed]
+
+
+def _project_payload_sort_key(index: int, project: dict[str, object]) -> tuple[float, int, int]:
+    recent = _project_payload_recent_activity_at(project)
+    if recent is not None:
+        return (-recent.timestamp(), 0, index)
+    has_working = bool(project.get('has_working_agents')) or (
+        (_optional_int(project.get('working_agent_count')) or 0) > 0
+    )
+    return (float('inf'), 0 if has_working else 1, index)
+
+
+def _project_payload_recent_activity_at(project: dict[str, object]) -> datetime | None:
+    candidates = [
+        _parse_mobile_conversation_timestamp(project.get('last_opened_at')),
+        _parse_mobile_conversation_timestamp(project.get('last_activity_at')),
+    ]
+    parsed = [value for value in candidates if value is not None]
+    if not parsed:
+        return None
+    return max(parsed)
+
+
+def _project_activity_summary_from_record(record: dict[str, object]) -> dict[str, object]:
+    summary: dict[str, object] = {}
+    last_opened_at = _mobile_conversation_timestamp(record.get('last_opened_at'))
+    if last_opened_at:
+        summary['last_opened_at'] = last_opened_at
+    last_activity_at = _mobile_conversation_timestamp(record.get('last_activity_at'))
+    if last_activity_at:
+        summary['last_activity_at'] = last_activity_at
+    working_agent_count = _optional_int(record.get('working_agent_count')) or 0
+    has_working_agents = bool(record.get('has_working_agents')) or working_agent_count > 0
+    if has_working_agents:
+        summary['has_working_agents'] = True
+        summary['working_agent_count'] = working_agent_count
+    return summary
+
+
+def _project_activity_record_stale(
+    record: dict[str, object],
+    *,
+    now_text: str,
+    max_age_seconds: int,
+) -> bool:
+    checked_at = _parse_mobile_conversation_timestamp(record.get('summary_checked_at'))
+    now = _parse_mobile_conversation_timestamp(now_text)
+    if checked_at is None or now is None:
+        return True
+    return (now - checked_at).total_seconds() >= max_age_seconds
+
+
+def _latest_mobile_timestamp(values: list[object]) -> str | None:
+    latest: tuple[datetime, str] | None = None
+    for value in values:
+        text = _mobile_conversation_timestamp(value)
+        parsed = _parse_mobile_conversation_timestamp(text)
+        if text is None or parsed is None:
+            continue
+        if latest is None or parsed > latest[0]:
+            latest = (parsed, text)
+    return latest[1] if latest is not None else None
+
+
+def _agent_has_working_activity(agent: dict[str, object]) -> bool:
+    state = _normalized_text(agent.get('activity_state') or agent.get('state'))
+    source = _normalized_text(agent.get('activity_source'))
+    reason = _normalized_text(agent.get('activity_reason'))
+    if state in {'active', 'busy', 'pending', 'running', 'start', 'starting', 'working'}:
+        return True
+    if state in {
+        'idle',
+        'free',
+        'completed',
+        'complete',
+        'done',
+        'failed',
+        'failure',
+        'error',
+        'faulted',
+        'offline',
+        'crashed',
+    }:
+        return False
+    text = f'{source or ""} {reason or ""}'
+    return _int(agent.get('queue_depth'), 0) > 0 or any(
+        marker in text
+        for marker in (
+            'queued',
+            'reconnect',
+            'running',
+            'start',
+            'submitted',
+            'tool',
+            'waiting',
+            'working',
+            'prompt',
+        )
+    )
+
+
+def _normalized_text(value: object) -> str | None:
+    text = str(value or '').strip().lower()
+    return text or None
 
 
 def _notification_snapshots_for_project(
@@ -1566,19 +2048,25 @@ def _agent_conversation_items(
     project_root: Path,
     terminal_history: dict[str, object] | None = None,
     mobile_files_dir: Path | None = None,
-) -> list[dict[str, object]]:
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> _ConversationItemsResult:
     view = _map(view_payload.get('view'))
+    agents = [_map(item) for item in _iterable(view.get('agents'))]
+    agent_record = next((item for item in agents if str(item.get('name') or '') == agent), {})
+    provider_key = (_optional_text(agent_record.get('provider')) or '').strip().lower()
     native_items = _agent_native_conversation_items(
         project_root,
         project_id=project_id,
         agent=agent,
+        provider=provider_key,
         mobile_files_dir=mobile_files_dir,
+        limit=limit,
+        cursor=cursor,
     )
-    if native_items:
+    if native_items.items:
         return native_items
 
-    agents = [_map(item) for item in _iterable(view.get('agents'))]
-    agent_record = next((item for item in agents if str(item.get('name') or '') == agent), {})
     items: list[dict[str, object]] = [
         {
             'id': f'status-{agent}',
@@ -1603,26 +2091,40 @@ def _agent_conversation_items(
         )
         if not body:
             continue
+        reply_item = {
+            'id': f'reply-{content_id}',
+            'agent': agent,
+            'kind': 'agent_reply',
+            'title': _optional_text(content_item.get('title')) or 'Agent reply',
+            'body': body,
+            'format': _optional_text(content_item.get('format')) or 'plain',
+            'content_id': content_id,
+            'source': _optional_text(content_item.get('source')) or 'content',
+        }
+        _apply_mobile_conversation_timing(
+            reply_item,
+            sent_at=content_item.get('sent_at') or content_item.get('created_at'),
+            started_at=content_item.get('started_at') or content_item.get('execution_started_at'),
+            completed_at=(
+                content_item.get('completed_at')
+                or content_item.get('finished_at')
+                or content_item.get('execution_completed_at')
+            ),
+            duration_ms=content_item.get('duration_ms'),
+            duration_seconds=content_item.get('duration_seconds'),
+        )
         items.append(
-            {
-                'id': f'reply-{content_id}',
-                'agent': agent,
-                'kind': 'agent_reply',
-                'title': _optional_text(content_item.get('title')) or 'Agent reply',
-                'body': body,
-                'format': _optional_text(content_item.get('format')) or 'plain',
-                'content_id': content_id,
-                'source': _optional_text(content_item.get('source')) or 'content',
-            }
+            reply_item
         )
     seen_item_ids = {str(item.get('id') or '') for item in items}
 
-    terminal_items = _terminal_history_conversation_items(
-        terminal_history,
-        agent=agent,
-    )
-    if terminal_items:
-        return terminal_items
+    if provider_key != 'claude':
+        terminal_items = _terminal_history_conversation_items(
+            terminal_history,
+            agent=agent,
+        )
+        if terminal_items:
+            return _ConversationItemsResult(terminal_items)
 
     for item in _agent_history_conversation_items(
         project_root,
@@ -1666,40 +2168,64 @@ def _agent_conversation_items(
         reply = str(reply_dict.get('body') or '')
         reply_attachments = _attachment_records(reply_dict.get('attachments'))
         attachments = _attachment_records(comm.get('attachments'))
+        comm_created_at = _first_mobile_conversation_timestamp(
+            comm.get('sent_at'),
+            comm.get('created_at'),
+            comm.get('updated_at'),
+        )
+        reply_completed_at = _first_mobile_conversation_timestamp(
+            reply_dict.get('completed_at'),
+            reply_dict.get('sent_at'),
+            comm.get('completed_at'),
+            comm.get('finished_at'),
+            comm.get('updated_at'),
+            comm_created_at,
+        )
         if reply:
             comm_id = str(comm.get('id') or f'comms-{len(items)}')
             if body:
                 user_id = f'user-{comm_id}'
                 if user_id in seen_item_ids:
                     continue
+                user_item = {
+                    'id': user_id,
+                    'agent': agent,
+                    'kind': 'user_message',
+                    'title': 'You',
+                    'body': body,
+                    'format': _optional_text(comm.get('format')) or 'markdown',
+                    'source': 'mobile',
+                    'state': 'sent',
+                    'attachments': attachments,
+                }
+                _apply_mobile_conversation_timing(user_item, sent_at=comm_created_at)
                 items.append(
-                    {
-                        'id': user_id,
-                        'agent': agent,
-                        'kind': 'user_message',
-                        'title': 'You',
-                        'body': body,
-                        'format': _optional_text(comm.get('format')) or 'markdown',
-                        'source': 'mobile',
-                        'state': 'sent',
-                        'attachments': attachments,
-                    }
+                    user_item
                 )
                 seen_item_ids.add(user_id)
             reply_id = f'reply-{comm_id}'
             if reply_id in seen_item_ids:
                 continue
+            reply_item = {
+                'id': reply_id,
+                'agent': agent,
+                'kind': 'agent_reply',
+                'title': _optional_text(comm.get('title')) or 'Agent reply',
+                'body': reply,
+                'format': 'markdown',
+                'source': 'completion_snapshot',
+                'attachments': reply_attachments,
+            }
+            _apply_mobile_conversation_timing(
+                reply_item,
+                sent_at=reply_completed_at,
+                started_at=reply_dict.get('started_at') or comm_created_at,
+                completed_at=reply_completed_at,
+                duration_ms=reply_dict.get('duration_ms'),
+                duration_seconds=reply_dict.get('duration_seconds'),
+            )
             items.append(
-                {
-                    'id': reply_id,
-                    'agent': agent,
-                    'kind': 'agent_reply',
-                    'title': _optional_text(comm.get('title')) or 'Agent reply',
-                    'body': reply,
-                    'format': 'markdown',
-                    'source': 'completion_snapshot',
-                    'attachments': reply_attachments,
-                }
+                reply_item
             )
             seen_item_ids.add(reply_id)
             continue
@@ -1709,20 +2235,22 @@ def _agent_conversation_items(
         item_id = f'comms-{comm_id}'
         if item_id in seen_item_ids:
             continue
+        comm_item = {
+            'id': item_id,
+            'agent': agent,
+            'kind': 'comms_item',
+            'title': _optional_text(comm.get('title')) or 'Comms',
+            'body': body,
+            'format': _optional_text(comm.get('format')) or 'plain',
+            'source': _optional_text(comm.get('source')) or 'project_view',
+            'attachments': attachments,
+        }
+        _apply_mobile_conversation_timing(comm_item, sent_at=comm_created_at)
         items.append(
-            {
-                'id': item_id,
-                'agent': agent,
-                'kind': 'comms_item',
-                'title': _optional_text(comm.get('title')) or 'Comms',
-                'body': body,
-                'format': _optional_text(comm.get('format')) or 'plain',
-                'source': _optional_text(comm.get('source')) or 'project_view',
-                'attachments': attachments,
-            }
+            comm_item
         )
         seen_item_ids.add(item_id)
-    return items
+    return _ConversationItemsResult(items)
 
 
 def _terminal_history_conversation_items(
@@ -1792,13 +2320,281 @@ def _agent_native_conversation_items(
     *,
     project_id: str,
     agent: str,
+    provider: str | None = None,
+    mobile_files_dir: Path | None = None,
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> _ConversationItemsResult:
+    provider_key = str(provider or '').strip().lower()
+    if provider_key in {'', 'codex'}:
+        codex_items = _codex_native_conversation_items(
+            project_root,
+            project_id=project_id,
+            agent=agent,
+            mobile_files_dir=mobile_files_dir,
+            limit=limit,
+            cursor=cursor,
+        )
+        if codex_items.items:
+            return codex_items
+    if provider_key in {'', 'claude'}:
+        return _ConversationItemsResult(
+            _claude_native_conversation_items(
+                project_root,
+                project_id=project_id,
+                agent=agent,
+                mobile_files_dir=mobile_files_dir,
+            )
+        )
+    return _ConversationItemsResult([])
+
+
+def _agent_native_conversation_cache_fingerprint(
+    project_root: Path,
+    *,
+    agent: str,
+    provider: str | None = None,
+) -> tuple[tuple[str, int, int], ...]:
+    provider_key = str(provider or '').strip().lower()
+    if provider_key in {'', 'codex'}:
+        codex_fingerprint = _codex_native_conversation_cache_fingerprint(
+            project_root,
+            agent=agent,
+        )
+        if codex_fingerprint:
+            return codex_fingerprint
+    if provider_key in {'', 'claude'}:
+        claude_fingerprint = _claude_native_conversation_cache_fingerprint(
+            project_root,
+            agent=agent,
+        )
+        if claude_fingerprint:
+            return claude_fingerprint
+    return ()
+
+
+def _conversation_file_fingerprint_entry(path: Path) -> tuple[str, int, int] | None:
+    try:
+        stat = path.stat()
+    except Exception:
+        return None
+    return (str(path), int(stat.st_mtime_ns), int(stat.st_size))
+
+
+def _copy_conversation_page(page: dict[str, object]) -> dict[str, object]:
+    copied: dict[str, object] = {
+        'items': [dict(item) for item in _iterable(page.get('items'))],
+        'next_cursor': page.get('next_cursor'),
+    }
+    return copied
+
+
+def _conversation_page_byte_size(page: dict[str, object]) -> int:
+    try:
+        return len(
+            json.dumps(
+                page,
+                ensure_ascii=False,
+                separators=(',', ':'),
+            ).encode('utf-8')
+        )
+    except Exception:
+        return _CONVERSATION_PAGE_CACHE_MAX_BYTES + 1
+
+
+def _conversation_page_has_provider_native_items(page: dict[str, object]) -> bool:
+    for item in _iterable(page.get('items')):
+        source = _optional_text(_map(item).get('source')) or ''
+        if source.startswith('provider_native/'):
+            return True
+    return False
+
+
+def _claude_native_conversation_items(
+    project_root: Path,
+    *,
+    project_id: str,
+    agent: str,
     mobile_files_dir: Path | None = None,
 ) -> list[dict[str, object]]:
-    return _codex_native_conversation_items(
-        project_root,
-        project_id=project_id,
-        agent=agent,
-        mobile_files_dir=mobile_files_dir,
+    session_path = _claude_native_session_path(project_root, agent=agent)
+    if session_path is None:
+        return []
+    try:
+        from provider_backends.claude.comm_runtime.parsing_runtime.entries import (
+            extract_message,
+        )
+    except Exception:
+        return []
+    file_roots = [
+        path
+        for path in (
+            mobile_files_dir,
+            project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+        )
+        if path is not None
+    ]
+    try:
+        lines = session_path.open(encoding='utf-8')
+        fallback_timestamp = f'{int(session_path.stat().st_mtime):020d}'
+    except Exception:
+        return []
+    items: list[dict[str, object]] = []
+    session_id = _native_id_part(session_path.stem, fallback='session')
+    with lines:
+        for line_number, line in enumerate(lines, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = _map(json.loads(line))
+            except Exception:
+                continue
+            for role in ('user', 'assistant'):
+                body = extract_message(record, role)
+                if not body:
+                    continue
+                body = _inject_workspace_artifacts(
+                    body,
+                    project_root=project_root,
+                    project_id=project_id,
+                    agent=agent,
+                    mobile_files_dir=mobile_files_dir,
+                )
+                body = _clean_native_message_text(body)
+                if not body:
+                    continue
+                item_id = (
+                    f'claude-{session_id}-{line_number}-'
+                    f'{_native_id_part(_claude_record_id(record), fallback=role)}-{role}'
+                )
+                if role == 'user':
+                    item = {
+                        'id': item_id,
+                        'agent': agent,
+                        'kind': 'user_message',
+                        'title': 'You',
+                        'body': body,
+                        'format': 'markdown',
+                        'source': 'provider_native/claude',
+                        'state': 'sent',
+                        'attachments': [],
+                    }
+                else:
+                    item = {
+                        'id': item_id,
+                        'agent': agent,
+                        'kind': 'agent_reply',
+                        'title': 'Agent reply',
+                        'body': body,
+                        'format': 'markdown',
+                        'source': 'provider_native/claude',
+                        'attachments': _artifact_link_attachments(
+                            body,
+                            file_roots=file_roots,
+                            project_id=project_id,
+                            agent=agent,
+                        ),
+                    }
+                _set_native_sort_fields(
+                    item,
+                    record,
+                    fallback_timestamp=fallback_timestamp,
+                    thread_order=0,
+                    line_number=line_number,
+                )
+                items.append(item)
+    sorted_items = [
+        item
+        for _, item in sorted(
+            enumerate(items),
+            key=lambda indexed: (
+                _optional_text(indexed[1].get('_native_sort_timestamp')) or '',
+                int(indexed[1].get('_native_line_number') or 0),
+                indexed[0],
+            ),
+        )
+    ]
+    return [
+        _without_native_sort_fields(item)
+        for item in _coalesce_claude_native_agent_replies(sorted_items)
+    ]
+
+
+def _claude_native_session_path(project_root: Path, *, agent: str) -> Path | None:
+    try:
+        from provider_backends.claude.session_runtime.pathing import (
+            find_project_session_file,
+            read_json,
+        )
+        session_file = find_project_session_file(project_root, agent)
+    except Exception:
+        return None
+    if session_file is None:
+        return None
+    data = read_json(session_file)
+    path_text = _optional_text(_map(data).get('claude_session_path'))
+    if path_text:
+        try:
+            path = Path(path_text).expanduser()
+        except Exception:
+            path = None
+        if path is not None and path.is_file():
+            return path
+    return _discover_claude_native_session_path(project_root, data=_map(data))
+
+
+def _discover_claude_native_session_path(
+    project_root: Path,
+    *,
+    data: dict[str, object],
+) -> Path | None:
+    projects_root_text = _optional_text(data.get('claude_projects_root'))
+    if not projects_root_text:
+        return None
+    work_dir_text = (
+        _optional_text(data.get('work_dir'))
+        or _optional_text(data.get('workspace_path'))
+        or _optional_text(data.get('project_root'))
+        or str(project_root)
+    )
+    try:
+        projects_root = Path(projects_root_text).expanduser()
+        work_dir = Path(work_dir_text).expanduser()
+    except Exception:
+        return None
+    try:
+        from provider_backends.claude.comm import ClaudeLogReader
+
+        path = ClaudeLogReader(
+            root=projects_root,
+            work_dir=work_dir,
+            use_sessions_index=False,
+        ).current_session_path()
+    except Exception:
+        return None
+    return path if path is not None and path.is_file() else None
+
+
+def _claude_native_conversation_cache_fingerprint(
+    project_root: Path,
+    *,
+    agent: str,
+) -> tuple[tuple[str, int, int], ...]:
+    session_path = _claude_native_session_path(project_root, agent=agent)
+    if session_path is None:
+        return ()
+    entry = _conversation_file_fingerprint_entry(session_path)
+    return (entry,) if entry is not None else ()
+
+
+def _claude_record_id(record: dict[str, object]) -> str:
+    message = _map(record.get('message'))
+    return (
+        _optional_text(record.get('uuid'))
+        or _optional_text(record.get('id'))
+        or _optional_text(message.get('id'))
+        or ''
     )
 
 
@@ -1808,11 +2604,13 @@ def _codex_native_conversation_items(
     project_id: str,
     agent: str,
     mobile_files_dir: Path | None = None,
-) -> list[dict[str, object]]:
+    limit: int | None = None,
+    cursor: str | None = None,
+) -> _ConversationItemsResult:
     home = project_root / '.ccb' / 'agents' / agent / 'provider-state' / 'codex' / 'home'
     state_path = home / 'state_5.sqlite'
     if not state_path.is_file():
-        return []
+        return _ConversationItemsResult([])
     try:
         connection = sqlite3.connect(f'file:{state_path}?mode=ro', uri=True)
         connection.row_factory = sqlite3.Row
@@ -1824,22 +2622,122 @@ def _codex_native_conversation_items(
             )
         )
     except Exception:
-        return []
+        return _ConversationItemsResult([])
     finally:
         try:
             connection.close()  # type: ignore[possibly-undefined]
         except Exception:
             pass
 
+    if cursor and cursor.startswith(_CODEX_NATIVE_CURSOR_PREFIX):
+        if _codex_native_should_use_tail(rows, home):
+            cursor_key = _decode_codex_native_cursor(cursor)
+            if cursor_key is None:
+                raise MobileGatewayError('cursor is invalid', status_code=400)
+            return _codex_native_conversation_before_page_from_tail(
+                rows,
+                home=home,
+                project_root=project_root,
+                project_id=project_id,
+                agent=agent,
+                mobile_files_dir=mobile_files_dir,
+                limit=limit or 50,
+                cursor_key=cursor_key,
+            )
+        items = _codex_native_conversation_all_items(
+            rows,
+            home=home,
+            project_root=project_root,
+            project_id=project_id,
+            agent=agent,
+            mobile_files_dir=mobile_files_dir,
+        )
+        return _codex_native_conversation_before_page(
+            items,
+            limit=limit or 50,
+            cursor=cursor,
+        )
+
+    if cursor is None and limit is not None and _codex_native_should_use_tail(rows, home):
+        return _codex_native_conversation_latest_page(
+            rows,
+            home=home,
+            project_root=project_root,
+            project_id=project_id,
+            agent=agent,
+            mobile_files_dir=mobile_files_dir,
+            limit=limit,
+        )
+
+    items = _codex_native_conversation_all_items(
+        rows,
+        home=home,
+        project_root=project_root,
+        project_id=project_id,
+        agent=agent,
+        mobile_files_dir=mobile_files_dir,
+    )
+    return _ConversationItemsResult([
+        _without_native_sort_fields(item)
+        for item in _coalesce_codex_native_agent_replies(items)
+    ])
+
+
+def _codex_native_conversation_cache_fingerprint(
+    project_root: Path,
+    *,
+    agent: str,
+) -> tuple[tuple[str, int, int], ...]:
+    home = project_root / '.ccb' / 'agents' / agent / 'provider-state' / 'codex' / 'home'
+    state_path = home / 'state_5.sqlite'
+    state_entry = _conversation_file_fingerprint_entry(state_path)
+    if state_entry is None:
+        return ()
+    try:
+        connection = sqlite3.connect(f'file:{state_path}?mode=ro', uri=True)
+        connection.row_factory = sqlite3.Row
+        rows = list(
+            connection.execute(
+                'select id, rollout_path, created_at, updated_at from threads '
+                'where rollout_path is not null and rollout_path != "" '
+                'order by created_at asc, updated_at asc, id asc'
+            )
+        )
+    except Exception:
+        return ()
+    finally:
+        try:
+            connection.close()  # type: ignore[possibly-undefined]
+        except Exception:
+            pass
+    rollout_entries: list[tuple[str, int, int]] = []
+    for row in rows:
+        rollout_path = _codex_rollout_path(row, home=home)
+        if rollout_path is None:
+            continue
+        entry = _conversation_file_fingerprint_entry(rollout_path)
+        if entry is not None:
+            rollout_entries.append(entry)
+    if not rollout_entries:
+        return ()
+    return (state_entry, *rollout_entries)
+
+
+def _codex_native_conversation_all_items(
+    rows: list[sqlite3.Row],
+    *,
+    home: Path,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None,
+) -> list[dict[str, object]]:
     items: list[dict[str, object]] = []
     for row_index, row in enumerate(rows):
         thread_id = str(row['id'] or '').strip() or f'thread-{len(items)}'
-        rollout_text = str(row['rollout_path'] or '').strip()
-        if not rollout_text:
+        rollout_path = _codex_rollout_path(row, home=home)
+        if rollout_path is None:
             continue
-        rollout_path = Path(rollout_text)
-        if not rollout_path.is_absolute():
-            rollout_path = home / rollout_path
         fallback_timestamp = _codex_thread_fallback_timestamp(row)
         items.extend(
             _codex_rollout_conversation_items(
@@ -1861,7 +2759,13 @@ def _codex_native_conversation_items(
                 ],
             )
         )
-    sorted_items = [
+    return _codex_sort_native_items(items)
+
+
+def _codex_sort_native_items(
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return [
         item
         for _, item in sorted(
             enumerate(items),
@@ -1873,10 +2777,345 @@ def _codex_native_conversation_items(
             ),
         )
     ]
-    return [
-        _without_native_sort_fields(item)
-        for item in _coalesce_codex_native_agent_replies(sorted_items)
+
+
+def _codex_native_should_use_tail(rows: list[sqlite3.Row], home: Path) -> bool:
+    if len(rows) > _CODEX_NATIVE_TAIL_THREAD_LIMIT:
+        return True
+    for row in rows:
+        rollout_path = _codex_rollout_path(row, home=home)
+        if rollout_path is None:
+            continue
+        try:
+            if rollout_path.stat().st_size >= _CODEX_NATIVE_TAIL_FILE_BYTES:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def _codex_native_conversation_latest_page(
+    rows: list[sqlite3.Row],
+    *,
+    home: Path,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None,
+    limit: int,
+) -> _ConversationItemsResult:
+    items: list[dict[str, object]] = []
+    parsed_thread_count = 0
+    has_older = False
+    indexed_rows = list(enumerate(rows))
+    latest_rows = sorted(
+        indexed_rows,
+        key=lambda indexed: (
+            _codex_thread_timestamp_value(indexed[1]),
+            str(indexed[1]['id'] or ''),
+        ),
+        reverse=True,
+    )
+    for row_index, row in latest_rows:
+        if parsed_thread_count >= _CODEX_NATIVE_TAIL_THREAD_LIMIT:
+            has_older = True
+            break
+        rollout_path = _codex_rollout_path(row, home=home)
+        if rollout_path is None:
+            continue
+        before_offset: int | None = None
+        parsed_thread_count += 1
+        chunk_count = 0
+        while True:
+            chunk_count += 1
+            tail_lines, complete = _codex_rollout_tail_lines(
+                rollout_path,
+                line_limit=_CODEX_NATIVE_TAIL_LINE_LIMIT,
+                before_offset=before_offset,
+            )
+            if not tail_lines:
+                break
+            items.extend(
+                _codex_rollout_conversation_items(
+                    rollout_path,
+                    project_root=project_root,
+                    project_id=project_id,
+                    agent=agent,
+                    thread_id=str(row['id'] or '').strip() or f'thread-{row_index}',
+                    thread_order=row_index,
+                    fallback_timestamp=_codex_thread_fallback_timestamp(row),
+                    mobile_files_dir=mobile_files_dir,
+                    file_roots=[
+                        path
+                        for path in (
+                            mobile_files_dir,
+                            project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+                        )
+                        if path is not None
+                    ],
+                    line_records=tail_lines,
+                )
+            )
+            coalesced_count = len(
+                _coalesce_codex_native_agent_replies(_codex_sort_native_items(items))
+            )
+            if coalesced_count >= limit * 3:
+                has_older = True
+                break
+            if complete:
+                break
+            has_older = True
+            if chunk_count >= _CODEX_NATIVE_TAIL_CHUNK_LIMIT:
+                break
+            before_offset = tail_lines[0][0]
+        if len(_coalesce_codex_native_agent_replies(_codex_sort_native_items(items))) >= limit * 3:
+            break
+    sorted_items = _codex_sort_native_items(items)
+    coalesced = _coalesce_codex_native_agent_replies(sorted_items)
+    start = max(0, len(coalesced) - limit)
+    page_items = coalesced[start:]
+    if start > 0:
+        has_older = True
+    next_cursor = _codex_native_before_cursor(page_items[0]) if has_older and page_items else None
+    return _ConversationItemsResult(
+        [_without_native_sort_fields(item) for item in page_items],
+        already_paged=True,
+        next_cursor=next_cursor,
+    )
+
+
+def _codex_native_conversation_before_page(
+    sorted_items: list[dict[str, object]],
+    *,
+    limit: int,
+    cursor: str,
+) -> _ConversationItemsResult:
+    cursor_key = _decode_codex_native_cursor(cursor)
+    if cursor_key is None:
+        raise MobileGatewayError('cursor is invalid', status_code=400)
+    coalesced = _coalesce_codex_native_agent_replies(sorted_items)
+    end = len(coalesced)
+    for index, item in enumerate(coalesced):
+        if _codex_native_sort_key(item) >= cursor_key:
+            end = index
+            break
+    start = max(0, end - limit)
+    page_items = coalesced[start:end]
+    return _ConversationItemsResult(
+        [_without_native_sort_fields(item) for item in page_items],
+        already_paged=True,
+        next_cursor=_codex_native_before_cursor(page_items[0]) if start > 0 and page_items else None,
+    )
+
+
+def _codex_native_conversation_before_page_from_tail(
+    rows: list[sqlite3.Row],
+    *,
+    home: Path,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None,
+    limit: int,
+    cursor_key: tuple[str, int, int, str],
+) -> _ConversationItemsResult:
+    items: list[dict[str, object]] = []
+    indexed_rows = list(enumerate(rows))
+    latest_rows = sorted(
+        indexed_rows,
+        key=lambda indexed: (
+            _codex_thread_timestamp_value(indexed[1]),
+            str(indexed[1]['id'] or ''),
+        ),
+        reverse=True,
+    )
+    started = False
+    for row_index, row in latest_rows:
+        if row_index == cursor_key[1]:
+            before_offset: int | None = cursor_key[2]
+            started = True
+        elif not started:
+            continue
+        else:
+            before_offset = None
+        rollout_path = _codex_rollout_path(row, home=home)
+        if rollout_path is None:
+            continue
+        while True:
+            tail_lines, complete = _codex_rollout_tail_lines(
+                rollout_path,
+                line_limit=_CODEX_NATIVE_TAIL_LINE_LIMIT,
+                before_offset=before_offset,
+            )
+            if not tail_lines:
+                break
+            items.extend(
+                _codex_rollout_conversation_items(
+                    rollout_path,
+                    project_root=project_root,
+                    project_id=project_id,
+                    agent=agent,
+                    thread_id=str(row['id'] or '').strip() or f'thread-{row_index}',
+                    thread_order=row_index,
+                    fallback_timestamp=_codex_thread_fallback_timestamp(row),
+                    mobile_files_dir=mobile_files_dir,
+                    file_roots=[
+                        path
+                        for path in (
+                            mobile_files_dir,
+                            project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+                        )
+                        if path is not None
+                    ],
+                    line_records=tail_lines,
+                )
+            )
+            coalesced_before = [
+                item
+                for item in _coalesce_codex_native_agent_replies(
+                    _codex_sort_native_items(items)
+                )
+                if _codex_native_sort_key(item) < cursor_key
+            ]
+            if len(coalesced_before) >= limit * 3:
+                break
+            if complete:
+                break
+            before_offset = tail_lines[0][0]
+        if len([
+            item
+            for item in _coalesce_codex_native_agent_replies(
+                _codex_sort_native_items(items)
+            )
+            if _codex_native_sort_key(item) < cursor_key
+        ]) >= limit * 3:
+            break
+    coalesced = [
+        item
+        for item in _coalesce_codex_native_agent_replies(
+            _codex_sort_native_items(items)
+        )
+        if _codex_native_sort_key(item) < cursor_key
     ]
+    start = max(0, len(coalesced) - limit)
+    page_items = coalesced[start:]
+    return _ConversationItemsResult(
+        [_without_native_sort_fields(item) for item in page_items],
+        already_paged=True,
+        next_cursor=_codex_native_before_cursor(page_items[0]) if start > 0 and page_items else None,
+    )
+
+
+def _codex_rollout_path(row: sqlite3.Row, *, home: Path) -> Path | None:
+    rollout_text = str(row['rollout_path'] or '').strip()
+    if not rollout_text:
+        return None
+    rollout_path = Path(rollout_text)
+    if not rollout_path.is_absolute():
+        rollout_path = home / rollout_path
+    return rollout_path
+
+
+def _codex_thread_timestamp_value(row: sqlite3.Row) -> int:
+    for key in ('updated_at', 'created_at'):
+        try:
+            return int(row[key] or 0)
+        except Exception:
+            continue
+    return 0
+
+
+def _codex_rollout_tail_lines(
+    rollout_path: Path,
+    *,
+    line_limit: int,
+    before_offset: int | None = None,
+) -> tuple[list[tuple[int, str]], bool]:
+    if line_limit <= 0:
+        return [], False
+    try:
+        with rollout_path.open('rb') as handle:
+            handle.seek(0, 2)
+            file_size = handle.tell()
+            end = min(before_offset if before_offset is not None else file_size, file_size)
+            position = end
+            chunks: list[bytes] = []
+            newline_count = 0
+            while position > 0 and newline_count <= line_limit:
+                read_size = min(_CODEX_NATIVE_TAIL_READ_BLOCK_BYTES, position)
+                position -= read_size
+                handle.seek(position)
+                chunk = handle.read(read_size)
+                chunks.append(chunk)
+                newline_count += chunk.count(b'\n')
+    except Exception:
+        return [], True
+    if not chunks:
+        return [], before_offset is None
+    buffer = b''.join(reversed(chunks))
+    start_offset = position
+    complete = position == 0
+    if position > 0:
+        first_newline = buffer.find(b'\n')
+        if first_newline < 0:
+            return [], False
+        start_offset += first_newline + 1
+        buffer = buffer[first_newline + 1:]
+    records: list[tuple[int, str]] = []
+    offset = start_offset
+    for raw_line in buffer.splitlines(keepends=True):
+        line_offset = offset
+        offset += len(raw_line)
+        line = raw_line.rstrip(b'\r\n')
+        if not line:
+            continue
+        try:
+            records.append((line_offset, line.decode('utf-8')))
+        except UnicodeDecodeError:
+            continue
+    if len(records) > line_limit:
+        records = records[-line_limit:]
+        complete = False
+    return records, complete
+
+
+def _codex_native_sort_key(item: dict[str, object]) -> tuple[str, int, int, str]:
+    return (
+        _optional_text(item.get('_native_sort_timestamp')) or '',
+        int(item.get('_native_thread_order') or 0),
+        int(item.get('_native_line_number') or 0),
+        str(item.get('id') or ''),
+    )
+
+
+def _codex_native_before_cursor(item: dict[str, object]) -> str:
+    payload = {
+        'timestamp': _optional_text(item.get('_native_sort_timestamp')) or '',
+        'thread_order': int(item.get('_native_thread_order') or 0),
+        'line_number': int(item.get('_native_line_number') or 0),
+        'id': str(item.get('id') or ''),
+    }
+    encoded = base64.urlsafe_b64encode(
+        json.dumps(payload, separators=(',', ':')).encode('utf-8')
+    ).decode('ascii').rstrip('=')
+    return f'{_CODEX_NATIVE_CURSOR_PREFIX}{encoded}'
+
+
+def _decode_codex_native_cursor(cursor: str) -> tuple[str, int, int, str] | None:
+    if not cursor.startswith(_CODEX_NATIVE_CURSOR_PREFIX):
+        return None
+    encoded = cursor[len(_CODEX_NATIVE_CURSOR_PREFIX):]
+    try:
+        padded = encoded + ('=' * (-len(encoded) % 4))
+        payload = _map(json.loads(base64.urlsafe_b64decode(padded).decode('utf-8')))
+        return (
+            _optional_text(payload.get('timestamp')) or '',
+            int(payload.get('thread_order') or 0),
+            int(payload.get('line_number') or 0),
+            str(payload.get('id') or ''),
+        )
+    except Exception:
+        return None
 
 
 def _codex_thread_fallback_timestamp(row: sqlite3.Row) -> str:
@@ -1898,99 +3137,185 @@ def _codex_rollout_conversation_items(
     fallback_timestamp: str,
     mobile_files_dir: Path | None,
     file_roots: list[Path],
+    line_records: list[tuple[int, str]] | None = None,
 ) -> list[dict[str, object]]:
     event_items: list[dict[str, object]] = []
+    event_user_lines: list[int] = []
+    event_agent_lines: list[int] = []
     response_items: list[dict[str, object]] = []
-    try:
-        lines = rollout_path.open(encoding='utf-8')
-    except Exception:
-        return []
-    with lines:
-        for line_number, line in enumerate(lines, start=1):
-            line = line.strip()
-            if not line:
+    if line_records is None:
+        try:
+            lines = rollout_path.open(encoding='utf-8')
+        except Exception:
+            return []
+        with lines:
+            records = list(enumerate(lines, start=1))
+    else:
+        records = line_records
+    for line_number, line in records:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            record = _map(json.loads(line))
+        except Exception:
+            continue
+        payload = _map(record.get('payload'))
+        if record.get('type') == 'event_msg':
+            if payload.get('type') == 'task_complete':
+                completed_at = _native_record_timestamp(record) or fallback_timestamp
+                _complete_latest_codex_native_agent_reply(event_items, completed_at)
+                _complete_latest_codex_native_agent_reply(response_items, completed_at)
                 continue
-            try:
-                record = _map(json.loads(line))
-            except Exception:
-                continue
-            payload = _map(record.get('payload'))
-            if record.get('type') == 'event_msg':
-                event_item = _codex_event_message_conversation_item(
-                    payload,
-                    project_root=project_root,
-                    project_id=project_id,
-                    agent=agent,
-                    item_id=f'codex-{thread_id}-{line_number}',
-                    mobile_files_dir=mobile_files_dir,
-                    file_roots=file_roots,
-                )
-                if event_item is not None:
-                    _set_native_sort_fields(
-                        event_item,
-                        record,
-                        fallback_timestamp=fallback_timestamp,
-                        thread_order=thread_order,
-                        line_number=line_number,
-                    )
-                    event_items.append(event_item)
-                continue
-            if record.get('type') != 'response_item':
-                continue
-            if payload.get('type') != 'message':
-                continue
-            role = str(payload.get('role') or '').strip()
-            if role not in {'user', 'assistant'}:
-                continue
-            body = _codex_message_content_text(payload.get('content'))
-            body = _inject_workspace_artifacts(
-                body,
+            event_item = _codex_event_message_conversation_item(
+                payload,
                 project_root=project_root,
                 project_id=project_id,
                 agent=agent,
+                item_id=f'codex-{thread_id}-{line_number}',
                 mobile_files_dir=mobile_files_dir,
+                file_roots=file_roots,
             )
-            body = _clean_native_message_text(body)
-            if not body:
-                continue
-            item_id = f'codex-{thread_id}-{line_number}-{role}'
-            if role == 'user':
-                item = {
-                    'id': item_id,
-                    'agent': agent,
-                    'kind': 'user_message',
-                    'title': 'You',
-                    'body': body,
-                    'format': 'markdown',
-                    'source': 'provider_native/codex',
-                    'state': 'sent',
-                    'attachments': [],
-                }
-            else:
-                item = {
-                    'id': item_id,
-                    'agent': agent,
-                    'kind': 'agent_reply',
-                    'title': 'Agent reply',
-                    'body': body,
-                    'format': 'markdown',
-                    'source': 'provider_native/codex',
-                    'attachments': _artifact_link_attachments(
-                        body,
-                        file_roots=file_roots,
-                        project_id=project_id,
-                        agent=agent,
-                    ),
-                }
-            _set_native_sort_fields(
-                item,
-                record,
-                fallback_timestamp=fallback_timestamp,
-                thread_order=thread_order,
-                line_number=line_number,
-            )
-            response_items.append(item)
-    return event_items or response_items
+            if event_item is not None:
+                _set_native_sort_fields(
+                    event_item,
+                    record,
+                    fallback_timestamp=fallback_timestamp,
+                    thread_order=thread_order,
+                    line_number=line_number,
+                    complete_agent_reply=False,
+                )
+                event_items.append(event_item)
+                if event_item.get('kind') == 'user_message':
+                    event_user_lines.append(line_number)
+                elif event_item.get('kind') == 'agent_reply':
+                    event_agent_lines.append(line_number)
+            continue
+        if record.get('type') != 'response_item':
+            continue
+        if payload.get('type') != 'message':
+            continue
+        role = str(payload.get('role') or '').strip()
+        if role not in {'user', 'assistant'}:
+            continue
+        body = _codex_message_content_text(payload.get('content'))
+        body = _inject_workspace_artifacts(
+            body,
+            project_root=project_root,
+            project_id=project_id,
+            agent=agent,
+            mobile_files_dir=mobile_files_dir,
+        )
+        body = _clean_native_message_text(body)
+        if not body:
+            continue
+        item_id = f'codex-{thread_id}-{line_number}-{role}'
+        if role == 'user':
+            item = {
+                'id': item_id,
+                'agent': agent,
+                'kind': 'user_message',
+                'title': 'You',
+                'body': body,
+                'format': 'markdown',
+                'source': 'provider_native/codex',
+                'state': 'sent',
+                'attachments': [],
+            }
+        else:
+            item = {
+                'id': item_id,
+                'agent': agent,
+                'kind': 'agent_reply',
+                'title': 'Agent reply',
+                'body': body,
+                'format': 'markdown',
+                'source': 'provider_native/codex',
+                'attachments': _artifact_link_attachments(
+                    body,
+                    file_roots=file_roots,
+                    project_id=project_id,
+                    agent=agent,
+                ),
+            }
+        _set_native_sort_fields(
+            item,
+            record,
+            fallback_timestamp=fallback_timestamp,
+            thread_order=thread_order,
+            line_number=line_number,
+            complete_agent_reply=False,
+        )
+        response_items.append(item)
+    if not event_items:
+        return response_items
+    visible_response_assistant_items = [
+        item
+        for item in response_items
+        if item.get('kind') == 'agent_reply'
+        and _codex_response_assistant_item_is_visible_with_event_items(
+            item,
+            event_user_lines=event_user_lines,
+            event_agent_lines=event_agent_lines,
+        )
+    ]
+    return _codex_sort_native_items([
+        *event_items,
+        *visible_response_assistant_items,
+    ])
+
+
+def _codex_response_assistant_item_is_visible_with_event_items(
+    item: dict[str, object],
+    *,
+    event_user_lines: list[int],
+    event_agent_lines: list[int],
+) -> bool:
+    try:
+        line_number = int(item.get('_native_line_number') or 0)
+    except Exception:
+        line_number = 0
+    lower_bound = max(
+        (line for line in event_user_lines if line < line_number),
+        default=0,
+    )
+    upper_bound = min(
+        (line for line in event_user_lines if line > line_number),
+        default=10**18,
+    )
+    return not any(
+        lower_bound < line < upper_bound
+        for line in event_agent_lines
+    )
+
+
+def _complete_latest_codex_native_agent_reply(
+    items: list[dict[str, object]],
+    completed_at: object,
+) -> None:
+    completed_timestamp = _mobile_conversation_timestamp(completed_at)
+    if not completed_timestamp:
+        return
+    for item in reversed(items):
+        if item.get('kind') != 'agent_reply':
+            if item.get('kind') == 'user_message':
+                return
+            continue
+        item['completed_at'] = completed_timestamp
+        item['sent_at'] = completed_timestamp
+        started_at = (
+            _optional_text(item.get('started_at'))
+            or _optional_text(item.get('created_at'))
+        )
+        if started_at:
+            item.setdefault('started_at', started_at)
+        duration_ms = _mobile_conversation_duration_ms(
+            started_at,
+            completed_timestamp,
+        )
+        if duration_ms is not None:
+            item['duration_ms'] = duration_ms
+        return
 
 
 def _set_native_sort_fields(
@@ -2000,15 +3325,138 @@ def _set_native_sort_fields(
     fallback_timestamp: str,
     thread_order: int,
     line_number: int,
+    complete_agent_reply: bool = True,
 ) -> None:
-    payload = _map(record.get('payload'))
-    item['_native_sort_timestamp'] = (
-        _optional_text(record.get('timestamp'))
-        or _optional_text(payload.get('timestamp'))
-        or fallback_timestamp
-    )
+    timestamp = _native_record_timestamp(record) or fallback_timestamp
+    created_at = _mobile_conversation_timestamp(timestamp)
+    item['_native_sort_timestamp'] = created_at or timestamp
     item['_native_thread_order'] = thread_order
     item['_native_line_number'] = line_number
+    if created_at:
+        item.setdefault('created_at', created_at)
+        if item.get('kind') == 'user_message':
+            item.setdefault('sent_at', created_at)
+        elif item.get('kind') == 'agent_reply':
+            item.setdefault('sent_at', created_at)
+            if complete_agent_reply:
+                item.setdefault('completed_at', created_at)
+
+
+def _native_record_timestamp(record: dict[str, object]) -> str | None:
+    payload = _map(record.get('payload'))
+    message = _map(record.get('message'))
+    return (
+        _optional_text(record.get('timestamp'))
+        or _optional_text(record.get('created_at'))
+        or _optional_text(record.get('updated_at'))
+        or _optional_text(payload.get('timestamp'))
+        or _optional_text(payload.get('created_at'))
+        or _optional_text(message.get('timestamp'))
+        or _optional_text(message.get('created_at'))
+    )
+
+
+def _mobile_conversation_timestamp(value: object) -> str | None:
+    text = _optional_text(value)
+    if not text:
+        return None
+    if re.fullmatch(r'\d+(\.\d+)?', text):
+        try:
+            return (
+                datetime.fromtimestamp(float(text), timezone.utc)
+                .isoformat()
+                .replace('+00:00', 'Z')
+            )
+        except Exception:
+            return None
+    if 'T' not in text:
+        return None
+    return text
+
+
+def _mobile_conversation_duration_ms(
+    started_at: object,
+    completed_at: object,
+) -> int | None:
+    started = _parse_mobile_conversation_timestamp(started_at)
+    completed = _parse_mobile_conversation_timestamp(completed_at)
+    if started is None or completed is None:
+        return None
+    duration_ms = int((completed - started).total_seconds() * 1000)
+    return duration_ms if duration_ms >= 0 else None
+
+
+def _first_mobile_conversation_timestamp(*values: object) -> str | None:
+    for value in values:
+        timestamp = _mobile_conversation_timestamp(value)
+        if timestamp:
+            return timestamp
+    return None
+
+
+def _explicit_mobile_conversation_duration_ms(
+    *,
+    duration_ms: object = None,
+    duration_seconds: object = None,
+) -> int | None:
+    if duration_ms is not None:
+        try:
+            value = int(duration_ms)
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and value >= 0:
+            return value
+    if duration_seconds is not None:
+        try:
+            value = int(float(duration_seconds) * 1000)
+        except (TypeError, ValueError):
+            value = None
+        if value is not None and value >= 0:
+            return value
+    return None
+
+
+def _apply_mobile_conversation_timing(
+    item: dict[str, object],
+    *,
+    sent_at: object = None,
+    started_at: object = None,
+    completed_at: object = None,
+    duration_ms: object = None,
+    duration_seconds: object = None,
+) -> None:
+    sent_timestamp = _mobile_conversation_timestamp(sent_at)
+    started_timestamp = _mobile_conversation_timestamp(started_at)
+    completed_timestamp = _mobile_conversation_timestamp(completed_at)
+    if sent_timestamp:
+        item.setdefault('sent_at', sent_timestamp)
+    if started_timestamp:
+        item.setdefault('started_at', started_timestamp)
+    if completed_timestamp:
+        item.setdefault('completed_at', completed_timestamp)
+        if item.get('kind') == 'agent_reply':
+            item.setdefault('sent_at', completed_timestamp)
+    explicit_duration = _explicit_mobile_conversation_duration_ms(
+        duration_ms=duration_ms,
+        duration_seconds=duration_seconds,
+    )
+    computed_duration = _mobile_conversation_duration_ms(
+        started_timestamp,
+        completed_timestamp,
+    )
+    final_duration = explicit_duration if explicit_duration is not None else computed_duration
+    if final_duration is not None:
+        item.setdefault('duration_ms', final_duration)
+
+
+def _parse_mobile_conversation_timestamp(value: object) -> datetime | None:
+    text = _mobile_conversation_timestamp(value)
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace('Z', '+00:00'))
+    except Exception:
+        return None
 
 
 def _without_native_sort_fields(item: dict[str, object]) -> dict[str, object]:
@@ -2022,6 +3470,26 @@ def _without_native_sort_fields(item: dict[str, object]) -> dict[str, object]:
 def _coalesce_codex_native_agent_replies(
     items: list[dict[str, object]],
 ) -> list[dict[str, object]]:
+    return _coalesce_provider_native_agent_replies(
+        items,
+        source='provider_native/codex',
+    )
+
+
+def _coalesce_claude_native_agent_replies(
+    items: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    return _coalesce_provider_native_agent_replies(
+        items,
+        source='provider_native/claude',
+    )
+
+
+def _coalesce_provider_native_agent_replies(
+    items: list[dict[str, object]],
+    *,
+    source: str,
+) -> list[dict[str, object]]:
     grouped: list[dict[str, object]] = []
     pending: dict[str, object] | None = None
 
@@ -2032,7 +3500,7 @@ def _coalesce_codex_native_agent_replies(
             pending = None
 
     for item in items:
-        if not _is_codex_native_agent_reply(item):
+        if not _is_provider_native_agent_reply(item, source=source):
             flush_pending()
             grouped.append(item)
             continue
@@ -2051,22 +3519,47 @@ def _coalesce_codex_native_agent_replies(
             pending.get('attachments'),
             item.get('attachments'),
         )
+        started_at = (
+            _optional_text(pending.get('started_at'))
+            or _optional_text(pending.get('created_at'))
+            or _optional_text(pending.get('sent_at'))
+        )
+        completed_at = _optional_text(item.get('completed_at'))
+        if started_at:
+            pending['started_at'] = started_at
+        if completed_at:
+            pending['sent_at'] = completed_at
+            pending['completed_at'] = completed_at
+            duration_ms = _mobile_conversation_duration_ms(started_at, completed_at)
+            if duration_ms is not None:
+                pending['duration_ms'] = duration_ms
         pending['_native_line_number'] = item.get('_native_line_number')
         pending['_native_sort_timestamp'] = item.get('_native_sort_timestamp')
     flush_pending()
     return grouped
 
 
-def _is_codex_native_agent_reply(item: dict[str, object]) -> bool:
+def _is_provider_native_agent_reply(
+    item: dict[str, object],
+    *,
+    source: str,
+) -> bool:
     return (
         item.get('kind') == 'agent_reply'
-        and item.get('source') == 'provider_native/codex'
+        and item.get('source') == source
     )
 
 
 def _join_native_agent_reply_bodies(left: str, right: str) -> str:
     parts = [part.strip() for part in (left, right) if part.strip()]
     return '\n\n'.join(parts)
+
+
+def _native_id_part(value: object, *, fallback: str) -> str:
+    text = str(value or '').strip() or fallback
+    safe = ''.join(ch if ch.isalnum() or ch in {'-', '_', '.'} else '_' for ch in text)
+    safe = safe.strip('._')
+    return safe or fallback
 
 
 def _merge_attachment_records(*values: object) -> list[dict[str, object]]:
@@ -2312,19 +3805,31 @@ def _agent_history_conversation_items(
         request = _map(record.get('request'))
         body = _optional_text(request.get('body')) or ''
         job_id = _optional_text(record.get('job_id')) or f'history-{len(items)}'
+        started_at = _first_mobile_conversation_timestamp(
+            record.get('started_at'),
+            record.get('created_at'),
+        )
+        completed_at = _first_mobile_conversation_timestamp(
+            record.get('completed_at'),
+            record.get('finished_at'),
+            record.get('updated_at'),
+            started_at,
+        )
         if body:
+            user_item = {
+                'id': f'user-{job_id}',
+                'agent': agent,
+                'kind': 'user_message',
+                'title': 'You',
+                'body': body,
+                'format': 'markdown',
+                'source': _history_source(record),
+                'state': 'sent' if status == 'completed' else status,
+                'attachments': [],
+            }
+            _apply_mobile_conversation_timing(user_item, sent_at=started_at)
             items.append(
-                {
-                    'id': f'user-{job_id}',
-                    'agent': agent,
-                    'kind': 'user_message',
-                    'title': 'You',
-                    'body': body,
-                    'format': 'markdown',
-                    'source': _history_source(record),
-                    'state': 'sent' if status == 'completed' else status,
-                    'attachments': [],
-                }
+                user_item
             )
         reply_dict = _completion_reply_from_history_job(
             project_root,
@@ -2334,17 +3839,35 @@ def _agent_history_conversation_items(
         )
         reply = str(reply_dict.get('body') or '')
         if reply:
+            reply_started_at = _first_mobile_conversation_timestamp(
+                reply_dict.get('started_at'),
+                started_at,
+            )
+            reply_completed_at = _first_mobile_conversation_timestamp(
+                reply_dict.get('completed_at'),
+                reply_dict.get('sent_at'),
+                completed_at,
+            )
+            reply_item = {
+                'id': f'reply-{job_id}',
+                'agent': agent,
+                'kind': 'agent_reply',
+                'title': 'Agent reply',
+                'body': reply,
+                'format': 'markdown',
+                'source': 'completion_snapshot',
+                'attachments': _attachment_records(reply_dict.get('attachments')),
+            }
+            _apply_mobile_conversation_timing(
+                reply_item,
+                sent_at=reply_completed_at,
+                started_at=reply_started_at,
+                completed_at=reply_completed_at,
+                duration_ms=reply_dict.get('duration_ms'),
+                duration_seconds=reply_dict.get('duration_seconds'),
+            )
             items.append(
-                {
-                    'id': f'reply-{job_id}',
-                    'agent': agent,
-                    'kind': 'agent_reply',
-                    'title': 'Agent reply',
-                    'body': reply,
-                    'format': 'markdown',
-                    'source': 'completion_snapshot',
-                    'attachments': _attachment_records(reply_dict.get('attachments')),
-                }
+                reply_item
             )
     return items
 
@@ -2453,6 +3976,34 @@ def _completion_reply_for_job(
         or _optional_text(payload.get('latest_reply_preview'))
         or ''
     )
+    started_at = _first_mobile_conversation_timestamp(
+        latest_decision.get('started_at'),
+        latest_decision.get('execution_started_at'),
+        payload.get('started_at'),
+        payload.get('execution_started_at'),
+        payload.get('created_at'),
+    )
+    completed_at = _first_mobile_conversation_timestamp(
+        latest_decision.get('completed_at'),
+        latest_decision.get('finished_at'),
+        latest_decision.get('execution_completed_at'),
+        latest_decision.get('created_at'),
+        payload.get('completed_at'),
+        payload.get('finished_at'),
+        payload.get('execution_completed_at'),
+        payload.get('updated_at'),
+        payload.get('created_at'),
+    )
+    duration_ms = (
+        _explicit_mobile_conversation_duration_ms(
+            duration_ms=latest_decision.get('duration_ms') or payload.get('duration_ms'),
+            duration_seconds=(
+                latest_decision.get('duration_seconds')
+                or payload.get('duration_seconds')
+            ),
+        )
+        or _mobile_conversation_duration_ms(started_at, completed_at)
+    )
 
     attachments = []
     payload_obj = _map(latest_decision.get('payload'))
@@ -2465,7 +4016,15 @@ def _completion_reply_for_job(
             project_id=project_id,
             agent=agent,
         )
-    return {'body': body, 'attachments': attachments}
+    result: dict[str, object] = {'body': body, 'attachments': attachments}
+    if started_at:
+        result['started_at'] = started_at
+    if completed_at:
+        result['sent_at'] = completed_at
+        result['completed_at'] = completed_at
+    if duration_ms is not None:
+        result['duration_ms'] = duration_ms
+    return result
 
 
 def _artifact_link_attachments(
@@ -2557,6 +4116,37 @@ def _validate_terminal_summary(record: dict[str, object], view: dict[str, object
         matched = next((item for item in agents if str(item.get('name') or '') == agent), None)
         if matched is None or _optional_text(matched.get('pane_id')) != pane_id:
             raise MobileGatewayError('unknown terminal target pane', status_code=404)
+
+
+def _terminal_summary_pane_id(
+    summary: dict[str, object],
+    view: dict[str, object],
+) -> str | None:
+    pane_id = _optional_text(summary.get('pane_id'))
+    if pane_id:
+        return pane_id
+    agent = _optional_text(summary.get('agent'))
+    agents = [_map(item) for item in _iterable(view.get('agents'))]
+    if agent:
+        matched_agent = next(
+            (item for item in agents if str(item.get('name') or '') == agent),
+            None,
+        )
+        pane_id = _optional_text(_map(matched_agent).get('pane_id'))
+        if pane_id:
+            return pane_id
+    window = _optional_text(summary.get('window'))
+    windows = [_map(item) for item in _iterable(view.get('windows'))]
+    if window:
+        matched_window = next(
+            (item for item in windows if str(item.get('name') or '') == window),
+            None,
+        )
+        pane_id = _optional_text(_map(matched_window).get('active_pane_id'))
+        if pane_id:
+            return pane_id
+    namespace = _map(view.get('namespace'))
+    return _optional_text(namespace.get('active_pane_id'))
 
 
 def _validate_terminal_target(

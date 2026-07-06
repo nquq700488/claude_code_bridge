@@ -188,8 +188,8 @@ def test_parse_ask_with_compact_flag(parser: CliParser) -> None:
     )
 
 
-def test_parse_ask_with_callback_flag(parser: CliParser) -> None:
-    parsed = parser.parse(['ask', '--callback', 'agent1', 'from', 'agent2', 'collect', 'evidence'])
+def test_parse_ask_with_chain_flag(parser: CliParser) -> None:
+    parsed = parser.parse(['ask', '--chain', 'agent1', 'from', 'agent2', 'collect', 'evidence'])
     assert parsed == ParsedAskCommand(
         project=None,
         target='agent1',
@@ -199,11 +199,18 @@ def test_parse_ask_with_callback_flag(parser: CliParser) -> None:
     )
 
 
+def test_parse_ask_rejects_legacy_chain_flag(parser: CliParser) -> None:
+    legacy_chain_flag = '--' + 'call' + 'back'
+    with pytest.raises(CliUsageError) as excinfo:
+        parser.parse(['ask', legacy_chain_flag, 'agent1', 'from', 'agent2', 'collect', 'evidence'])
+    assert f'unknown ask option: {legacy_chain_flag}' in str(excinfo.value)
+
+
 def test_parse_ask_with_artifact_flags(parser: CliParser) -> None:
     parsed = parser.parse(
         [
             'ask',
-            '--callback',
+            '--chain',
             '--artifact-request',
             '--artifact-reply',
             'agent1',

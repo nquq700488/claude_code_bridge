@@ -7,6 +7,30 @@ import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
 
 void main() {
+  testWidgets('manual conversation refresh preserves the visible agent', (
+    tester,
+  ) async {
+    final repository = _RefreshWidgetRepository(
+      initialView: _viewWithActiveAgent(epoch: 4, activeAgentName: 'lead'),
+      refreshedView: _viewWithActiveAgent(epoch: 5, activeAgentName: 'mobile'),
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ProjectHomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await openCurrentProject(tester);
+    expectAgentSelected(tester, 'lead');
+
+    await tester.tap(
+      find.byKey(const ValueKey('agent-conversation-refresh-action')),
+    );
+    await tester.pumpAndSettle();
+
+    _expectOnlyProjectViewCalls(repository, minCalls: 2);
+    expectAgentSelected(tester, 'lead');
+    expect(repository.conversationCalls.last, ('proj-demo', 'lead', 5));
+  });
+
   testWidgets('stale namespace chat send refreshes and retries', (
     tester,
   ) async {
@@ -101,10 +125,13 @@ Future<void> _sendMessage(WidgetTester tester, String body) async {
 }
 
 class _RefreshWidgetRepository extends RecordingGatewayRepository {
-  _RefreshWidgetRepository({this.refreshedView, this.refreshError})
-    : _initialView = CcbProjectView.fromProjectViewPayload(
-        demoPayloadWithEpoch(4),
-      );
+  _RefreshWidgetRepository({
+    CcbProjectView? initialView,
+    this.refreshedView,
+    this.refreshError,
+  }) : _initialView =
+           initialView ??
+           CcbProjectView.fromProjectViewPayload(demoPayloadWithEpoch(4));
 
   final CcbProjectView _initialView;
   final CcbProjectView? refreshedView;
@@ -179,5 +206,29 @@ CcbProjectView _viewWithoutAgent(String agentName) {
     final agent = item! as Map<String, Object?>;
     return agent['name'] == agentName;
   });
+  return CcbProjectView.fromProjectViewPayload(payload);
+}
+
+CcbProjectView _viewWithActiveAgent({
+  required int epoch,
+  required String activeAgentName,
+}) {
+  final payload = demoPayloadWithEpoch(epoch);
+  final view = payload['view']! as Map<String, Object?>;
+  final agents = view['agents']! as List<Object?>;
+  String? activeWindow;
+  String? activePaneId;
+  for (final item in agents) {
+    final agent = item! as Map<String, Object?>;
+    final active = agent['name'] == activeAgentName;
+    agent['active'] = active;
+    if (active) {
+      activeWindow = agent['window'] as String?;
+      activePaneId = agent['pane_id'] as String?;
+    }
+  }
+  final namespace = view['namespace']! as Map<String, Object?>;
+  namespace['active_window'] = activeWindow ?? 'main';
+  namespace['active_pane_id'] = activePaneId;
   return CcbProjectView.fromProjectViewPayload(payload);
 }

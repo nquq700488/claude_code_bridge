@@ -22,7 +22,7 @@ Use this prompt when assigning the next cohesive optimization run:
 
 ```text
 读取并执行
-`/home/bfly/yunwei/ccb_mobile/docs/plantree/plans/mobile-tmux-control/goal-low-latency-conversation.md`
+`/home/bfly/yunwei/ccb_source/mobile/docs/plantree/plans/mobile-tmux-control/goal-low-latency-conversation.md`
 作为当前长期 goal。
 
 目标：优化 CCB Mobile selected-agent 对话延迟和流畅度。手机发送后必须立即显示
@@ -75,7 +75,7 @@ worktree 的 dirty 状态。
   app commit、source commit、package version、安装命令和设备 id；
 - 必须连接 server-wide real mobile gateway，不允许用 fake/demo 作为完成证据；
 - 必须使用 `/home/bfly/yunwei/test_ccb2` 下 disposable real CCB projects；
-- 不允许把探索测试发送到 `/home/bfly/yunwei/ccb_mobile` 当前工作项目；
+- 不允许把探索测试发送到 `/home/bfly/yunwei/ccb_source/mobile` 当前工作项目；
 - 必须证明首页列出真实 mounted/reachable CCB projects；
 - 必须打开 test project 的至少两个 agents；
 - 必须执行普通文本、`/status`、长执行输出、desktop-origin pane 输入、滚动离底、
@@ -301,7 +301,7 @@ Still required before this goal can be closed:
 - Reintroducing fixed background polling.
 - Validating against fake/demo as completion evidence.
 - Sending exploratory prompts into active user work projects such as
-  `/home/bfly/yunwei/ccb_mobile`.
+  `/home/bfly/yunwei/ccb_source/mobile`.
 - Physical phone/Tailnet as a P0 gate for this local optimization goal.
 - Public release, Play Store, GitHub release, or APK publication.
 - Broad redesign of project list, pairing, Tailscale onboarding, file transfer,

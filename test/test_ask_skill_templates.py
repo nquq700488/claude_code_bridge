@@ -36,7 +36,7 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
         assert '`--compact`: result wanted, but only distilled' in text
         assert '`+ --artifact-reply`: consultation/analysis/report where full text should' in text
         assert 'plain `ask`: short question or short handoff where inline text is enough.' in text
-        assert '`--callback`: active CCB parent job + child result required to finish.' in text
+        assert '`--chain`: active CCB parent job + child result required to finish.' in text
         assert 'Combine with `--compact` or `--artifact-reply` as needed.' in text
         assert '3. Request fidelity:' in text
         assert 'Prefer repo paths when the target can read files directly.' in text
@@ -46,15 +46,17 @@ def test_shell_ask_skill_templates_use_short_ask_command() -> None:
         assert 'do not run `ask get` / `pend`' in text
         assert '`ping` / `watch`' in text
         assert 'Do not manually append output-policy text' in text
-        assert 'Artifact flags are orthogonal to `--callback`, `--silence`, and `--compact`.' in text
+        assert 'Artifact flags are orthogonal to `--chain`, `--silence`, and `--compact`.' in text
         assert 'Automatic spill for text over 4 KiB is a fallback' in text
         assert 'In `A --silence -> B`, B still runs an active job.' in text
-        assert 'In callback chains, each waiting hop uses callback' in text
-        assert 'If the current task is a CCB callback continuation' in text
-        assert 'Do not use `ask`, `--callback`, or' in text
+        assert 'In task chains, each needed-result hop uses `--chain`' in text
+        assert 'If the current task is a CCB result-chain continuation' in text
+        assert 'Do not use `ask`, `--chain`, or' in text
         assert 'continuation completion upstream' in text
         assert 'command ask "$TARGET"' in text
-        assert 'command ask --callback --artifact-reply "$TARGET"' in text
+        assert 'command ask --chain --artifact-reply "$TARGET"' in text
+        legacy_chain_flag = '--' + 'call' + 'back'
+        assert legacy_chain_flag not in text
         assert '[FLAGS...]' not in text
         assert re.search(r'[\u4e00-\u9fff]', text) is None
 
@@ -75,7 +77,7 @@ def test_powershell_ask_skill_template_uses_short_ask_command() -> None:
     assert '`--compact`: result wanted, but only distilled' in text
     assert '`+ --artifact-reply`: consultation/analysis/report where full text should' in text
     assert 'plain `ask`: short question or short handoff where inline text is enough.' in text
-    assert '`--callback`: active CCB parent job + child result required to finish.' in text
+    assert '`--chain`: active CCB parent job + child result required to finish.' in text
     assert 'Combine with `--compact` or `--artifact-reply` as needed.' in text
     assert '3. Request fidelity:' in text
     assert 'Prefer repo paths when the target can read files directly.' in text
@@ -85,14 +87,16 @@ def test_powershell_ask_skill_template_uses_short_ask_command() -> None:
     assert 'do not run `ask get` / `pend`' in text
     assert '`ping` / `watch`' in text
     assert 'Do not manually append output-policy text' in text
-    assert 'Artifact flags are orthogonal to `--callback`, `--silence`, and `--compact`.' in text
+    assert 'Artifact flags are orthogonal to `--chain`, `--silence`, and `--compact`.' in text
     assert 'Automatic spill for text over 4 KiB is a fallback' in text
     assert 'In `A --silence -> B`, B still runs an active job.' in text
-    assert 'In callback chains, each waiting hop uses callback' in text
-    assert 'If the current task is a CCB callback continuation' in text
-    assert 'Do not use `ask`, `--callback`, or' in text
+    assert 'In task chains, each needed-result hop uses `--chain`' in text
+    assert 'If the current task is a CCB result-chain continuation' in text
+    assert 'Do not use `ask`, `--chain`, or' in text
     assert 'continuation completion upstream' in text
-    assert '@("--callback", "--artifact-reply", "$TARGET")' in text
+    assert '@("--chain", "--artifact-reply", "$TARGET")' in text
+    legacy_chain_flag = '--' + 'call' + 'back'
+    assert legacy_chain_flag not in text
     assert re.search(r'[\u4e00-\u9fff]', text) is None
 
 

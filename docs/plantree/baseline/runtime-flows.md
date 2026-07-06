@@ -32,7 +32,7 @@ Observed README behavior:
 
 1. Users can ask another named agent explicitly with `/ask <agent> ...`.
 2. Agents can use the `ask` skill or CLI routes for CCB-native delegation.
-3. During an active CCB ask task, callback chaining uses `ccb ask --callback`
+3. During an active CCB ask task, callback chaining uses `ccb ask --chain`
    when the child result is required.
 4. Fire-and-forget work should submit once and stop.
 

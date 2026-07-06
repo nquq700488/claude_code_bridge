@@ -5,6 +5,7 @@ import '../../l10n/ccb_mobile_localizations.dart';
 import '../../models/ccb_agent.dart';
 import '../../models/ccb_project.dart';
 import '../../models/ccb_project_view.dart';
+import '../../models/ccb_window.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/selected_agent_workspace.dart';
@@ -17,6 +18,8 @@ class ProjectHomeProjectListHost extends StatelessWidget {
     required this.onOpenProject,
     required this.onOpenNotifications,
     required this.onOpenConnectionDetails,
+    this.hasUnreadTaskCompletion = false,
+    this.hasWorkingAgents = false,
     super.key,
   });
 
@@ -25,6 +28,8 @@ class ProjectHomeProjectListHost extends StatelessWidget {
   final VoidCallback onOpenProject;
   final VoidCallback onOpenNotifications;
   final VoidCallback onOpenConnectionDetails;
+  final bool hasUnreadTaskCompletion;
+  final bool hasWorkingAgents;
 
   @override
   Widget build(BuildContext context) {
@@ -34,6 +39,8 @@ class ProjectHomeProjectListHost extends StatelessWidget {
       onOpenProject: onOpenProject,
       onOpenNotifications: onOpenNotifications,
       onOpenConnectionDetails: onOpenConnectionDetails,
+      hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+      hasWorkingAgents: hasWorkingAgents,
     );
   }
 }
@@ -44,6 +51,8 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
     required this.onRefreshProjects,
     required this.onOpenSettings,
     required this.onOpenProject,
+    this.unreadProjectIds = const {},
+    this.workingProjectIds = const {},
     super.key,
   });
 
@@ -51,6 +60,8 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
   final VoidCallback onRefreshProjects;
   final VoidCallback onOpenSettings;
   final ValueChanged<CcbProject> onOpenProject;
+  final Set<String> unreadProjectIds;
+  final Set<String> workingProjectIds;
 
   @override
   Widget build(BuildContext context) {
@@ -98,6 +109,11 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
                             final project = projects[index];
                             return _ServerProjectListTile(
                               project: project,
+                              hasUnreadTaskCompletion: unreadProjectIds
+                                  .contains(project.id),
+                              hasWorkingAgents:
+                                  project.hasWorkingAgents ||
+                                  workingProjectIds.contains(project.id),
                               onOpen: () {
                                 onOpenProject(project);
                               },
@@ -114,54 +130,67 @@ class ProjectHomeServerProjectListHost extends StatelessWidget {
 }
 
 class _ServerProjectListTile extends StatelessWidget {
-  const _ServerProjectListTile({required this.project, required this.onOpen});
+  const _ServerProjectListTile({
+    required this.project,
+    required this.onOpen,
+    required this.hasUnreadTaskCompletion,
+    required this.hasWorkingAgents,
+  });
 
   final CcbProject project;
   final VoidCallback onOpen;
+  final bool hasUnreadTaskCompletion;
+  final bool hasWorkingAgents;
 
   @override
   Widget build(BuildContext context) {
     final textTheme = Theme.of(context).textTheme;
     final root = project.root.trim();
     final health = project.health.trim();
-    return ListTile(
-      key: ValueKey('project-open-${project.id}'),
-      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      leading: CircleAvatar(
-        radius: 22,
-        child: Icon(project.favorite ? Icons.star : Icons.terminal),
-      ),
-      title: Text(
-        project.displayName,
-        maxLines: 1,
-        overflow: TextOverflow.ellipsis,
-        style: textTheme.titleMedium,
-      ),
-      subtitle: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (root.isNotEmpty)
-            Text(root, maxLines: 1, overflow: TextOverflow.ellipsis),
-          if (health.isNotEmpty) ...[
-            const SizedBox(height: 4),
-            Text(
-              health,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: textTheme.bodySmall?.copyWith(
-                color: Theme.of(context).colorScheme.onSurfaceVariant,
+    return ProjectWorkingRowHighlight(
+      projectId: project.id,
+      hasWorkingAgents: hasWorkingAgents,
+      child: ListTile(
+        key: ValueKey('project-open-${project.id}'),
+        contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        leading: ProjectAttentionAvatar(
+          projectId: project.id,
+          favorite: project.favorite,
+          hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+          hasWorkingAgents: hasWorkingAgents,
+        ),
+        title: Text(
+          project.displayName,
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+          style: textTheme.titleMedium,
+        ),
+        subtitle: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (root.isNotEmpty)
+              Text(root, maxLines: 1, overflow: TextOverflow.ellipsis),
+            if (health.isNotEmpty) ...[
+              const SizedBox(height: 4),
+              Text(
+                health,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: textTheme.bodySmall?.copyWith(
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
-            ),
+            ],
           ],
-        ],
+        ),
+        trailing: const Icon(Icons.chevron_right),
+        onTap: onOpen,
       ),
-      trailing: const Icon(Icons.chevron_right),
-      onTap: onOpen,
     );
   }
 }
 
-class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
+class ProjectHomeMobileChatScaffoldHost extends StatefulWidget {
   const ProjectHomeMobileChatScaffoldHost({
     required this.view,
     required this.selectedAgent,
@@ -178,6 +207,8 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
     required this.onAgentSelected,
     required this.onRefreshView,
     required this.onTimelineScrollDirectionChanged,
+    this.unreadAgentNames = const {},
+    this.onProjectActivity,
     super.key,
   });
 
@@ -192,13 +223,38 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
   final VoidCallback onOpenConnectionDetails;
   final VoidCallback onCollapseAgents;
   final VoidCallback onExpandAgents;
+  final VoidCallback? onProjectActivity;
   final ValueChanged<String> onWindowSelected;
   final ValueChanged<String> onAgentSelected;
   final Future<CcbProjectView?> Function() onRefreshView;
   final ValueChanged<ScrollDirection> onTimelineScrollDirectionChanged;
+  final Set<String> unreadAgentNames;
+
+  @override
+  State<ProjectHomeMobileChatScaffoldHost> createState() =>
+      _ProjectHomeMobileChatScaffoldHostState();
+}
+
+class _ProjectHomeMobileChatScaffoldHostState
+    extends State<ProjectHomeMobileChatScaffoldHost> {
+  final SelectedAgentWorkspaceController _workspaceController =
+      SelectedAgentWorkspaceController();
+
+  @override
+  void dispose() {
+    _workspaceController.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
+    final selectedAgent = widget.selectedAgent;
+    final terminalAction =
+        selectedAgent == null
+            ? null
+            : () {
+              widget.onOpenTerminal(selectedAgent.name);
+            };
     return Scaffold(
       body: SafeArea(
         child: Padding(
@@ -206,39 +262,51 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
           padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
           child: Column(
             children: [
-              ProjectChatHeader(
-                view: view,
-                onBack: onBack,
-                onOpenTerminal:
-                    selectedAgent == null
-                        ? null
-                        : () {
-                          onOpenTerminal(selectedAgent!.name);
-                        },
-                onOpenConnectionDetails: onOpenConnectionDetails,
-              ),
-              const SizedBox(height: 4),
-              MobileAgentSwitcherPanel(
-                view: view,
-                selectedAgent: selectedAgent,
-                collapsed: mobileAgentsCollapsed,
-                onCollapse: onCollapseAgents,
-                onExpand: onExpandAgents,
-                onWindowSelected: onWindowSelected,
-                onAgentSelected: onAgentSelected,
-              ),
+              if (widget.mobileAgentsCollapsed)
+                _MobileCollapsedProjectBar(
+                  view: widget.view,
+                  selectedAgent: selectedAgent,
+                  unreadAgentNames: widget.unreadAgentNames,
+                  onShowProjects: widget.onBack,
+                  onExpandAgents: widget.onExpandAgents,
+                  onRefreshConversation: _workspaceController.refreshLatest,
+                  onOpenTerminal: terminalAction,
+                  onOpenConnectionDetails: widget.onOpenConnectionDetails,
+                )
+              else ...[
+                ProjectChatHeader(
+                  view: widget.view,
+                  onBack: widget.onBack,
+                  onRefreshConversation: _workspaceController.refreshLatest,
+                  onOpenTerminal: terminalAction,
+                  onOpenConnectionDetails: widget.onOpenConnectionDetails,
+                ),
+                const SizedBox(height: 4),
+                MobileAgentSwitcherPanel(
+                  view: widget.view,
+                  selectedAgent: selectedAgent,
+                  collapsed: false,
+                  unreadAgentNames: widget.unreadAgentNames,
+                  onCollapse: widget.onCollapseAgents,
+                  onExpand: widget.onExpandAgents,
+                  onWindowSelected: widget.onWindowSelected,
+                  onAgentSelected: widget.onAgentSelected,
+                ),
+              ],
               const SizedBox(height: 4),
               Expanded(
                 child: SelectedAgentWorkspace(
-                  repository: repository,
-                  terminalTransport: terminalTransport,
-                  usePaneInputForMessages: usePaneInputForMessages,
-                  view: view,
+                  repository: widget.repository,
+                  terminalTransport: widget.terminalTransport,
+                  usePaneInputForMessages: widget.usePaneInputForMessages,
+                  view: widget.view,
                   agent: selectedAgent,
                   enableComposerCollapse: true,
-                  onRefreshView: onRefreshView,
+                  onRefreshView: widget.onRefreshView,
                   onUserScrollDirectionChanged:
-                      onTimelineScrollDirectionChanged,
+                      widget.onTimelineScrollDirectionChanged,
+                  onProjectActivity: widget.onProjectActivity,
+                  controller: _workspaceController,
                 ),
               ),
             ],
@@ -246,6 +314,171 @@ class ProjectHomeMobileChatScaffoldHost extends StatelessWidget {
         ),
       ),
     );
+  }
+}
+
+enum _MobileCollapsedProjectAction { projects, diagnostics }
+
+class _MobileCollapsedProjectBar extends StatelessWidget {
+  const _MobileCollapsedProjectBar({
+    required this.view,
+    required this.selectedAgent,
+    required this.unreadAgentNames,
+    required this.onShowProjects,
+    required this.onExpandAgents,
+    required this.onRefreshConversation,
+    required this.onOpenTerminal,
+    required this.onOpenConnectionDetails,
+  });
+
+  final CcbProjectView view;
+  final CcbAgent? selectedAgent;
+  final Set<String> unreadAgentNames;
+  final VoidCallback onShowProjects;
+  final VoidCallback onExpandAgents;
+  final VoidCallback onRefreshConversation;
+  final VoidCallback? onOpenTerminal;
+  final VoidCallback onOpenConnectionDetails;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    final strings = CcbMobileLocalizations.of(context);
+    final selectedWindow = selectedWindowForView(view, selectedAgent);
+    final hasUnread = unreadAgentNames.isNotEmpty;
+    return Material(
+      key: const ValueKey('mobile-agent-switcher-collapsed'),
+      color: colorScheme.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(8),
+        side: BorderSide(color: colorScheme.outlineVariant),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: SizedBox(
+        height: 60,
+        child: Row(
+          children: [
+            Expanded(
+              child: InkWell(
+                onTap: onExpandAgents,
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Row(
+                    children: [
+                      TaskCompletionUnreadIcon(
+                        unreadKey: const ValueKey(
+                          'mobile-agent-switcher-unread-star',
+                        ),
+                        showUnread: hasUnread,
+                        child: Icon(
+                          Icons.auto_awesome_rounded,
+                          size: 20,
+                          color: colorScheme.primary,
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              view.project.displayName,
+                              key: const ValueKey('project-chat-title'),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.labelLarge,
+                            ),
+                            const SizedBox(height: 2),
+                            Text(
+                              _mobileAgentSummary(
+                                selectedWindow: selectedWindow,
+                                selectedAgent: selectedAgent,
+                                agentCount: view.agents.length,
+                              ),
+                              key: const ValueKey(
+                                'mobile-agent-switcher-summary',
+                              ),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: Theme.of(context).textTheme.bodyMedium
+                                  ?.copyWith(color: colorScheme.onSurface),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+            IconButton(
+              key: const ValueKey('mobile-agent-switcher-expand-action'),
+              tooltip: 'Show agents',
+              visualDensity: VisualDensity.compact,
+              onPressed: onExpandAgents,
+              icon: const Icon(Icons.keyboard_arrow_down),
+            ),
+            IconButton(
+              key: const ValueKey('agent-conversation-refresh-action'),
+              tooltip: strings.refreshConversation,
+              visualDensity: VisualDensity.compact,
+              onPressed: onRefreshConversation,
+              icon: const Icon(Icons.refresh),
+            ),
+            IconButton(
+              key: const ValueKey('open-agent-terminal-button'),
+              tooltip: strings.openTerminal,
+              visualDensity: VisualDensity.compact,
+              onPressed: onOpenTerminal,
+              icon: const Icon(Icons.terminal),
+            ),
+            PopupMenuButton<_MobileCollapsedProjectAction>(
+              key: const ValueKey('project-chat-overflow-action'),
+              tooltip: strings.diagnostics,
+              icon: const Icon(Icons.more_vert),
+              onSelected: (action) {
+                switch (action) {
+                  case _MobileCollapsedProjectAction.projects:
+                    onShowProjects();
+                  case _MobileCollapsedProjectAction.diagnostics:
+                    onOpenConnectionDetails();
+                }
+              },
+              itemBuilder:
+                  (context) => [
+                    PopupMenuItem<_MobileCollapsedProjectAction>(
+                      key: const ValueKey('project-chat-projects-menu-item'),
+                      value: _MobileCollapsedProjectAction.projects,
+                      child: Text(strings.projects),
+                    ),
+                    PopupMenuItem<_MobileCollapsedProjectAction>(
+                      key: const ValueKey('project-chat-diagnostics-menu-item'),
+                      value: _MobileCollapsedProjectAction.diagnostics,
+                      child: Text(strings.diagnostics),
+                    ),
+                  ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  String _mobileAgentSummary({
+    required CcbWindow? selectedWindow,
+    required CcbAgent? selectedAgent,
+    required int agentCount,
+  }) {
+    final agent = selectedAgent;
+    if (agent == null) {
+      return '$agentCount agents';
+    }
+    final window = selectedWindow;
+    if (window == null) {
+      return agent.name;
+    }
+    return '${window.label} / ${agent.name}';
   }
 }
 
@@ -268,6 +501,10 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
     required this.onHorizontalDragUpdate,
     required this.onHorizontalDragEnd,
     required this.onRefreshView,
+    this.unreadAgentNames = const {},
+    this.onProjectActivity,
+    this.hasUnreadTaskCompletion = false,
+    this.hasWorkingAgents = false,
     super.key,
   });
 
@@ -283,11 +520,15 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
   final VoidCallback onShowProjects;
   final ValueChanged<CcbAgent> onAgentSelected;
   final ValueChanged<String> onOpenTerminal;
+  final VoidCallback? onProjectActivity;
   final VoidCallback onToggleSidebar;
   final GestureDragStartCallback onHorizontalDragStart;
   final GestureDragUpdateCallback onHorizontalDragUpdate;
   final GestureDragEndCallback onHorizontalDragEnd;
   final Future<CcbProjectView?> Function() onRefreshView;
+  final Set<String> unreadAgentNames;
+  final bool hasUnreadTaskCompletion;
+  final bool hasWorkingAgents;
 
   @override
   Widget build(BuildContext context) {
@@ -301,6 +542,8 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
             onProjectSelected: onOpenProject,
             onOpenNotifications: onOpenNotifications,
             onOpenConnectionDetails: onOpenConnectionDetails,
+            hasUnreadTaskCompletion: hasUnreadTaskCompletion,
+            hasWorkingAgents: hasWorkingAgents,
           ),
         ),
         const VerticalDivider(width: 1),
@@ -309,6 +552,7 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
           child: WideAgentColumn(
             view: view,
             selectedAgentName: selectedAgent?.name,
+            unreadAgentNames: unreadAgentNames,
             onAgentSelected: onAgentSelected,
           ),
         ),
@@ -319,6 +563,7 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
           child: WideAgentColumn(
             view: view,
             selectedAgentName: selectedAgent?.name,
+            unreadAgentNames: unreadAgentNames,
             onShowProjects: onShowProjects,
             onAgentSelected: onAgentSelected,
           ),
@@ -378,6 +623,7 @@ class ProjectHomeWideScaffoldHost extends StatelessWidget {
                         enableComposerCollapse: false,
                         onRefreshView: onRefreshView,
                         onUserScrollDirectionChanged: null,
+                        onProjectActivity: onProjectActivity,
                       ),
                     ),
                   ],

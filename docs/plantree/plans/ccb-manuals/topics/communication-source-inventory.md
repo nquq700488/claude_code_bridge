@@ -40,7 +40,7 @@ Observed responsibilities:
 
 - `parse_ask` handles removed flags, route options, stdin appending, route
   parsing, and `ParsedAskCommand` construction.
-- `--compact`, `--silence`, `--callback`, `--artifact-request`,
+- `--compact`, `--silence`, `--chain`, `--artifact-request`,
   `--artifact-reply`, and `--artifact-io` are parsed before route parsing.
 - `submit_ask` validates target and sender against loaded project config.
 - role ids can be used as ask targets only when they resolve to exactly one
@@ -192,7 +192,7 @@ Observed responsibilities:
 
 - callback mode is represented by `route_options["mode"] == "callback"`.
 - plain nested asks from an active CCB task are rejected unless the child result
-  is routed with `--callback` or the child is fire-and-forget with `--silence`.
+  is routed with `--chain` or the child is fire-and-forget with `--silence`.
 - callback requires exactly one target, an active parent job, a parent message,
   message-bureau support, and no existing outstanding callback for the parent.
 - `CallbackEdgeRecord` links parent job/message, child job/message, original

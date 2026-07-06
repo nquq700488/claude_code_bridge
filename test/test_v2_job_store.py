@@ -743,7 +743,7 @@ def test_job_store_roundtrips_request_route_options(tmp_path: Path) -> None:
         reply_to=None,
         message_type='ask',
         delivery_scope=DeliveryScope.SINGLE,
-        route_options={'mode': 'callback', 'callback_edge_id': 'cb_1'},
+        route_options={'mode': 'chain', 'chain_edge_id': 'cb_1'},
     )
     record = JobRecord(
         job_id='job_route_options',
@@ -762,7 +762,7 @@ def test_job_store_roundtrips_request_route_options(tmp_path: Path) -> None:
 
     latest = store.get_latest('agent1', 'job_route_options')
     assert latest is not None
-    assert latest.request.route_options == {'mode': 'callback', 'callback_edge_id': 'cb_1'}
+    assert latest.request.route_options == {'mode': 'chain', 'chain_edge_id': 'cb_1'}
 
 
 def test_event_store_supports_explicit_target_lookup(tmp_path: Path) -> None:

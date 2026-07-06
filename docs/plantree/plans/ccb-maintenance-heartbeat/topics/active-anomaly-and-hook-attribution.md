@@ -83,8 +83,8 @@ Validation already run:
 - The same source-runtime validation confirmed route semantics that must not
   be classified as provider empty replies: `--silence` success completed
   normally (`job_1e6a98da6f95`), `--silence` abnormal completion remained
-  diagnosable (`job_ff28a17e2680`), standalone `--callback` failed with
-  `ask --callback requires an active parent job for the sender`, active-parent
+  diagnosable (`job_ff28a17e2680`), standalone `--chain` failed with
+  `ask --chain requires an active parent job for the sender`, active-parent
   callback intentionally produced an empty parent reply with
   `completion_reason: callback_pending` (`job_1ee1c42deef4`) and then a normal
   callback continuation (`job_6105fb0a5d2f`), and active-parent

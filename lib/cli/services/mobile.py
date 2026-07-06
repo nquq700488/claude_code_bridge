@@ -107,7 +107,12 @@ def prepare_server_mobile_gateway(
         local_gateway_url = f'http://{host}:{port}'
         gateway_url = _public_gateway_url(command.public_url, fallback=local_gateway_url)
         route_provider = str(command.route_provider or 'lan')
-        pairing = service.create_pairing_payload(gateway_url=gateway_url, route_provider=route_provider)
+        pairing = service.create_pairing_payload(
+            gateway_url=gateway_url,
+            route_provider=route_provider,
+            expires_seconds=None,
+            reusable_claims=True,
+        )
         relay_outbound = _relay_outbound_summary(resolved_host_id) if route_provider == 'relay' else None
     except Exception:
         server.server_close()
