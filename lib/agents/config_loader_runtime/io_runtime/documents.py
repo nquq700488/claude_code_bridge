@@ -17,7 +17,7 @@ from ..common import (
 )
 from ..defaults import build_default_project_config
 from ..parsing import validate_project_config
-from ..paths import project_config_path, user_default_config_path
+from ..paths import project_config_path, resolve_config_profile_path, user_default_config_path
 
 _ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop'}
 _HYBRID_HEADER_OWNED_AGENT_KEYS = {'provider', 'workspace_mode'}
@@ -303,7 +303,8 @@ def _load_config_document(path: Path, *, project_root: Path | None = None) -> di
 
 
 def load_project_config(project_root: Path, *, include_loop_overlays: bool = True) -> ConfigLoadResult:
-    project_path = project_config_path(project_root)
+    resolved = resolve_config_profile_path(project_root)
+    project_path = resolved or project_config_path(project_root)
     if project_path.exists():
         config = validate_project_config(
             _load_config_document(project_path, project_root=Path(project_root).expanduser().resolve()),

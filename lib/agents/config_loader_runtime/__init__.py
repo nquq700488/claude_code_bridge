@@ -16,7 +16,7 @@ from .common import (
 from .defaults import build_default_project_config, render_default_project_config_text, render_project_config_text
 from .io import ensure_bootstrap_project_config, ensure_default_project_config, load_project_config
 from .parsing import validate_project_config
-from .paths import project_config_path
+from .paths import project_config_path, resolve_config_profile_path
 
 __all__ = [
     'ALLOWED_AGENT_KEYS',
@@ -36,6 +36,7 @@ __all__ = [
     'load_project_config',
     'project_config_path',
     'render_default_project_config_text',
+    'resolve_config_profile_path',
     'render_project_config_text',
     'validate_project_config',
 ]
