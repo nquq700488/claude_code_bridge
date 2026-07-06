@@ -1,6 +1,6 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v8.0.7 | 最后更新：2026-07-01
+> 版本：适用于 CCB v8.0.16 | 最后更新：2026-07-06
 
 ---
 
@@ -549,12 +549,17 @@ cmd; main:codex(3), reviewer:claude; qa:gemini
 cmd; main:codex@70, reviewer:claude; qa:gemini
 ```
 
-#### Chained Ask / Callback Routing（v6.2.x）
+#### Chain Ask（链式委派，v8.0.9+）
 
-当 Agent 正在处理 CCB 任务时，如果需要另一个 Agent 的结果才能继续，必须使用 `--callback` 而非普通 `ask`：
+当 Agent 正在处理 CCB 任务时，如果需要另一个 Agent 的结果才能继续，必须使用 `--chain`（旧名 `--callback`）而非普通 `ask`：
 
 ```bash
 # 在 Agent 内部调用（支持链式委派：agent2 -> agent4 -> agent1 -> agent3）
+ccb ask --chain reviewer <<'EOF'
+Review this failing test and return the minimal blocker.
+EOF
+
+# --callback 作为兼容别名仍然可用
 ccb ask --callback reviewer <<'EOF'
 Review this failing test and return the minimal blocker.
 EOF
@@ -582,8 +587,8 @@ CCB job job_abc for agent `planner` has finished with status: completed.
 Use `ccb trace job_abc` to view the full result.
 ```
 
-与 `--callback` 的区别：
-- `--callback`：创建 callback edge 和 continuation job，**要求 parent Agent 有活跃的 provider session 来接收回传任务**（Claude/Codex 支持，Kimi  pane-log 模式不支持持续 watch）
+与 `--chain`（旧名 `--callback`）的区别：
+- `--chain`：标记为链式任务，创建 continuation job，**要求 parent Agent 有活跃的 provider session 来接收回传任务**（Claude/Codex 支持，Kimi pane-log 模式不支持持续 watch）
 - `--notify-sender`：仅在任务完成时向 sender inbox 发送一条系统 notice，**不创建 continuation job，不依赖 provider watch 机制**，适合所有 provider（包括 Kimi）
 - 两者可以独立使用，也可以组合使用
 
@@ -604,7 +609,7 @@ ccb ask --artifact-reply agent2 帮我收集所有日志
 ccb ask --artifact-io agent2 处理大型数据集
 
 # 可与其它标志组合使用
-ccb ask --callback --artifact-reply agent2 collect long evidence
+ccb ask --chain --artifact-reply agent2 collect long evidence
 ```
 
 | 标志 | 作用 |
@@ -1191,7 +1196,7 @@ ccb reinstall          # 重新安装
 # Agent 间通信（在 Agent 内部使用）
 /ask <agent> <message>            # 向指定 Agent 委派任务（默认同步等待回复）
 ccb ask --silence <agent>         # 静默提交（不等待回复，v6.2.x+）
-ccb ask --callback <agent>        # 带回调的 ask（链式委派，v6.2.x+）
+ccb ask --callback <agent>        # 链式委派（--callback 兼容别名，v8.0.9+ 推荐 --chain）
 ccb ask --notify-sender <agent>   # 任务完成后通知 sender（v7.0.9+）
 /ping <agent|ccbd>                # 检查 Agent 或控制平面健康
 /pend <agent|job_id>              # 查看 Agent 回复

@@ -1,12 +1,12 @@
 # 使用此 Fork 版本的 CCB
 
-> **核心原则**：系统里只保留这一个 CCB 安装。它是官方 CCB（v8.0.7）的 Fork，额外添加了 **MiniMax (mmx)** provider 支持，并对 **Kimi** provider 做了增强（更健壮的 CLI 可执行文件查找 + 新 session 格式兼容）。官方版本已收录 Kimi、Gemini、Codex、Claude 等 15 个 CLI 家族。
+> **核心原则**：系统里只保留这一个 CCB 安装。它是官方 CCB（v8.0.16）的 Fork，额外添加了 **MiniMax (mmx)** provider 支持，并对 **Kimi** provider 做了增强（更健壮的 CLI 可执行文件查找 + 新 session 格式兼容）。官方版本已收录 Kimi、Gemini、Codex、Claude 等 15 个 CLI 家族。
 
 ---
 
 ## 1. 这个 Fork 与官方版本的区别
 
-| 特性 | 官方 CCB (v8.0.7) | 此 Fork |
+| 特性 | 官方 CCB (v8.0.16) | 此 Fork |
 |------|---------------------|---------|
 | Claude | ✅ | ✅ |
 | Codex (OpenAI) | ✅ | ✅ |
