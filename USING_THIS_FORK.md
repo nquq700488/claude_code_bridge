@@ -283,8 +283,39 @@ ccb ask claude "根据以下设计实现核心模块：\n[paste design]"
 **原则**：
 - **mmx** 负责"想"和"写"（纯文本生成）
 - **claude** 负责"做"和"改"（文件操作、执行、审查）
-- **不要**让 mmx 做需要文件系统的任务
 - **不要**让 mmx 和 claude 同时操作同一个文件（避免冲突）
+
+---
+
+## 2.8 配置档案切换（Fork 独有功能）
+
+Fork 支持通过 `ccb.config` 的一行路由器在不同布局之间切换，无需手动替换整个配置文件。
+
+### 原理
+
+`ccb.config` 只写一行 `config_profile`，CCB 启动时自动解析为对应的 `ccb-<profile>.config`：
+
+```
+.ccb/
+├── ccb.config            # 路由器：config_profile = "compact"
+├── ccb-compact.config    # 紧凑单窗口布局
+└── ccb-multi.config      # 多窗口布局
+```
+
+### 切换方式
+
+```bash
+# 编辑 .ccb/ccb.config，改一行即可
+config_profile = "multi"    # 切换到多窗口布局
+config_profile = "compact"  # 切回紧凑布局
+
+# 使变更生效
+ccb reload
+```
+
+### 添加自定义档案
+
+创建 `.ccb/ccb-<name>.config`，然后在 `ccb.config` 中引用即可。不存在的 profile 会在启动时报错提示。
 
 ---
 

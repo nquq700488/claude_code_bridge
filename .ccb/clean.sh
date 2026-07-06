@@ -42,6 +42,8 @@ done
 # 需要保留的文件和目录（白名单）
 declare -A KEEP=(
     ["ccb.config"]=1
+    ["ccb-compact.config"]=1
+    ["ccb-multi.config"]=1
     ["README.md"]=1
     ["restart.sh"]=1
     ["start.sh"]=1

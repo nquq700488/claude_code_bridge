@@ -317,9 +317,11 @@ grep -A 5 "CCB_CONFIG_START" ~/.claude/CLAUDE.md
 
 ## 项目配置（在新设备上创建 Agent 团队）
 
+> **Fork 独有功能**：此 Fork 支持「配置档案路由」——`ccb.config` 写一行 `config_profile = "compact"` 即可在不同布局间切换，无需手动替换文件。详见 [USING_THIS_FORK.md §2.8](./USING_THIS_FORK.md#28-配置档案切换fork-独有功能)。
+
 ### ccb.config 语法
 
-CCB 的行为由项目级 `.ccb/ccb.config` 文件控制。该文件不会被安装脚本自动创建，需要手动维护。
+CCB 的行为由项目级 `.ccb/ccb.config` 文件控制。该文件不会被安装脚本自动创建，需要手动维护。项目已内置两套档案：`ccb-compact.config`（紧凑单窗口）和 `ccb-multi.config`（多窗口分屏）。
 
 #### 基础布局
 

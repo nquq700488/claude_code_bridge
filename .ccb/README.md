@@ -2,6 +2,20 @@
 
 本目录包含 `ccb` 的启动/停止/重启脚本，与项目配置一起作为模板使用。
 
+## 配置档案
+
+`ccb.config` 是一行路由器，通过 `config_profile` 指定实际使用的配置文件：
+
+```toml
+config_profile = "compact"   # 单窗口 5-agent 紧凑布局
+# config_profile = "multi"   # 三窗口分屏布局
+```
+
+- `ccb-compact.config` — 紧凑格式，所有 agent 在同一个窗口
+- `ccb-multi.config` — 多窗口格式，分 main / work / test 三个 tmux 窗口
+
+切换后运行 `ccb reload` 生效，无需重启。
+
 ## 使用
 
 ```bash
