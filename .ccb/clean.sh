@@ -19,7 +19,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
             echo "Usage: $(basename "$0") [-f|--force] [-n|--dry-run]"
-            echo "  -f, --force   不提示直接删除"
+            echo "  -f, --force   强制停止 CCB 守护进程后清理"
             echo "  -n, --dry-run 只列出将被删除的内容，不实际删除"
             exit 0
             ;;
@@ -109,16 +109,9 @@ echo ""
 total_size=$(du -sh "$SCRIPT_DIR" 2>/dev/null | cut -f1 || echo "-")
 echo "当前目录总大小: $total_size"
 
-# 确认删除
 if [[ "$DRY_RUN" == true ]]; then
     echo -e "${YELLOW}[dry-run] 未实际删除${NC}"
     exit 0
-fi
-
-if [[ "$FORCE" != true ]]; then
-    echo ""
-    read -p "确认删除以上文件？(y/N) " -r answer
-    [[ "$answer" =~ ^[Yy]$ ]] || { echo "已取消"; exit 0; }
 fi
 
 # 删除
