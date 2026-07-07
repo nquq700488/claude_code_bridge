@@ -263,9 +263,7 @@ def _poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPol
     pane_observation = _observe_kimi_pane_turn(backend, pane_id, req_id)
     if pane_observation is not None:
         pane_observation = _stabilize_pane_observation(state, pane_observation, now)
-    if pane_observation is not None and (
-        observation is None or (pane_observation.completed and not observation.completed)
-    ):
+    if observation is None and pane_observation is not None:
         observation = pane_observation
         state["pane_fallback_observed"] = True
     if observation is None:
