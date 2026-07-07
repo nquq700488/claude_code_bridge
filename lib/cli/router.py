@@ -369,17 +369,6 @@ _COMMAND_HELP = {
           - This sends the provider-native /clear command into each pane.
           - It does not delete .ccb state, workspaces, auth, sessions, or logs.
           - Use `ccb kill` or the sidebar restart control when you need process restart.
-    """
-    "restart": """
-        usage: ccb restart <agent_name>
-
-        Guarded single-agent runtime restart:
-          ccb restart agent1   Restart one configured mounted agent pane through ccbd.
-
-        Safety:
-          - Target authority comes from the current mounted daemon graph.
-          - Refuses when the agent is busy, queued, delivering a reply, or waiting on result-chain continuation.
-          - Does not support `restart all`, window-level restart, or raw tmux mutation.
     """,
     "maintenance": """
         usage: ccb maintenance <status|tick|schedule>
