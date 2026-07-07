@@ -44,6 +44,7 @@ declare -A KEEP=(
     ["ccb.config"]=1
     ["ccb-compact.config"]=1
     ["ccb-multi.config"]=1
+    ["ccb_memory.md"]=1
     ["README.md"]=1
     ["restart.sh"]=1
     ["start.sh"]=1
