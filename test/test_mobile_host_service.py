@@ -97,6 +97,7 @@ def test_mobile_host_service_clears_stale_state_and_starts(tmp_path: Path) -> No
     assert spawned[0]['command'][2] == MOBILE_HOST_SERVE_COMMAND
     assert spawned[0]['cwd'] == str(Path.cwd())
     assert spawned[0]['env']['CCB_MOBILE_HOST_STATE_HOME'] == str(state_dir)
+    assert spawned[0]['env']['CCB_SOURCE_RUNTIME_OK'] == '1'
     assert not paths.state_path.exists()
 
 
@@ -501,6 +502,37 @@ def test_mobile_host_service_terminates_spawned_process_when_health_never_ready(
         )
 
     assert terminated == [222]
+
+
+def test_mobile_host_service_reports_exit_code_and_log_tail(tmp_path: Path) -> None:
+    state_dir = tmp_path / 'mobile'
+    paths = mobile_host_service_paths(state_dir)
+    paths.state_dir.mkdir(parents=True)
+    paths.log_path.write_text(
+        'Refusing to run the CCB source checkout outside an allowed test project.\n'
+        'Current directory: /tmp/ccb_main_direct\n',
+        encoding='utf-8',
+    )
+
+    with pytest.raises(MobileHostServiceError) as excinfo:
+        start_or_replace_mobile_host_service(
+            script_root=tmp_path / 'source',
+            listen='127.0.0.1:8787',
+            public_url='https://desktop.tailnet.ts.net:8787',
+            route_provider='tailnet',
+            state_dir=state_dir,
+            process_exists_fn=lambda _pid: False,
+            terminate_pid_tree_fn=lambda _pid, **_kwargs: True,
+            port_owner_fn=lambda _listen: None,
+            spawn_fn=lambda *_args, **_kwargs: _FakeProcess(222, returncode=1),
+            health_check_fn=lambda _url: False,
+            sleep_fn=lambda _seconds: None,
+        )
+
+    message = str(excinfo.value)
+    assert 'exited before becoming healthy: exit_code=1' in message
+    assert 'Refusing to run the CCB source checkout' in message
+    assert 'Current directory: /tmp/ccb_main_direct' in message
 
 
 def test_detect_loopback_port_owner_uses_lsof_when_ss_is_missing(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -226,6 +226,7 @@ def start_or_replace_mobile_host_service(
             _wait_for_mobile_host_health(
                 local_gateway_url,
                 process=process,
+                log_path=paths.log_path,
                 health_check_fn=health_check_fn,
                 timeout_s=MOBILE_HOST_HEALTH_TIMEOUT_S,
                 sleep_fn=sleep_fn,
@@ -480,6 +481,7 @@ def _spawn_mobile_host_service(
     env = dict(os.environ)
     env['CCB_MOBILE_HOST_STATE_HOME'] = str(paths.state_dir)
     env['CCB_SKIP_STARTUP_UPDATE_CHECK'] = '1'
+    env['CCB_SOURCE_RUNTIME_OK'] = '1'
     log = paths.log_path.open('ab')
     try:
         spawner = spawn_fn or subprocess.Popen
@@ -503,6 +505,7 @@ def _wait_for_mobile_host_health(
     local_gateway_url: str,
     *,
     process: object,
+    log_path: Path,
     health_check_fn: Callable[[str], bool] | None,
     timeout_s: float,
     sleep_fn: Callable[[float], None],
@@ -512,12 +515,31 @@ def _wait_for_mobile_host_health(
     checker = health_check_fn or _http_health_check
     while monotonic_fn() < deadline:
         poll = getattr(process, 'poll', None)
-        if callable(poll) and poll() is not None:
-            raise MobileHostServiceError('mobile host service exited before becoming healthy')
+        if callable(poll):
+            exit_code = poll()
+            if exit_code is not None:
+                detail = f'mobile host service exited before becoming healthy: exit_code={exit_code}'
+                log_tail = _mobile_host_log_tail(log_path)
+                if log_tail:
+                    detail += f'; log_tail={log_tail}'
+                raise MobileHostServiceError(detail)
         if checker(local_gateway_url):
             return
         sleep_fn(0.1)
     raise MobileHostServiceError(f'mobile host service did not become healthy: {local_gateway_url}/v1/health')
+
+
+def _mobile_host_log_tail(path: Path, *, max_chars: int = 1200) -> str:
+    try:
+        text = Path(path).read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return ''
+    text = text.strip()
+    if not text:
+        return ''
+    if len(text) > max_chars:
+        text = text[-max_chars:]
+    return ' '.join(text.split())
 
 
 def _http_health_check(local_gateway_url: str) -> bool:

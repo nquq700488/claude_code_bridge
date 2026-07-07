@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## v8.0.17 (2026-07-07)
+
+### Ask Stability And Mobile Update
+
+- **Ask Reply Detection Hardened**: Codex prompt delivery now uses a
+  no-progress timer based on compact session evidence instead of failing only
+  from elapsed submit time, reducing false failures on slow WSL/mac session
+  writes.
+- **Missing Session Diagnostics Added**: when the official Codex session/log
+  cannot be found past the no-progress window, CCB returns attributable
+  non-success diagnostics instead of silently waiting; shutdown evidence is
+  reported as provider-crashed failure.
+- **Mobile Frontdesk Submit Routed Through Ask**: CCB Mobile frontdesk messages
+  now submit ccbd ask jobs rather than writing directly to panes.
+- **Mobile Update Watch Waits For Real Terminal State**: `ccb watch` no longer
+  has a default 10 second timeout, so `ccb update mobile` and other long
+  update flows can wait for the real terminal condition. Explicit
+  `CCB_WATCH_TIMEOUT_S` remains supported.
+- **Release Surface Synchronized**: VERSION, package.json, mobile app version
+  metadata, update links, README variants, and release workflow defaults are
+  aligned for 8.0.17.
+
 ## v8.0.16 (2026-07-05)
 
 ### Mobile Reconnect And Activity
