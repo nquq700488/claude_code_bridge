@@ -102,7 +102,7 @@ sudo pacman -S python
 ### 1. 克隆仓库
 
 ```bash
-git clone https://github.com/bfly123/claude_code_bridge.git
+git clone https://github.com/nquq700488/claude_code_bridge.git
 cd claude_code_bridge
 ```
 
