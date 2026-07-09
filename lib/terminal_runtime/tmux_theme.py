@@ -396,18 +396,21 @@ def _window_tabs(palette: TmuxStatusPalette) -> str:
     on the label switches to that window (via the default
     ``MouseDown1Status switch-client -t =`` binding). The active window is
     highlighted with the indicator background; inactive windows use the
-    muted foreground. The inline ``#{W:inactive,active}`` construct uses the
-    first comma outside any ``#[...]`` block as the separator between the two
-    formats — commas inside ``#[...]`` attribute blocks are safely contained.
+    muted foreground.
+
+    Commas inside the ``#[...]`` attribute blocks MUST be escaped as ``#,``:
+    the enclosing ``#{W:inactive,active}`` construct splits its two formats on
+    the first *unescaped* comma, so a literal ``fg=x,bg=y`` would be cut in
+    half (tmux does not treat ``#[...]`` as a nesting boundary here).
     """
     inactive = (
         f'#[range=window|#{{window_index}} '
-        f'fg={palette.foreground},bg={palette.background}]'
+        f'fg={palette.foreground}#,bg={palette.background}]'
         ' #I:#W #[norange default]'
     )
     active = (
         f'#[range=window|#{{window_index}} '
-        f'fg={palette.segment_fg},bg={palette.indicator_bg},bold]'
+        f'fg={palette.segment_fg}#,bg={palette.indicator_bg}#,bold]'
         ' #I:#W #[norange default]'
     )
     return f'#{{W:{inactive},{active}}}'
