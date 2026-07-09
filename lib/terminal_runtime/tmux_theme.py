@@ -405,12 +405,12 @@ def _window_tabs(palette: TmuxStatusPalette) -> str:
     """
     inactive = (
         f'#[range=window|#{{window_index}} '
-        f'fg={palette.foreground}#,bg={palette.background}]'
+        f'fg={palette.muted}#,bg={palette.background}]'
         ' #I:#W #[norange default]'
     )
     active = (
         f'#[range=window|#{{window_index}} '
-        f'fg={palette.segment_fg}#,bg={palette.indicator_bg}#,bold]'
+        f'fg={palette.segment_fg}#,bg={palette.indicator_bg}]'
         ' #I:#W #[norange default]'
     )
     return f'#{{W:{inactive},{active}}}'
