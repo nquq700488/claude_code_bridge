@@ -121,8 +121,14 @@ must not rely on independent copies of the same ChatGPT refresh token. When a
 Codex profile sets `inherit_auth=false` without an explicit agent API key, `ccb`
 must not copy global source-home credentials and must preserve any existing
 agent-local `auth.json` in the managed Codex home so operators can maintain
-one official-login auth stream per agent. The managed
-`CODEX_HOME/AGENTS.md` file is a CCB-generated memory bundle, not user data; it
+one official-login auth stream per agent. The managed home may also project auth
+sidecar files referenced by source `config.toml`, such as
+`company-codex-api-key`, `company-codex.config.toml`, or other safe
+auth/key/token filenames at the source Codex home root. These sidecars and the
+`.ccb-auth-projection.json` evidence manifest are secret, agent-local startup
+material; they are refreshed during managed-home materialization, not while a
+running Codex process is hot-swapped.
+The managed `CODEX_HOME/AGENTS.md` file is a CCB-generated memory bundle, not user data; it
 combines filtered inheritable source-home `AGENTS.md`, project shared
 `.ccb/ccb_memory.md`, and agent-private `.ccb/agents/<agent>/memory.md` when
 present. Provider-native project `AGENTS.md` is excluded from the generated
@@ -143,7 +149,8 @@ When `ccb` starts a managed Codex agent:
 - it must explicitly set the effective `CODEX_SESSION_ROOT`
 - it must ensure `CODEX_SESSION_ROOT == CODEX_HOME/sessions`
 - it must create the managed home and session root before launching Codex
-- it must materialize required Codex config and credential projections into the managed home without treating them as session identity
+- it must materialize required Codex config, credential, and credential-sidecar
+  projections into the managed home without treating them as session identity
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart

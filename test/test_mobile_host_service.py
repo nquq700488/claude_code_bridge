@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import socket
 import subprocess
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -99,6 +102,36 @@ def test_mobile_host_service_clears_stale_state_and_starts(tmp_path: Path) -> No
     assert spawned[0]['env']['CCB_MOBILE_HOST_STATE_HOME'] == str(state_dir)
     assert spawned[0]['env']['CCB_SOURCE_RUNTIME_OK'] == '1'
     assert not paths.state_path.exists()
+
+
+def test_mobile_host_health_check_tolerates_server_wide_health_latency() -> None:
+    class _SlowHealthyHandler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 - stdlib hook
+            if self.path != '/v1/health':
+                self.send_response(404)
+                self.end_headers()
+                return
+            time.sleep(0.75)
+            body = b'{"status":"ok"}'
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
+            return
+
+    server = ThreadingHTTPServer(('127.0.0.1', 0), _SlowHealthyHandler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        assert mobile_host._http_health_check(f'http://{host}:{port}')
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2.0)
 
 
 def test_mobile_host_service_returns_pairing_written_by_spawned_child(

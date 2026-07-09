@@ -433,8 +433,8 @@ def _pane_ready_for_input(content: str, provider: str) -> bool:
         return True
     text = content or ""
     legacy_ready = "── input" in text and "agent (" in text
-    k27_ready = "│ >" in text and "K2.7 Code" in text and "context:" in text
-    return legacy_ready or k27_ready
+    prompt_ready = "│ >" in text and "context:" in text
+    return legacy_ready or prompt_ready
 
 
 def _send_prompt(backend: object, pane_id: str, prompt: str) -> str | None:

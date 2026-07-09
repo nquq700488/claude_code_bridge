@@ -173,13 +173,20 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
         f'ccbd_tmux_cleanup_sockets: {ccbd.get("tmux_cleanup_sockets")}',
     ]
     for provider in requirements.get('provider_commands') or ():
-        lines.append(
+        line = (
             'requirement_provider: '
             f'name={provider.get("provider")} '
             f'executable={provider.get("executable")} '
             f'available={provider.get("available")} '
             f'path={provider.get("path")}'
         )
+        if provider.get('status') is not None:
+            line = f'{line} status={provider.get("status")}'
+        if provider.get('reason') is not None:
+            line = f'{line} reason={provider.get("reason")}'
+        if provider.get('warning') is not None:
+            line = f'{line} warning={provider.get("warning")}'
+        lines.append(line)
     for warning in runtime.get('warnings') or ():
         lines.append(f'runtime_warning: {warning}')
     for error in ccbd.get('diagnostic_errors') or ():

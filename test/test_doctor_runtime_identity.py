@@ -93,7 +93,17 @@ def test_render_doctor_includes_root_runtime_identity_lines() -> None:
             "python_version": "3.12.0",
             "tmux_available": True,
             "tmux_path": "/usr/bin/tmux",
-            "provider_commands": (),
+            "provider_commands": (
+                {
+                    "provider": "codex",
+                    "executable": "codex",
+                    "available": True,
+                    "path": "/mnt/c/Users/demo/AppData/Local/Microsoft/WindowsApps/codex.exe",
+                    "status": "degraded",
+                    "reason": "wsl_windows_interop_executable",
+                    "warning": "codex resolves to a Windows interop executable; use a Linux codex binary or CODEX_START_CMD",
+                },
+            ),
         },
         "ccbd": {
             "state": "unmounted",
@@ -140,6 +150,13 @@ def test_render_doctor_includes_root_runtime_identity_lines() -> None:
         "runtime_warning: Running CCB as root in a non-root-owned project can create root-owned .ccb files."
         in lines
     )
+    assert (
+        "requirement_provider: name=codex executable=codex available=True "
+        "path=/mnt/c/Users/demo/AppData/Local/Microsoft/WindowsApps/codex.exe "
+        "status=degraded reason=wsl_windows_interop_executable "
+        "warning=codex resolves to a Windows interop executable; use a Linux codex binary or CODEX_START_CMD"
+        in lines
+    )
 
 
 def test_entrypoint_summary_flags_temporary_bare_ccb(monkeypatch) -> None:
@@ -162,6 +179,26 @@ def test_entrypoint_summary_accepts_current_install(monkeypatch, tmp_path: Path)
     assert payload["status"] == "ok"
     assert payload["reason"] == "matches_current_install"
     assert payload["matches_current_install"] is True
+
+
+def test_requirements_summary_flags_wsl_codex_windows_interop(monkeypatch) -> None:
+    def fake_which(command: str) -> str | None:
+        if command == "tmux":
+            return "/usr/bin/tmux"
+        if command == "codex":
+            return "/mnt/c/Users/demo/AppData/Local/Microsoft/WindowsApps/codex.exe"
+        return None
+
+    monkeypatch.setattr(system, "_is_wsl_runtime", lambda: True)
+    monkeypatch.setattr(system.shutil, "which", fake_which)
+
+    payload = system.requirements_summary()
+    codex = next(item for item in payload["provider_commands"] if item["provider"] == "codex")
+
+    assert codex["available"] is True
+    assert codex["status"] == "degraded"
+    assert codex["reason"] == "wsl_windows_interop_executable"
+    assert "Linux codex binary" in codex["warning"]
 
 
 def test_ccbd_implementation_summary_flags_temporary_root(monkeypatch) -> None:

@@ -210,6 +210,9 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     _write(codex_home / 'sessions' / '2026' / 'session.jsonl')
     _write(codex_home / '.ccb-session-namespace.json', '{}\n')
     _write(codex_home / 'auth.json', '{}\n')
+    _write(codex_home / '.ccb-auth-projection.json', '{}\n')
+    _write(codex_home / 'company-codex-api-key', 'secret\n')
+    _write(codex_home / 'company-codex.config.toml', 'profile\n')
     _write(codex_home / 'config.toml', '# config\n')
     _write(codex_home / '.tmp' / 'plugins' / 'plugins' / 'demo' / 'SKILL.md')
     _write(codex_home / '.tmp' / 'plugins.sha', 'abc\n')
@@ -288,6 +291,9 @@ def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_
     assert records['agents/agent1/provider-state/codex/home/sessions/2026/session.jsonl']['storage_class'] == 'session'
     assert records['agents/agent1/provider-state/codex/home/.ccb-session-namespace.json']['storage_class'] == 'session'
     assert records['agents/agent1/provider-state/codex/home/auth.json']['storage_class'] == 'secret'
+    assert records['agents/agent1/provider-state/codex/home/.ccb-auth-projection.json']['storage_class'] == 'secret'
+    assert records['agents/agent1/provider-state/codex/home/company-codex-api-key']['storage_class'] == 'secret'
+    assert records['agents/agent1/provider-state/codex/home/company-codex.config.toml']['storage_class'] == 'secret'
     assert records['agents/agent1/provider-state/codex/home/config.toml']['storage_class'] == 'projected_config'
     if hasattr(os, 'symlink'):
         assert records['agents/agent1/provider-state/codex/home/skills']['storage_class'] == 'projected_config'

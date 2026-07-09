@@ -117,8 +117,21 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     source_home = tmp_path / 'system-codex-home'
     (source_home / 'skills').mkdir(parents=True, exist_ok=True)
     (source_home / 'commands').mkdir(parents=True, exist_ok=True)
-    (source_home / 'config.toml').write_text('model = "gpt-5"\n', encoding='utf-8')
+    (source_home / 'config.toml').write_text(
+        '\n'.join(
+            [
+                'model = "gpt-5"',
+                'env_key = "${CODEX_HOME:-$HOME/.codex}/company-codex-api-key"',
+                'token_file = "$CODEX_HOME/company-extra-token"',
+                '',
+            ]
+        ),
+        encoding='utf-8',
+    )
     (source_home / 'auth.json').write_text('{"OPENAI_API_KEY":"system-key"}', encoding='utf-8')
+    (source_home / 'company-codex-api-key').write_text('company-key\n', encoding='utf-8')
+    (source_home / 'company-codex.config.toml').write_text('profile = "company"\n', encoding='utf-8')
+    (source_home / 'company-extra-token').write_text('extra-token\n', encoding='utf-8')
     (source_home / 'skills' / 'demo.md').write_text('demo skill\n', encoding='utf-8')
     (source_home / 'commands' / 'demo.md').write_text('demo command\n', encoding='utf-8')
     _write_codex_plugin_source(source_home)
@@ -148,6 +161,38 @@ def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monke
     assert runtime_home.is_dir()
     assert (runtime_home / 'config.toml').is_file()
     assert (runtime_home / 'auth.json').is_file()
+    assert (runtime_home / 'company-codex-api-key').read_text(encoding='utf-8') == 'company-key\n'
+    assert (runtime_home / 'company-codex.config.toml').read_text(encoding='utf-8') == 'profile = "company"\n'
+    assert (runtime_home / 'company-extra-token').read_text(encoding='utf-8') == 'extra-token\n'
+    auth_manifest = json.loads((runtime_home / '.ccb-auth-projection.json').read_text(encoding='utf-8'))
+    assert auth_manifest['record_type'] == 'ccb_codex_auth_projection'
+    assert auth_manifest['status'] == 'inherited_auth'
+    assert auth_manifest['projected_sidecars'] == [
+        'company-codex-api-key',
+        'company-codex.config.toml',
+        'company-extra-token',
+    ]
+    assert any(
+        item['name'] == 'company-codex-api-key' and item['source_exists'] and item['target_exists']
+        for item in auth_manifest['files']
+    )
+    (source_home / 'company-codex-api-key').write_text('company-key-v2\n', encoding='utf-8')
+    materialize_provider_profile(
+        layout=layout,
+        spec=_spec(
+            'agent1',
+            provider_profile=ProviderProfileSpec(
+                mode='isolated',
+                inherit_api=False,
+                inherit_auth=True,
+                inherit_config=True,
+                inherit_skills=True,
+                inherit_commands=True,
+            ),
+        ),
+        workspace_path=project_root,
+    )
+    assert (runtime_home / 'company-codex-api-key').read_text(encoding='utf-8') == 'company-key-v2\n'
     assert (runtime_home / 'skills' / 'demo.md').is_file()
     assert not (runtime_home / 'skills').is_symlink()
     assert (runtime_home / 'commands' / 'demo.md').is_file()
@@ -166,6 +211,8 @@ def test_materialize_codex_profile_disables_external_migration_prompt(tmp_path: 
     project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-codex-home'
     source_home.mkdir(parents=True, exist_ok=True)
+    (source_home / 'company-codex-api-key').write_text('system-key\n', encoding='utf-8')
+    (source_home / 'company-codex.config.toml').write_text('profile = "system"\n', encoding='utf-8')
     (source_home / 'config.toml').write_text(
         '\n'.join(
             [
@@ -1363,6 +1410,11 @@ def test_materialize_codex_profile_writes_agent_local_provider_config_for_explic
     assert codex_provider_authority_fingerprint(profile)
     auth_payload = json.loads((runtime_home / 'auth.json').read_text(encoding='utf-8'))
     assert auth_payload == {'OPENAI_API_KEY': 'profile-key'}
+    assert not (runtime_home / 'company-codex-api-key').exists()
+    assert not (runtime_home / 'company-codex.config.toml').exists()
+    auth_manifest = json.loads((runtime_home / '.ccb-auth-projection.json').read_text(encoding='utf-8'))
+    assert auth_manifest['status'] == 'explicit_api_authority'
+    assert auth_manifest['projected_sidecars'] == []
     assert (runtime_home / '.tmp' / 'plugins.sha').read_text(encoding='utf-8') == 'plugins-sha-v1\n'
     assert (runtime_home / '.tmp' / 'plugins' / '.agents' / 'plugins' / 'marketplace.json').is_file()
     assert (runtime_home / '.tmp' / 'plugins' / 'plugins' / 'weatherpromise' / 'skills' / 'weatherpromise' / 'SKILL.md').read_text(encoding='utf-8') == 'plugin skill explicit\n'

@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+## v8.0.19 (2026-07-07)
+
+### Mobile Host Startup
+
+- **Mobile Host Health Window Extended**: `ccb update mobile` now gives
+  the server-wide loopback health endpoint a longer per-request and overall
+  startup window before declaring the mobile host unhealthy. This prevents
+  false failures when many mounted projects make `/v1/health` take longer than
+  the previous 0.5 second request timeout.
+- **Mobile Host Health Regression Covered**: tests now cover a healthy
+  mobile host whose health response arrives after the old too-short timeout.
+- **Release Surface Synchronized**: VERSION, package.json, mobile app version
+  metadata, update links, README variants, and release workflow defaults are
+  aligned for 8.0.19.
+
+## v8.0.18 (2026-07-07)
+
+### Codex Auth Projection And Mobile Host Health
+
+- **Codex Auth Sidecars Projected Safely**: managed `CODEX_HOME`
+  materialization now mirrors `auth.json`, `config.toml`,
+  `company-codex-api-key`, `company-codex.config.toml`, and safe
+  auth/key/token sidecar filenames referenced by `config.toml`.
+- **Auth Projection Manifest Added**: managed homes write
+  `.ccb-auth-projection.json` with source/target existence, size, and SHA256
+  metadata only, without storing credential plaintext.
+- **API Authority Isolation Preserved**: explicit Codex API authority removes
+  inherited auth sidecars so global login state and agent-local API config do
+  not mix.
+- **WSL Codex Doctor Improved**: `ccb doctor` marks Codex binaries resolved to
+  Windows interop executables with `reason=wsl_windows_interop_executable`.
+- **Mobile Host Health Hardened**: server-wide mobile project discovery now
+  tolerates stale project records instead of failing the whole list.
+- **README Contact Polish Added**: the public Role list is folded and the
+  contact WeChat image has been refreshed.
+- **Release Surface Synchronized**: VERSION, package.json, mobile app version
+  metadata, update links, README variants, and release workflow defaults are
+  aligned for 8.0.18.
+
 ## v8.0.17 (2026-07-07)
 
 ### Ask Stability And Mobile Update

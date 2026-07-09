@@ -104,14 +104,14 @@ def requirements_summary() -> dict[str, object]:
     for provider in tuple(CORE_PROVIDER_NAMES + OPTIONAL_PROVIDER_NAMES):
         executable = provider_executable(provider)
         command_path = shutil.which(executable)
-        providers.append(
-            {
-                'provider': provider,
-                'executable': executable,
-                'available': command_path is not None,
-                'path': command_path,
-            }
-        )
+        provider_payload = {
+            'provider': provider,
+            'executable': executable,
+            'available': command_path is not None,
+            'path': command_path,
+        }
+        provider_payload.update(_provider_command_diagnostic(provider, command_path))
+        providers.append(provider_payload)
     return {
         'python_executable': sys.executable,
         'python_version': platform.python_version(),
@@ -123,6 +123,41 @@ def requirements_summary() -> dict[str, object]:
 
 def _script_root() -> Path:
     return Path(__file__).resolve().parents[4]
+
+
+def _provider_command_diagnostic(provider: str, command_path: str | None) -> dict[str, object]:
+    if str(provider or '').strip().lower() != 'codex':
+        return {}
+    if not command_path or not _is_wsl_runtime():
+        return {}
+    if not _looks_like_windows_interop_executable(command_path):
+        return {}
+    return {
+        'status': 'degraded',
+        'reason': 'wsl_windows_interop_executable',
+        'warning': 'codex resolves to a Windows interop executable; use a Linux codex binary or CODEX_START_CMD',
+    }
+
+
+def _is_wsl_runtime() -> bool:
+    if os.environ.get('WSL_DISTRO_NAME') or os.environ.get('WSL_INTEROP'):
+        return True
+    try:
+        text = Path('/proc/version').read_text(encoding='utf-8', errors='ignore').lower()
+    except Exception:
+        return False
+    return 'microsoft' in text or 'wsl' in text
+
+
+def _looks_like_windows_interop_executable(path: str | os.PathLike[str]) -> bool:
+    text = str(path or '').strip().replace('\\', '/')
+    lowered = text.lower()
+    return (
+        lowered.endswith('.exe')
+        or '/windowsapps/' in lowered
+        or lowered.startswith('/mnt/c/')
+        or (len(lowered) > 2 and lowered[1:3] == ':/')
+    )
 
 
 def _resolved_path(path: str | os.PathLike[str] | None) -> Path | None:

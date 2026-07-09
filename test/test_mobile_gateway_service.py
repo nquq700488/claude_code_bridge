@@ -622,6 +622,76 @@ def test_projects_payload_omits_unreachable_registry_projects() -> None:
     assert stale.calls == [('ping', 'ccbd')]
 
 
+def test_server_registry_health_ignores_stale_default_when_project_is_available() -> None:
+    stale = _FailingCcbdClient()
+    healthy = _FakeCcbdClient(
+        project_id='proj-one',
+        project_root='/srv/one',
+        display_name='one',
+    )
+    service = MobileGatewayService(
+        project_id='host-test',
+        project_root=Path('/tmp/mobile-host'),
+        ccbd_client_factory=lambda: stale,
+        project_registry=MobileGatewayProjectRegistry(
+            [
+                MobileGatewayProject(
+                    project_id='proj-stale',
+                    project_root=Path('/srv/stale'),
+                    display_name='stale',
+                    ccbd_client_factory=lambda: stale,
+                ),
+                MobileGatewayProject(
+                    project_id='proj-one',
+                    project_root=Path('/srv/one'),
+                    display_name='one',
+                    ccbd_client_factory=lambda: healthy,
+                ),
+            ]
+        ),
+        mode='loopback_server_registry',
+        clock=lambda: '2026-06-18T00:00:00Z',
+    )
+
+    health = service.health_payload()
+
+    assert health['status'] == 'ok'
+    assert health['ccbd']['reachable'] is True
+    assert health['ccbd']['project_count'] == 2
+    assert health['ccbd']['available_project_count'] == 1
+    assert health['ccbd']['available_project_ids'] == ['proj-one']
+    assert stale.calls == [('ping', 'ccbd')]
+    assert healthy.calls == [('ping', 'ccbd')]
+
+
+def test_server_registry_health_degrades_when_no_project_is_available() -> None:
+    stale = _FailingCcbdClient()
+    service = MobileGatewayService(
+        project_id='host-test',
+        project_root=Path('/tmp/mobile-host'),
+        ccbd_client_factory=lambda: stale,
+        project_registry=MobileGatewayProjectRegistry(
+            [
+                MobileGatewayProject(
+                    project_id='proj-stale',
+                    project_root=Path('/srv/stale'),
+                    display_name='stale',
+                    ccbd_client_factory=lambda: stale,
+                ),
+            ]
+        ),
+        mode='loopback_server_registry',
+        clock=lambda: '2026-06-18T00:00:00Z',
+    )
+
+    health = service.health_payload()
+
+    assert health['status'] == 'degraded'
+    assert health['ccbd']['reachable'] is False
+    assert health['ccbd']['project_count'] == 1
+    assert health['ccbd']['available_project_count'] == 0
+
+
 def test_projects_payload_omits_registered_projects_that_are_not_mounted_and_healthy() -> None:
     healthy = _FakeCcbdClient(
         project_id='proj-one',

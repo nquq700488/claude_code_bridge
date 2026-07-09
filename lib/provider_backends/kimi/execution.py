@@ -567,8 +567,8 @@ def _pane_snapshot(backend: object, pane_id: str, *, lines: int) -> str:
 def _pane_ready_for_input(content: str) -> bool:
     text = content or ""
     legacy_ready = "── input" in text and "agent (" in text
-    k27_ready = "│ >" in text and "K2.7 Code" in text and "context:" in text
-    return legacy_ready or k27_ready
+    prompt_ready = "│ >" in text and "context:" in text
+    return legacy_ready or prompt_ready
 
 
 def _observe_kimi_pane_turn(backend: object, pane_id: str, req_id: str) -> KimiTurnObservation | None:
@@ -662,7 +662,7 @@ def _looks_like_kimi_input_box_line(stripped: str) -> bool:
         return True
     if stripped.startswith("│ >"):
         return True
-    return "K2.7 Code" in stripped and "context:" in stripped
+    return "context:" in stripped
 
 
 def _looks_like_kimi_non_answer(text: str) -> bool:

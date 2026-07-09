@@ -164,6 +164,25 @@ def test_pane_quiet_poll_sends_deferred_kimi_prompt_with_k27_input_box() -> None
     assert result.submission.runtime_state["prompt_deferred_until_ready"] is False
 
 
+def test_pane_quiet_poll_sends_deferred_kimi_prompt_with_v0231_input_box() -> None:
+    text = (
+        "Welcome to Kimi Code!\n"
+        "╭────────────────────────────────────────────────────────╮\n"
+        "│ >                                                      │\n"
+        "╰────────────────────────────────────────────────────────╯\n"
+        "yolo  Kimi Code thinking  /tmp/project  context: 0.1% (1/262.1k)\n"
+    )
+    result = poll_submission(_submission(text, prompt_sent=False), now="2026-06-13T00:00:03Z")
+
+    assert result is not None
+    assert result.decision is None
+    backend = result.submission.runtime_state["backend"]
+    assert isinstance(backend, _Backend)
+    assert backend.sent_texts == ["pending prompt"]
+    assert result.submission.runtime_state["prompt_sent"] is True
+    assert result.submission.runtime_state["prompt_deferred_until_ready"] is False
+
+
 def test_pane_quiet_poll_reports_kimi_input_not_ready_timeout() -> None:
     result = poll_submission(_submission("Kimi is booting\n", prompt_sent=False), now="2026-06-13T00:02:00Z")
 

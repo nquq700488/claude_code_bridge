@@ -31,7 +31,8 @@ MOBILE_HOST_LOCK_WAIT_TIMEOUT_S = 10.0
 MOBILE_HOST_LOCK_RETRY_INTERVAL_S = 0.05
 MOBILE_HOST_STOP_TIMEOUT_S = 2.0
 MOBILE_HOST_PORT_RELEASE_TIMEOUT_S = 3.0
-MOBILE_HOST_HEALTH_TIMEOUT_S = 5.0
+MOBILE_HOST_HEALTH_TIMEOUT_S = 10.0
+MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S = 2.0
 
 
 class MobileHostServiceError(RuntimeError):
@@ -544,7 +545,7 @@ def _mobile_host_log_tail(path: Path, *, max_chars: int = 1200) -> str:
 
 def _http_health_check(local_gateway_url: str) -> bool:
     try:
-        with urlopen(f'{local_gateway_url}/v1/health', timeout=0.5) as response:
+        with urlopen(f'{local_gateway_url}/v1/health', timeout=MOBILE_HOST_HEALTH_REQUEST_TIMEOUT_S) as response:
             return 200 <= int(response.status) < 300
     except (OSError, URLError):
         return False

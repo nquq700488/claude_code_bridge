@@ -222,6 +222,8 @@ Examples:
   environment variables or other auth-adjacent launch material even though the
   file also contains managed workspace trust authority
 - Codex `auth.json`
+- Codex auth sidecars such as `company-codex-api-key`,
+  `company-codex.config.toml`, and `.ccb-auth-projection.json`
 - Claude `.claude/.credentials.json`
 - Claude `.config/claude-code/auth.json`
 - Gemini `.gemini/oauth_creds.json`
@@ -567,6 +569,9 @@ Must remain agent-isolated:
 Must remain secret and agent-local:
 
 - `auth.json`
+- auth sidecars copied from the source Codex home, including
+  `company-codex-api-key`, `company-codex.config.toml`, and the
+  `.ccb-auth-projection.json` evidence manifest
 
 May route through projected assets or shared-cache:
 

@@ -44,3 +44,4 @@ GEMINI.md
 openspec
 *.log
 .hippocampus
+.DS_Store

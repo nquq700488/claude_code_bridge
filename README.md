@@ -6,7 +6,7 @@
 **可见、可控的多 Agent 交互 TUI 工作台**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.0.17-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.0.19-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -169,9 +169,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.0.17 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.0.19 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.0.17 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.0.17/ccb-mobile-v8.0.17.apk)
+- [下载 CCB Mobile v8.0.19 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.0.19/ccb-mobile-v8.0.19.apk)
 - App 源码：[`mobile/app`](mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -208,6 +208,9 @@ rich 启用后，普通 `ccb` 会自动打开 rich WezTerm launcher，只有当�
 
 CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：这是一个 host-neutral 的专业 agent 封装规范，可把 skills、记忆和工具依赖打包成可安装、可挂载、可卸载的 Role Pack。该仓库同时也是公开角色库。
 
+<details>
+<summary><b>查看公开角色列表</b></summary>
+
 | Role | 基本功能 |
 | :--- | :--- |
 | `agentroles.ccb_self` | CCB 自维护、配置辅助、运行诊断、受保护恢复和工作流编排。 |
@@ -216,6 +219,8 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 | `agentroles.mobile_app_engineer` | iOS、Android、React Native、Expo、Flutter、SwiftUI、Jetpack Compose 等移动端设计与实现。 |
 | `agentroles.mother` | Role 创建、Role source 审计、角色研究、蓝图设计和 Agent Roles 规范合规检查。 |
 | `agentroles.su_ccb` | SU-CCB 工作流操作，覆盖需求分析、计划、派发、审查 gate、归档和恢复。 |
+
+</details>
 
 <a id="config-memory"></a>
 
@@ -250,6 +255,28 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.0.19</b> - Mobile host 启动健康检查修复</summary>
+
+- `ccb update mobile` 对 server-wide loopback `/v1/health` 使用更宽松的单次请求超时和总启动等待窗口，避免挂载项目较多时误判后台 gateway 不健康。
+- 新增 regression test 覆盖健康响应晚于旧 0.5 秒请求超时时仍应启动成功。
+- `ccb update mobile` 默认 APK 下载链接、README、package metadata 和 mobile app version metadata 对齐到 8.0.19。
+
+</details>
+
+<details>
+<summary><b>v8.0.18</b> - Codex auth 投影与 Mobile host health 修复</summary>
+
+- Codex managed `CODEX_HOME` materialize 阶段会同步 `auth.json`、`config.toml`、`company-codex-api-key`、`company-codex.config.toml`，以及 `config.toml` 中引用到的安全 auth/key/token sidecar 文件名。
+- 新增 `.ccb-auth-projection.json` 证据 manifest，只记录来源/目标存在性、大小和 SHA256，不保存密钥明文。
+- 显式 Codex API authority 会清理继承来的 auth sidecar，避免全局登录态和 agent-local API 配置混用。
+- WSL 下 Codex 解析到 Windows interop 可执行文件时，`ccb doctor` 会标记 `reason=wsl_windows_interop_executable`。
+- server-wide mobile 项目发现会容忍 stale project 记录，避免单个失效项目拖垮整体列表。
+- README 角色列表改为折叠显示，并更新联系方式中的微信图片。
+- `ccb update mobile` 默认 APK 下载链接、README、package metadata 和 mobile app version metadata 对齐到 8.0.18。
+
+</details>
+
+<details>
 <summary><b>v8.0.17</b> - Ask 回复稳定性与 Mobile 更新修复</summary>
 
 - Codex ask 回复检测改为基于无进展时间，长 session 文件持续写入时不会按提交时间误失败。

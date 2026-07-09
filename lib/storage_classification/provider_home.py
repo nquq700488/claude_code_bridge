@@ -6,9 +6,12 @@ from .models import StorageClass, StorageEntry
 
 
 _SECRET_FILENAMES = {
+    '.ccb-auth-projection.json',
     '.credentials.json',
     '.env',
     'auth.json',
+    'company-codex-api-key',
+    'company-codex.config.toml',
     'google_accounts.json',
     'oauth_creds.json',
 }

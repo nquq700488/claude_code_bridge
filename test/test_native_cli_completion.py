@@ -186,6 +186,44 @@ def test_kimi_poll_uses_k27_pane_fallback_when_wire_log_missing(tmp_path: Path) 
     assert [item.kind for item in stable.items] == [CompletionItemKind.TURN_BOUNDARY]
 
 
+def test_kimi_poll_uses_v0231_pane_fallback_without_k27_brand(tmp_path: Path) -> None:
+    work_dir = tmp_path / "project"
+    work_dir.mkdir()
+    pane_text = (
+        "Welcome to Kimi Code!\n"
+        "Model: Doubao Coder Plus\n"
+        "✨ CCB_REQ_ID: job_native123\n"
+        "   Please answer one line.\n"
+        " ● The user wants a one-line response. I should reply exactly that.\n"
+        " ● KIMI_READY_OK after_reload\n"
+        "╭────────────────────────────────────────────────────────╮\n"
+        "│ >                                                      │\n"
+        "╰────────────────────────────────────────────────────────╯\n"
+        "yolo  Kimi Code thinking  /tmp/project  context: 0.1% (1/262.1k)\n"
+    )
+
+    first = KimiProviderAdapter().poll(
+        _submission(
+            provider="kimi",
+            source_kind=CompletionSourceKind.SESSION_EVENT_LOG,
+            work_dir=work_dir,
+            pane_text=pane_text,
+        ),
+        now="2026-06-13T00:00:05Z",
+    )
+
+    assert first is not None
+    assert first.decision is None
+    assert first.submission.reply == "KIMI_READY_OK after_reload"
+    assert first.submission.runtime_state["pane_fallback_observed"] is True
+
+    stable = KimiProviderAdapter().poll(first.submission, now="2026-06-13T00:00:16Z")
+
+    assert stable is not None
+    assert stable.decision is None
+    assert stable.submission.reply == "KIMI_READY_OK after_reload"
+
+
 def test_kimi_pane_fallback_does_not_complete_on_tool_progress(tmp_path: Path) -> None:
     work_dir = tmp_path / "project"
     work_dir.mkdir()

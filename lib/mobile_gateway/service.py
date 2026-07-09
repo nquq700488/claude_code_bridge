@@ -171,6 +171,8 @@ class MobileGatewayService:
         return self._project_id
 
     def health_payload(self) -> dict[str, object]:
+        if self._mode == 'loopback_server_registry':
+            return self._server_registry_health_payload()
         try:
             ccbd = self._client().ping('ccbd')
         except Exception as exc:
@@ -194,6 +196,30 @@ class MobileGatewayService:
             'project_id': self._project_id,
             'capabilities': self._capabilities(),
             'ccbd': _ccbd_health_summary(ccbd),
+        }
+
+    def _server_registry_health_payload(self) -> dict[str, object]:
+        registry_projects = self._project_registry.projects()
+        health_by_project = self._project_list_health_by_project(registry_projects)
+        available = [
+            project_id
+            for project_id, health in health_by_project.items()
+            if _project_available_for_mobile_list(health)
+        ]
+        status = 'ok' if available else 'degraded'
+        return {
+            'schema_version': _SCHEMA_VERSION,
+            'status': status,
+            'server_time': self._clock(),
+            'mode': self._mode,
+            'project_id': self._project_id,
+            'capabilities': self._capabilities(),
+            'ccbd': {
+                'reachable': bool(available),
+                'project_count': len(registry_projects),
+                'available_project_count': len(available),
+                'available_project_ids': available[:10],
+            },
         }
 
     def projects_payload(self) -> dict[str, object]:
