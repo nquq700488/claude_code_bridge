@@ -113,9 +113,11 @@ _THEME_PROFILES: dict[str, TmuxThemeProfile] = {
 
 _CONTRAST_TERMINAL_FAMILIES = {'apple_terminal'}
 
+# Window tabs are rendered inline via #{W:...} in _status_format_0(),
+# so these session-option fallbacks stay empty — they are superseded.
 _WINDOW_STATUS_FORMAT = ''
 _WINDOW_STATUS_CURRENT_FORMAT = ''
-_WINDOW_STATUS_SEPARATOR = ''
+_WINDOW_STATUS_SEPARATOR = ' '
 _PANE_BORDER_STATUS = 'top'
 _PANE_BORDER_LINES = 'heavy'
 
@@ -387,10 +389,34 @@ def _status_style(palette: TmuxStatusPalette) -> str:
     return f'bg={palette.background} fg={palette.foreground}'
 
 
+def _window_tabs(palette: TmuxStatusPalette) -> str:
+    """Render the tmux window list for the status bar centre segment.
+
+    Each tab is wrapped in a ``range=window|<index>`` region so a mouse click
+    on the label switches to that window (via the default
+    ``MouseDown1Status switch-client -t =`` binding). The active window is
+    highlighted with the indicator background; inactive windows use the
+    muted foreground. The inline ``#{W:inactive,active}`` construct uses the
+    first comma outside any ``#[...]`` block as the separator between the two
+    formats — commas inside ``#[...]`` attribute blocks are safely contained.
+    """
+    inactive = (
+        f'#[range=window|#{{window_index}} '
+        f'fg={palette.foreground},bg={palette.background}]'
+        ' #I:#W #[norange default]'
+    )
+    active = (
+        f'#[range=window|#{{window_index}} '
+        f'fg={palette.segment_fg},bg={palette.indicator_bg},bold]'
+        ' #I:#W #[norange default]'
+    )
+    return f'#{{W:{inactive},{active}}}'
+
+
 def _status_format_0(palette: TmuxStatusPalette) -> str:
     return (
         f'#[align=left,bg={palette.background}]#{{T:status-left}}'
-        f'#[align=centre,fg={palette.muted}]#{{b:pane_current_path}}'
+        f'#[align=centre]{_window_tabs(palette)}'
         '#[align=right]#{T:status-right}'
     )
 
