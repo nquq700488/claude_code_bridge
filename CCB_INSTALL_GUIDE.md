@@ -259,11 +259,7 @@ ccb update
 # - 不依赖原始 git checkout
 ```
 
-也可以通过 npm 全局安装（v7.4.4+）：
-
-```bash
-npm install -g @seemseam/ccb
-```
+> **本 fork 说明**：本 fork 不发布 npm 包，全新安装请使用上方「方式一：Git Clone 全新安装」（源码安装）。
 
 ---
 
