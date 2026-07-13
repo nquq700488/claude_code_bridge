@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from provider_backends.codex.bridge_runtime.service import DualBridge
+from provider_backends.codex.launcher_runtime.runtime_state import prepare_runtime
 
 
 class _FakeTracker:
@@ -38,11 +40,27 @@ def test_dual_bridge_processes_request_and_records_history(tmp_path: Path, monke
         'provider_backends.codex.bridge_runtime.runtime_state.TerminalCodexSession',
         lambda pane_id: session,
     )
-    bridge = DualBridge(tmp_path / 'runtime')
-    bridge.input_fifo.write_text(json.dumps({'content': 'hello', 'marker': 'mk-1'}) + '\n', encoding='utf-8')
+    runtime_dir = tmp_path / 'runtime'
+    prepare_runtime(runtime_dir)
+    bridge = DualBridge(runtime_dir)
+    writer_errors: list[BaseException] = []
 
-    payload = bridge._read_request()
+    def write_request() -> None:
+        try:
+            bridge._runtime.fifo_reader.send_line(
+                json.dumps({'content': 'hello', 'marker': 'mk-1'})
+            )
+        except BaseException as exc:
+            writer_errors.append(exc)
 
+    writer = threading.Thread(target=write_request)
+    writer.start()
+
+    payload = bridge._read_request(timeout=2.0)
+    writer.join(timeout=2.0)
+
+    assert not writer.is_alive()
+    assert writer_errors == []
     assert payload == {'content': 'hello', 'marker': 'mk-1'}
     bridge._process_request(payload)
     assert session.sent == ['hello']

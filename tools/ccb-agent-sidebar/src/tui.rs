@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::env;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use crossterm::event::{
@@ -39,7 +39,7 @@ const DEFAULT_TREE_HEIGHT_PERCENT: u16 = 50;
 const DEFAULT_COMMS_HEIGHT_PERCENT: u16 = 15;
 const DEFAULT_TIPS_HEIGHT_PERCENT: u16 = 35;
 const TREE_CONTROL_CONTENT_WIDTH: u16 = 3;
-const TREE_REFRESH_SYMBOL: &str = "↻";
+const TREE_SETTINGS_SYMBOL: &str = "⚙";
 const TREE_KILL_SYMBOL: &str = "×";
 const COMMS_ACTION_RETRY_COLS: std::ops::RangeInclusive<u16> = 0..=1;
 const COMMS_ACTION_CANCEL_COLS: std::ops::RangeInclusive<u16> = 3..=4;
@@ -67,6 +67,7 @@ fn run_tui(args: &Args) -> io::Result<ExitAction> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
     let client = CcbdClient::new(args.ccbd_socket.clone());
+    let ccb_program = ccb_program();
     let mut app = SidebarApp::with_theme(
         args.pane_window.clone(),
         SidebarTheme::from_profile(&args.theme),
@@ -103,9 +104,14 @@ fn run_tui(args: &Args) -> io::Result<ExitAction> {
                     let area = Rect::new(0, 0, size.width, size.height);
                     match mouse.kind {
                         MouseEventKind::Down(MouseButton::Left) => {
-                            if let Some(action) =
-                                app.handle_mouse_down(mouse.column, mouse.row, area, &client)
-                            {
+                            if let Some(action) = app.handle_mouse_down(
+                                mouse.column,
+                                mouse.row,
+                                area,
+                                &client,
+                                &args.project_root,
+                                &ccb_program,
+                            ) {
                                 return Ok(action);
                             }
                         }
@@ -164,6 +170,26 @@ fn ccb_program() -> PathBuf {
         .ok()
         .and_then(|path| ccb_sibling_for_sidebar(&path))
         .unwrap_or_else(|| PathBuf::from("ccb"))
+}
+
+fn launch_config_ui(project_root: &Path, program: &Path) -> io::Result<()> {
+    config_ui_command(project_root, program)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
+fn config_ui_command(project_root: &Path, program: &Path) -> Command {
+    let mut command = Command::new(program);
+    command
+        .arg("--project")
+        .arg(project_root)
+        .arg("config")
+        .arg("ui")
+        .current_dir(project_root);
+    command
 }
 
 fn ccb_sibling_for_sidebar(sidebar_exe: &Path) -> Option<PathBuf> {
@@ -315,11 +341,15 @@ impl SidebarApp {
         row: u16,
         area: Rect,
         client: &CcbdClient,
+        project_root: &Path,
+        ccb_program: &Path,
     ) -> Option<ExitAction> {
         let areas = self.sidebar_areas(area);
         match header_action_at(column, row, areas.tree) {
-            Some(HeaderMouseAction::Refresh) => {
-                self.restart_panes(client);
+            Some(HeaderMouseAction::Settings) => {
+                if let Err(err) = launch_config_ui(project_root, ccb_program) {
+                    self.set_error(format!("config ui launch failed: {err}"));
+                }
                 return None;
             }
             Some(HeaderMouseAction::KillProject) => return Some(ExitAction::KillProject),
@@ -1031,7 +1061,7 @@ enum CommsMouseAction {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum HeaderMouseAction {
-    Refresh,
+    Settings,
     KillProject,
 }
 
@@ -1045,7 +1075,7 @@ fn header_action_at(column: u16, row: u16, area: Rect) -> Option<HeaderMouseActi
     }
     let relative_column = column.saturating_sub(controls.x);
     if relative_column == 0 {
-        Some(HeaderMouseAction::Refresh)
+        Some(HeaderMouseAction::Settings)
     } else if relative_column == 2 {
         Some(HeaderMouseAction::KillProject)
     } else {
@@ -1213,10 +1243,8 @@ fn tree_title_width(width: u16) -> u16 {
 fn tree_controls_line(theme: SidebarTheme) -> Line<'static> {
     Line::from(vec![
         Span::styled(
-            TREE_REFRESH_SYMBOL,
-            Style::default()
-                .fg(theme.success)
-                .add_modifier(Modifier::BOLD),
+            TREE_SETTINGS_SYMBOL,
+            Style::default().fg(theme.info).add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
@@ -1981,7 +2009,7 @@ mod tests {
         let rendered = terminal.backend().to_string();
         assert!(!rendered.contains("repo · main"));
         assert!(rendered.contains("> main"));
-        assert!(rendered.contains("↻ ×"));
+        assert!(rendered.contains("⚙ ×"));
         assert!(!rendered.contains("@1"));
         assert!(rendered.contains("◐* agent1 [codex]"));
         assert!(!rendered.contains("#job1"));
@@ -1992,8 +2020,8 @@ mod tests {
         assert_eq!(buffer[(0, 0)].fg, Color::DarkGray);
         let controls = tree_controls_area(Rect::new(0, 0, 80, 14));
         assert_eq!(controls, Rect::new(76, 0, 3, 1));
-        assert_eq!(buffer[(controls.x, 0)].symbol(), "↻");
-        assert_eq!(buffer[(controls.x, 0)].fg, Color::Green);
+        assert_eq!(buffer[(controls.x, 0)].symbol(), "⚙");
+        assert_eq!(buffer[(controls.x, 0)].fg, Color::Blue);
         assert_eq!(buffer[(controls.x + 2, 0)].symbol(), "×");
         assert_eq!(buffer[(controls.x + 2, 0)].fg, Color::Red);
         let symbol_cell = buffer
@@ -2065,7 +2093,7 @@ mod tests {
             .map(|span| span.content.as_ref())
             .collect::<String>();
 
-        assert_eq!(text, "↻ ×");
+        assert_eq!(text, "⚙ ×");
         assert_eq!(
             tree_controls_area(Rect::new(0, 0, 23, 24)),
             Rect::new(19, 0, 3, 1)
@@ -2085,7 +2113,7 @@ mod tests {
         let action_spans = comms_action_spans(&item, theme);
 
         assert_eq!(tree_focus_style(&app).fg, Some(Color::Rgb(108, 111, 133)));
-        assert_eq!(controls.spans[0].style.fg, Some(Color::Rgb(64, 160, 43)));
+        assert_eq!(controls.spans[0].style.fg, Some(Color::Rgb(30, 102, 245)));
         assert_eq!(controls.spans[2].style.fg, Some(Color::Rgb(210, 15, 57)));
         assert_eq!(action_spans[0].style.fg, Some(Color::Rgb(223, 142, 29)));
         assert_eq!(
@@ -2112,6 +2140,19 @@ mod tests {
         assert_eq!(ccb_sibling_for_sidebar(&sidebar), Some(ccb));
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn config_ui_command_is_project_scoped() {
+        let project_root = Path::new("/repo/demo");
+        let command = config_ui_command(project_root, Path::new("/opt/ccb/bin/ccb"));
+
+        assert_eq!(command.get_program(), "/opt/ccb/bin/ccb");
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            ["--project", "/repo/demo", "config", "ui"]
+        );
+        assert_eq!(command.get_current_dir(), Some(project_root));
     }
 
     #[cfg(unix)]
@@ -2557,43 +2598,58 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn header_buttons_are_right_aligned_and_kill_project() {
-        let seen = Arc::new(Mutex::new(Vec::new()));
-        let (socket_path, handle) = spawn_restart_server(Arc::clone(&seen));
-        let client = CcbdClient::new(socket_path);
+        let client = CcbdClient::new("/tmp/ccb-sidebar-unused.sock");
         let mut app = SidebarApp::new("main".into());
         app.apply_response(sample_response());
         let area = Rect::new(0, 0, 24, 20);
         let controls = tree_controls_area(sidebar_areas(area, app.sidebar_view()).tree);
+        let project_root = Path::new("/tmp");
+        let ccb_program = Path::new("/bin/true");
 
         assert_eq!(controls, Rect::new(20, 0, 3, 1));
-        assert_eq!(app.handle_mouse_down(1, 0, area, &client), None);
-        assert_eq!(app.handle_mouse_down(controls.x, 0, area, &client), None);
-        handle.join().unwrap();
-
-        assert_eq!(seen.lock().unwrap().as_slice(), ["project_restart_panes"]);
-        assert!(app.last_error.is_none());
-        assert!(app.needs_refresh());
         assert_eq!(
-            app.handle_mouse_down(controls.x + 2, 0, area, &client),
+            app.handle_mouse_down(1, 0, area, &client, project_root, ccb_program),
+            None
+        );
+        assert_eq!(
+            app.handle_mouse_down(controls.x, 0, area, &client, project_root, ccb_program,),
+            None
+        );
+
+        assert!(app.last_error.is_none());
+        assert!(!app.needs_refresh());
+        assert_eq!(
+            app.handle_mouse_down(controls.x + 2, 0, area, &client, project_root, ccb_program,),
             Some(ExitAction::KillProject)
         );
     }
 
     #[cfg(unix)]
     #[test]
-    fn header_restart_rejection_still_refreshes_with_error() {
-        let (socket_path, handle) = spawn_error_server("project_restart_panes", "restart rejected");
-        let client = CcbdClient::new(socket_path);
+    fn header_settings_launch_failure_is_visible() {
+        let client = CcbdClient::new("/tmp/ccb-sidebar-unused.sock");
         let mut app = SidebarApp::new("main".into());
         app.apply_response(sample_response());
         let area = Rect::new(0, 0, 24, 20);
         let controls = tree_controls_area(sidebar_areas(area, app.sidebar_view()).tree);
 
-        assert_eq!(app.handle_mouse_down(controls.x, 0, area, &client), None);
-        handle.join().unwrap();
+        assert_eq!(
+            app.handle_mouse_down(
+                controls.x,
+                0,
+                area,
+                &client,
+                Path::new("/tmp"),
+                Path::new("/definitely/missing/ccb"),
+            ),
+            None
+        );
 
-        assert_eq!(app.last_error.as_deref(), Some("restart rejected"));
-        assert!(app.needs_refresh());
+        assert!(
+            app.last_error
+                .as_deref()
+                .is_some_and(|error| error.starts_with("config ui launch failed:"))
+        );
     }
 
     #[test]
@@ -3369,43 +3425,6 @@ mod tests {
                     )
                     .as_bytes(),
                 )
-                .unwrap();
-            let _ = std::fs::remove_file(path_for_thread);
-            let _ = std::fs::remove_dir(dir);
-        });
-        (socket_path, handle)
-    }
-
-    #[cfg(unix)]
-    fn spawn_restart_server(
-        seen: Arc<Mutex<Vec<String>>>,
-    ) -> (std::path::PathBuf, thread::JoinHandle<()>) {
-        let dir = std::env::temp_dir().join(format!(
-            "ccb-agent-sidebar-restart-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let socket_path = dir.join("ccbd.sock");
-        let listener = UnixListener::bind(&socket_path).unwrap();
-        let path_for_thread = socket_path.clone();
-        let handle = thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let mut line = String::new();
-            {
-                let mut reader = BufReader::new(&stream);
-                reader.read_line(&mut line).unwrap();
-            }
-            let request: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
-            assert_eq!(request["op"], "project_restart_panes");
-            assert_eq!(request["request"], json!({}));
-            seen.lock().unwrap().push("project_restart_panes".into());
-            let response = json!({"api_version": 2, "ok": true, "status": "scheduled"});
-            stream
-                .write_all(format!("{response}\n").as_bytes())
                 .unwrap();
             let _ = std::fs::remove_file(path_for_thread);
             let _ = std::fs::remove_dir(dir);

@@ -138,7 +138,6 @@ void main() {
               executionStatus: agentExecutionStatus(
                 agent: agent,
                 isAwaitingAgentResponse: true,
-                isLoadingConversation: true,
               ),
               workingReplyItemId: workingPlaceholder.id,
             ),
@@ -276,7 +275,7 @@ void main() {
         findsOneWidget,
       );
       expect(
-        find.byKey(ValueKey('conversation-working-glow-$placeholderId')),
+        find.byKey(ValueKey('conversation-working-beat-$placeholderId')),
         findsOneWidget,
       );
       expect(
@@ -436,7 +435,7 @@ void main() {
     expect(find.text('Working'), findsOneWidget);
   });
 
-  testWidgets('refresh keeps pending interrupted codex status working', (
+  testWidgets('refresh prioritizes interrupted codex status over working', (
     tester,
   ) async {
     await tester.pumpWidget(
@@ -458,8 +457,7 @@ void main() {
     await tester.pump(const Duration(milliseconds: 100));
 
     expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
-    expect(find.text('Working'), findsOneWidget);
-    expect(find.text('Exception'), findsNothing);
+    expect(find.text('Working'), findsNothing);
   });
 
   testWidgets('message composer shows attachment tray and picker sheet', (
@@ -938,10 +936,10 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byType(TerminalView), findsOneWidget);
-    expect(find.text('demo / lead'), findsNWidgets(2));
+    expect(find.text('demo / lead'), findsOneWidget);
     expect(
       find.text('tmux -S /tmp/ccb-demo/tmux.sock attach-session -t ccb-demo'),
-      findsOneWidget,
+      findsNothing,
     );
   });
 
@@ -1548,25 +1546,26 @@ void main() {
     },
   );
 
-  testWidgets('opened agent with pane conversation skips terminal fallback', (
-    tester,
-  ) async {
-    final repository = PaneConversationRepository();
-    await tester.pumpWidget(
-      MaterialApp(home: ProjectHomeScreen(repository: repository)),
-    );
-    await tester.pumpAndSettle();
-    await openCurrentProject(tester);
+  testWidgets(
+    'opened agent does not show terminal-derived conversation by default',
+    (tester) async {
+      final repository = PaneConversationRepository();
+      await tester.pumpWidget(
+        MaterialApp(home: ProjectHomeScreen(repository: repository)),
+      );
+      await tester.pumpAndSettle();
+      await openCurrentProject(tester);
 
-    await tester.tap(
-      find.byKey(const ValueKey('agent-conversation-refresh-action')),
-    );
-    await tester.pump();
+      await tester.tap(
+        find.byKey(const ValueKey('agent-conversation-refresh-action')),
+      );
+      await tester.pump();
 
-    expect(repository.conversationCalls, isNotEmpty);
-    expect(repository.terminalHistoryCalls, isEmpty);
-    expect(find.text('Pane conversation visible'), findsOneWidget);
-  });
+      expect(repository.conversationCalls, isNotEmpty);
+      expect(repository.terminalHistoryCalls, isEmpty);
+      expect(find.text('Pane conversation visible'), findsNothing);
+    },
+  );
 
   testWidgets('opened agent with native conversation skips terminal fallback', (
     tester,
@@ -1581,7 +1580,7 @@ void main() {
     await tester.tap(
       find.byKey(const ValueKey('agent-conversation-refresh-action')),
     );
-    await tester.pump();
+    await tester.pumpAndSettle();
 
     expect(repository.conversationCalls, isNotEmpty);
     expect(repository.terminalHistoryCalls, isEmpty);
@@ -1823,8 +1822,165 @@ void main() {
     expect(find.textContaining('stream-only-visible-status'), findsNothing);
   });
 
+  testWidgets('unsolicited idle terminal repaint does not start working', (
+    tester,
+  ) async {
+    final terminalTransport = RecordingTerminalTransport();
+    final repository = ControlledCompletedReplyConversationRepository();
+    final controller = SelectedAgentWorkspaceController();
+    var refreshCount = 0;
+    var view = _workspaceView(
+      _statusAgent(
+        activityState: 'idle',
+        activitySource: 'provider_pane',
+        activityReason: 'provider_prompt_idle',
+      ),
+    );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: StatefulBuilder(
+            builder: (context, setState) {
+              final agent = view.agentByName('mobile')!;
+              return SelectedAgentWorkspace(
+                repository: repository,
+                terminalTransport: terminalTransport,
+                usePaneInputForMessages: true,
+                view: view,
+                agent: agent,
+                enableComposerCollapse: true,
+                controller: controller,
+                onRefreshView: () async {
+                  refreshCount += 1;
+                  final refreshed = _workspaceView(
+                    _statusAgent(
+                      activityState: refreshCount == 1 ? 'active' : 'idle',
+                      activitySource:
+                          refreshCount == 1 ? 'codex_runtime' : 'provider_pane',
+                      activityReason:
+                          refreshCount == 1
+                              ? 'codex_working_status_line'
+                              : 'provider_prompt_idle',
+                    ),
+                  );
+                  setState(() {
+                    view = refreshed;
+                  });
+                  return refreshed;
+                },
+              );
+            },
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      'work before idle repaint',
+    );
+    await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+    await tester.pump();
+    expect(terminalTransport.sessions, hasLength(1));
+    repository.releaseReply();
+    controller.refreshLatest();
+    await tester.pumpAndSettle();
+    controller.refreshLatest();
+    await tester.pumpAndSettle();
+    expect(
+      find.byKey(const ValueKey('conversation-working-status-text')),
+      findsNothing,
+    );
+
+    terminalTransport.sessions.single.addOutput('idle prompt repaint\n');
+    await tester.pump();
+
+    expect(
+      find.byKey(const ValueKey('conversation-working-status-text')),
+      findsNothing,
+    );
+    expect(find.textContaining('idle prompt repaint'), findsNothing);
+  });
+
   testWidgets(
-    'paired terminal interrupted output does not override active source status',
+    'single idle refresh settles awaiting after completed reply loads',
+    (tester) async {
+      final terminalTransport = RecordingTerminalTransport();
+      final repository = ControlledCompletedReplyConversationRepository();
+      final controller = SelectedAgentWorkspaceController();
+      var refreshCount = 0;
+      var view = _workspaceView(
+        _statusAgent(
+          activityState: 'idle',
+          activitySource: 'provider_pane',
+          activityReason: 'provider_prompt_idle',
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                final agent = view.agentByName('mobile')!;
+                return SelectedAgentWorkspace(
+                  repository: repository,
+                  terminalTransport: terminalTransport,
+                  usePaneInputForMessages: true,
+                  view: view,
+                  agent: agent,
+                  enableComposerCollapse: true,
+                  controller: controller,
+                  onRefreshView: () async {
+                    refreshCount += 1;
+                    final refreshed = _workspaceView(
+                      _statusAgent(
+                        activityState: 'idle',
+                        activitySource: 'provider_pane',
+                        activityReason: 'provider_prompt_idle',
+                      ),
+                    );
+                    setState(() {
+                      view = refreshed;
+                    });
+                    return refreshed;
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'single refresh reply',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pump();
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsOneWidget,
+      );
+
+      repository.releaseReply();
+      controller.refreshLatest();
+      await tester.pumpAndSettle();
+
+      expect(refreshCount, 1);
+      expect(find.text('completed reply after idle'), findsOneWidget);
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets(
+    'paired terminal interruption takes priority until activity resumes',
     (tester) async {
       final secureStore = MemorySecureStore();
       final profileStore = GatewayHostProfileStore(secureStore: secureStore);
@@ -1885,9 +2041,8 @@ void main() {
       expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
       expect(
         find.byKey(const ValueKey('conversation-working-status-text')),
-        findsOneWidget,
+        findsNothing,
       );
-      expect(find.text('Exception'), findsNothing);
       expect(find.textContaining('Conversation interrupted'), findsNothing);
 
       terminalTransport.sessions.single.addOutput('Working time 00:12\n');
@@ -1897,11 +2052,10 @@ void main() {
         find.byKey(const ValueKey('conversation-working-status-text')),
         findsOneWidget,
       );
-      expect(find.text('Exception'), findsNothing);
     },
   );
 
-  testWidgets('scheduled refresh keeps awaiting through idle snapshots', (
+  testWidgets('terminal activity does not start blind conversation polling', (
     tester,
   ) async {
     final terminalTransport = RecordingTerminalTransport();
@@ -1970,7 +2124,7 @@ void main() {
 
     await tester.pump(const Duration(milliseconds: 120));
 
-    expect(refreshCalls, greaterThanOrEqualTo(1));
+    expect(refreshCalls, 0);
     expect(
       find.byKey(const ValueKey('conversation-working-status-text')),
       findsOneWidget,
@@ -1988,7 +2142,7 @@ void main() {
     expect(find.text('mobile completed'), findsNothing);
   });
 
-  testWidgets('scheduled refresh waits for reply progress before completing', (
+  testWidgets('idle snapshots do not replay or poll a pending pane send', (
     tester,
   ) async {
     final terminalTransport = RecordingTerminalTransport();
@@ -2058,114 +2212,103 @@ void main() {
     await tester.pump(const Duration(milliseconds: 120));
     await tester.pump();
 
-    expect(refreshCalls, 1);
+    expect(refreshCalls, 0);
     expect(
       find.byKey(const ValueKey('conversation-working-status-text')),
       findsOneWidget,
     );
     expect(find.text('mobile completed'), findsNothing);
 
-    await tester.pump(const Duration(milliseconds: 180));
-    await tester.pump();
-
-    expect(refreshCalls, greaterThanOrEqualTo(2));
-    expect(find.text('mobile completed'), findsNothing);
-
-    repository.releaseReply();
-
-    await tester.pump(const Duration(seconds: 1));
+    await tester.pump(const Duration(seconds: 2));
     await tester.pumpAndSettle();
 
-    expect(find.text('completed reply after idle'), findsOneWidget);
-
-    await tester.pump(const Duration(seconds: 1));
-    await tester.pumpAndSettle();
-
-    expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
-    expect(find.text('Idle'), findsNothing);
-    expect(
-      find.byKey(const ValueKey('conversation-working-status-text')),
-      findsNothing,
-    );
-    expect(find.text('mobile completed'), findsOneWidget);
-  });
-
-  testWidgets('scheduled refresh shows new reply while agent remains working', (
-    tester,
-  ) async {
-    final terminalTransport = RecordingTerminalTransport();
-    final repository = WorkingPaneConversationRepository();
-    var view = _workspaceView(
-      _statusAgent(
-        activityState: 'idle',
-        activitySource: 'provider_pane',
-        activityReason: 'provider_prompt_idle',
-      ),
-    );
-
-    await tester.pumpWidget(
-      MaterialApp(
-        home: Scaffold(
-          body: StatefulBuilder(
-            builder: (context, setState) {
-              final agent = view.agentByName('mobile')!;
-              return SelectedAgentWorkspace(
-                repository: repository,
-                terminalTransport: terminalTransport,
-                usePaneInputForMessages: true,
-                view: view,
-                agent: agent,
-                enableComposerCollapse: true,
-                onRefreshView: () async {
-                  final refreshed = _workspaceView(
-                    _statusAgent(
-                      activityState: 'active',
-                      activitySource: 'codex_runtime',
-                      activityReason: 'codex_working_status_line',
-                    ),
-                  );
-                  setState(() {
-                    view = refreshed;
-                  });
-                  return refreshed;
-                },
-              );
-            },
-          ),
-        ),
-      ),
-    );
-    await tester.pumpAndSettle();
-
-    expect(repository.conversationCalls, hasLength(1));
-
-    await tester.enterText(
-      find.byKey(const ValueKey('agent-message-composer')),
-      'show reply while working',
-    );
-    await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
-    await tester.pump();
-
+    expect(refreshCalls, 0);
+    expect(find.text('completed reply after idle'), findsNothing);
     expect(
       find.byKey(const ValueKey('conversation-working-status-text')),
       findsOneWidget,
     );
-    expect(find.text('reply while still working'), findsNothing);
-
-    await tester.pump(const Duration(milliseconds: 120));
-    await tester.pump();
-
-    expect(repository.conversationCalls.length, greaterThanOrEqualTo(4));
-    expect(find.text('reply while still working'), findsOneWidget);
     expect(find.text('mobile completed'), findsNothing);
-    expect(
-      find.byKey(const ValueKey('conversation-working-status-text')),
-      findsOneWidget,
-    );
   });
 
   testWidgets(
-    'scheduled refresh shows reply under idle project view without re-enter',
+    'conversation changes require an explicit invalidation or refresh',
+    (tester) async {
+      final terminalTransport = RecordingTerminalTransport();
+      final repository = WorkingPaneConversationRepository();
+      var view = _workspaceView(
+        _statusAgent(
+          activityState: 'idle',
+          activitySource: 'provider_pane',
+          activityReason: 'provider_prompt_idle',
+        ),
+      );
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: StatefulBuilder(
+              builder: (context, setState) {
+                final agent = view.agentByName('mobile')!;
+                return SelectedAgentWorkspace(
+                  repository: repository,
+                  terminalTransport: terminalTransport,
+                  usePaneInputForMessages: true,
+                  view: view,
+                  agent: agent,
+                  enableComposerCollapse: true,
+                  onRefreshView: () async {
+                    final refreshed = _workspaceView(
+                      _statusAgent(
+                        activityState: 'active',
+                        activitySource: 'codex_runtime',
+                        activityReason: 'codex_working_status_line',
+                      ),
+                    );
+                    setState(() {
+                      view = refreshed;
+                    });
+                    return refreshed;
+                  },
+                );
+              },
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(repository.conversationCalls, hasLength(1));
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'show reply while working',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pump();
+
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsOneWidget,
+      );
+      expect(find.text('reply while still working'), findsNothing);
+
+      final callsAfterConfirmation = repository.conversationCalls.length;
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      expect(repository.conversationCalls.length, callsAfterConfirmation);
+      expect(find.text('reply while still working'), findsNothing);
+      expect(find.text('mobile completed'), findsNothing);
+      expect(
+        find.byKey(const ValueKey('conversation-working-status-text')),
+        findsOneWidget,
+      );
+    },
+  );
+
+  testWidgets(
+    'idle pane status does not synthesize a terminal reply without invalidation',
     (tester) async {
       final terminalTransport = RecordingTerminalTransport();
       final repository = LateIdleReplyConversationRepository();
@@ -2229,17 +2372,19 @@ void main() {
       );
       await tester.pump();
 
+      final callsAfterConfirmation = repository.conversationCalls.length;
       await tester.pump(const Duration(seconds: 2));
       await tester.pumpAndSettle();
 
+      expect(repository.conversationCalls.length, callsAfterConfirmation);
       expect(
         find.byKey(const ValueKey('conversation-working-status-text')),
         findsOneWidget,
       );
-      expect(find.text('late running reply'), findsOneWidget);
+      expect(find.text('late running reply'), findsNothing);
       expect(
         find.byKey(const ValueKey('conversation-working-reply-late')),
-        findsOneWidget,
+        findsNothing,
       );
       expect(
         find.byKey(const ValueKey('conversation-working-status-text')),
@@ -2306,7 +2451,11 @@ void main() {
       expect(repository.conversationCalls.length, greaterThan(1));
       expect(find.text('running after activity update'), findsOneWidget);
       expect(
-        find.byKey(const ValueKey('conversation-working-reply-running')),
+        find.byKey(
+          ValueKey(
+            'conversation-working-${syntheticAgentWorkingConversationItemId('mobile')}',
+          ),
+        ),
         findsOneWidget,
       );
       expect(find.byKey(const ValueKey('agent-working-status')), findsNothing);
@@ -2434,40 +2583,41 @@ void main() {
     );
   });
 
-  testWidgets('stale namespace epoch refreshes and retries chat send', (
-    tester,
-  ) async {
-    final repository = StaleEpochGatewayRepository();
-    await tester.pumpWidget(
-      MaterialApp(home: ProjectHomeScreen(repository: repository)),
-    );
-    await tester.pumpAndSettle();
-    await openCurrentProject(tester);
+  testWidgets(
+    'stale namespace epoch keeps the draft and never replays chat send',
+    (tester) async {
+      final repository = StaleEpochGatewayRepository();
+      await tester.pumpWidget(
+        MaterialApp(home: ProjectHomeScreen(repository: repository)),
+      );
+      await tester.pumpAndSettle();
+      await openCurrentProject(tester);
 
-    expect(
-      find.byKey(const ValueKey('agent-message-composer')),
-      findsOneWidget,
-    );
+      expect(
+        find.byKey(const ValueKey('agent-message-composer')),
+        findsOneWidget,
+      );
 
-    await tester.enterText(
-      find.byKey(const ValueKey('agent-message-composer')),
-      'retry after stale epoch',
-    );
-    await tester.pump();
-    final sendButton = tester.widget<IconButton>(
-      find.byKey(const ValueKey('agent-message-send-button')),
-    );
-    sendButton.onPressed!();
-    await tester.pumpAndSettle();
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'retry after stale epoch',
+      );
+      await tester.pump();
+      final sendButton = tester.widget<IconButton>(
+        find.byKey(const ValueKey('agent-message-send-button')),
+      );
+      sendButton.onPressed!();
+      await tester.pumpAndSettle();
 
-    expect(repository.getProjectViewCalls, greaterThanOrEqualTo(2));
-    expect(
-      [for (final item in repository.submittedMessages) item.namespaceEpoch],
-      [4, 5],
-    );
-    expect(find.text('retry after stale epoch'), findsOneWidget);
-    expect(find.text('Failed'), findsNothing);
-  });
+      expect(repository.getProjectViewCalls, 1);
+      expect(
+        [for (final item in repository.submittedMessages) item.namespaceEpoch],
+        [4],
+      );
+      expect(find.text('retry after stale epoch'), findsOneWidget);
+      expect(find.text('Failed'), findsOneWidget);
+    },
+  );
 }
 
 File _tempFile(Directory dir, String name) {

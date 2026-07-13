@@ -1,7 +1,7 @@
 {
   "name": "@seemseam/ccb",
-  "version": "8.0.19",
-  "description": "Visible, controllable multi-agent CLI workspace for Codex, Claude, Gemini, Kimi, MiMo, Qwen, Cursor, Copilot, Crush, Kiro, Pi, Z.ai, OpenCode, Antigravity, and Droid.",
+  "version": "8.1.3",
+  "description": "Lightweight multi-agent TUI and stable cross-provider collaboration layer for Codex, Claude, Gemini, Grok, Kimi, DeepSeek, and other CLI agents.",
   "license": "AGPL-3.0-only",
   "homepage": "https://github.com/SeemSeam/claude_codex_bridge#readme",
   "repository": {
@@ -17,7 +17,9 @@
     "codex",
     "claude",
     "gemini",
+    "grok",
     "kimi",
+    "deepseek",
     "mimo",
     "qwen",
     "cursor",
@@ -43,8 +45,8 @@
     "bin/ctx-transfer.js",
     "bin/ccb-npm-install.js",
     "bin/ccb-npm-runner.js",
-    "README*.md",
-    "readme_*.md",
+    "README.md",
+    "README/*.md",
     "LICENSE",
     "VERSION"
   ],

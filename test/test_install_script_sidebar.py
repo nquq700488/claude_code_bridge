@@ -94,7 +94,9 @@ def test_rust_sidebar_enables_terminal_mouse_capture_for_sidebar_clicks() -> Non
     assert 'EnableMouseCapture' in text
     assert 'DisableMouseCapture' in text
     assert 'MouseEventKind::Down(MouseButton::Left)' in text
-    assert 'handle_mouse_down(mouse.column, mouse.row, area, &client)' in text
+    assert 'if let Some(action) = app.handle_mouse_down(' in text
+    assert '&args.project_root' in text
+    assert '&ccb_program' in text
 
 
 def test_sidebar_build_script_copies_release_binary() -> None:

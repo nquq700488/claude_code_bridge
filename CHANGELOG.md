@@ -1,6 +1,147 @@
 # Changelog
 
-## Unreleased
+## v8.1.3 (2026-07-13)
+
+### Mobile Interaction Reliability
+
+- **Live Replies Stay In One Bubble**: streamed and refreshed conversation
+  state now merge into the existing working bubble while preserving element
+  identity, eliminating refresh flicker, duplicate replies, and false working
+  indicators.
+- **Selection And Notifications Stay Stable**: agent/window selection survives
+  project refreshes, retained invalidations no longer trigger refresh storms,
+  and completion notifications settle against authoritative conversation state.
+- **Terminal History Remains Pane-Authentic**: the first terminal snapshot
+  includes bounded tmux scrollback without duplicating screen content, later
+  repaints retain the user's history position, and keyboard input requires an
+  explicit activation gesture.
+- **Embedded Pairing Scanner Ships In Release**: Android pairing uses the
+  embedded ML Kit scanner and release minification preserves the scanner's
+  required classes.
+
+### Provider Reliability
+
+- **Codex Control Entries Filtered**: provider-local control transcript rows no
+  longer appear as user conversation content in Mobile.
+- **Grok Completion Requires Turn Evidence**: managed Grok requests wait for
+  native turn-completion evidence instead of finalizing on intermediate output.
+
+### Release Surface
+
+- **Release Metadata Synchronized**: VERSION, source CLI metadata,
+  `package.json`, Mobile app metadata and download links, workflow dispatch
+  defaults, README variants, and release notes are aligned for 8.1.3.
+
+## v8.1.2 (2026-07-11)
+
+### Mobile Conversation And Terminal Reliability
+
+- **Invalidation Recovery Hardened**: snapshots, invalidation cursors, live
+  conversation refreshes, task-completion notifications, and attachment echo
+  reconciliation now recover consistently without duplicate or stale items.
+- **Conversation Navigation Restored**: expanded bubbles scroll correctly and
+  project-backed file links resolve through the authenticated gateway.
+- **Terminal Controls Simplified**: compact terminal controls remove redundant
+  shortcuts and duplicate headers while preserving navigation and input.
+
+### macOS Installer Certificate Recovery
+
+- **Legacy pip Is Refreshed Safely**: reused managed environments with pip older
+  than 24.2 refresh pip before optional dependencies are installed, enabling
+  current system-certificate behavior.
+- **truststore Is Capability-Gated**: pip 22.2 through 24.1 opts into system
+  trust only when the truststore backend is actually available.
+- **HTTPS Fallback Coverage Expanded**: common macOS DNS, proxy, timeout,
+  connection, and certificate errors trigger the configurable HTTPS mirror
+  retry without adding HTTP indexes or disabling TLS verification.
+
+### Release Surface
+
+- **Release Metadata Synchronized**: VERSION, source CLI metadata,
+  `package.json`, Mobile app metadata and download links, workflow dispatch
+  defaults, README variants, and release notes are aligned for 8.1.2.
+
+## v8.1.1 (2026-07-10)
+
+### Mobile Realtime Recovery
+
+- **Invalidations Replace Active Polling**: the server-wide gateway now
+  publishes a bounded SSE invalidation journal for project, activity, and
+  conversation changes. CCB Mobile refreshes authoritative REST state from
+  those signals without send-follow polling or active-project polling.
+- **Snapshots Survive Reconnects**: bounded read-only snapshots preserve the
+  selected host, project, agent, and recent conversation state through gateway
+  interruptions. The app exposes reconnect status, recovers automatically,
+  keeps completion notifications working, and does not replay stale sends.
+- **Legacy Gateway Processes Are Adopted**: Mobile host startup recognizes and
+  safely takes over the previous foreground gateway process when its script,
+  command, and listener match, avoiding duplicate listeners during upgrades.
+
+### macOS Installer Reliability
+
+- **Managed Python Environments Are Reused**: release updates preserve and
+  validate the existing managed `.venv`, so a working `watchdog` installation
+  is no longer deleted and downloaded again on every update.
+- **pip Has A Guarded Mirror Fallback**: install-time pip commands respect
+  `CCB_PIP_INDEX_URL` and, on macOS TLS or network failures, retry through the
+  configurable TUNA PyPI fallback. The fallback can be disabled with
+  `CCB_PIP_FALLBACK_INDEX_URL=0`; no global pip configuration or TLS bypass is
+  written.
+
+### Release Surface
+
+- **Release Metadata Synchronized**: VERSION, source CLI metadata,
+  `package.json`, Mobile app metadata and download links, workflow dispatch
+  defaults, README variants, and release notes are aligned for 8.1.1.
+
+## v8.1.0 (2026-07-10)
+
+### Configuration Control And Lighter Defaults
+
+- **Visual Config Control Added**: the sidebar's top-left `⚙` action and
+  `ccb config ui` now open a loopback-only project control panel for windows,
+  pane splits, providers, models, thinking levels, API overrides, workspaces,
+  Rich mode, sidebar settings, validation, diff review, save, and guarded hot
+  reload.
+- **Blank Projects Start With One Agent**: when project and user config are
+  absent, CCB now mounts exactly one agent named `demo` and selects the first
+  locally available supported CLI, preferring Codex, Claude, and Gemini. An
+  explicit project or user config remains fully authoritative for custom
+  single- or multi-agent topologies.
+- **Config Documentation Refreshed**: the English homepage and all localized
+  READMEs now show the settings entry, the real control-panel UI, and the new
+  lightweight default; localized files live under `README/` with Chinese at
+  `README/zh.md`.
+
+### Provider Integration And Reliability
+
+- **Grok CLI Integrated**: Grok is available as a managed native CLI provider
+  with isolated home/session state, readiness and completion handling,
+  diagnostics, tests, and public README badge coverage.
+- **Kimi Readiness Updated**: Kimi Code v0.23.1 startup detection no longer
+  depends on the removed K2.7 brand banner.
+- **OpenCode Fresh Sessions Honored**: explicit fresh/new-context launches no
+  longer auto-continue an older OpenCode session.
+- **Claude And Gemini Hook Interpreter Fixed**: managed completion and
+  activity hooks execute the CCB bash launchers directly, allowing their
+  shebang and `_ccb-python` resolver to select a compatible Python runtime and
+  avoiding the extensionless-launcher failure reported in GitHub issue #249.
+
+### Mobile Performance And Resilience
+
+- **Gateway Profiles Persisted**: preferred Mobile gateway profiles and paired
+  credentials survive temporary gateway outages instead of being discarded.
+- **Project Discovery Kept Responsive**: server project health is cached and
+  the previous project list remains visible while refreshes warm, reducing
+  repeated health checks and transient empty states.
+- **Terminal UI Work Reduced**: working-indicator repaints and terminal input
+  state scans are reduced without changing input or activity behavior.
+
+### Release Surface
+
+- **Release Metadata Synchronized**: VERSION, source CLI metadata,
+  `package.json`, Mobile app metadata and download links, workflow dispatch
+  defaults, README variants, and release notes are aligned for 8.1.0.
 
 ## v8.0.19 (2026-07-07)
 

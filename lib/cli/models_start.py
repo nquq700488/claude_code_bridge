@@ -189,6 +189,14 @@ class ParsedConfigValidateCommand:
 
 
 @dataclass(frozen=True)
+class ParsedConfigUiCommand:
+    project: str | None
+    no_open: bool = False
+    port: int = 0
+    kind: str = 'config-ui'
+
+
+@dataclass(frozen=True)
 class ParsedReloadCommand:
     project: str | None
     dry_run: bool = False
@@ -230,6 +238,7 @@ __all__ = [
     'ParsedAgentCommand',
     'ParsedClearCommand',
     'ParsedCleanupCommand',
+    'ParsedConfigUiCommand',
     'ParsedConfigValidateCommand',
     'ParsedDoctorCommand',
     'ParsedKillCommand',

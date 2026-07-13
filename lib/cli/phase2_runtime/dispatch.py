@@ -37,7 +37,7 @@ from .handlers_ops import (
     handle_reload,
     handle_restart,
 )
-from .handlers_start import handle_config_validate, handle_start
+from .handlers_start import handle_config_ui, handle_config_validate, handle_start
 
 
 _HANDLERS = {
@@ -47,6 +47,7 @@ _HANDLERS = {
     'cancel': handle_cancel,
     'clear': handle_clear,
     'cleanup': handle_cleanup,
+    'config-ui': handle_config_ui,
     'config-validate': handle_config_validate,
     'doctor': handle_doctor,
     'fault-arm': handle_fault_arm,

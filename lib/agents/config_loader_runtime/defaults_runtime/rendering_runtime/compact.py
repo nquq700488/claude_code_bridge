@@ -31,6 +31,7 @@ def core_agent_defaults_match(spec) -> bool:
         and spec.permission_default is PermissionMode.MANUAL
         and spec.queue_policy is QueuePolicy.SERIAL_PER_AGENT
         and spec.model is None
+        and spec.thinking is None
         and not spec.startup_args
         and not spec.env
     )

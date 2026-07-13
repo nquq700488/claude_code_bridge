@@ -8,6 +8,7 @@ from cli.models import (
     ParsedCancelCommand,
     ParsedClearCommand,
     ParsedCleanupCommand,
+    ParsedConfigUiCommand,
     ParsedConfigValidateCommand,
     ParsedDoctorCommand,
     ParsedInboxCommand,
@@ -955,10 +956,27 @@ def parse_doctor(tokens: list[str], *, project: str | None, error_type) -> Parse
     return ParsedDoctorCommand(project=project, bundle=bundle, output_path=output_path)
 
 
-def parse_config(tokens: list[str], *, project: str | None, error_type) -> ParsedConfigValidateCommand:
-    if tokens != ['validate']:
-        raise error_type('config only supports: ccb config validate')
-    return ParsedConfigValidateCommand(project=project)
+def parse_config(tokens: list[str], *, project: str | None, error_type):
+    if tokens == ['validate']:
+        return ParsedConfigValidateCommand(project=project)
+    if tokens[:1] == ['ui']:
+        parser = argparse.ArgumentParser(prog='ccb config ui', add_help=False)
+        parser.add_argument('--no-open', dest='no_open', action='store_true')
+        parser.add_argument('--port', type=int, default=0)
+        namespace = parse_args(
+            parser,
+            tokens[1:],
+            error_message='invalid config ui command',
+            error_type=error_type,
+        )
+        if not 0 <= int(namespace.port) <= 65535:
+            raise error_type('config ui --port must be between 0 and 65535')
+        return ParsedConfigUiCommand(
+            project=project,
+            no_open=bool(namespace.no_open),
+            port=int(namespace.port),
+        )
+    raise error_type('config only supports: ccb config validate or ccb config ui')
 
 
 def parse_reload(tokens: list[str], *, project: str | None, error_type) -> ParsedReloadCommand:

@@ -2,6 +2,25 @@
 
 Date: 2026-06-27
 
+## Realtime Recovery Package A — In Progress (review correction, 2026-07-10)
+
+The prior `6be6a172` completion claim and its AVD record are not acceptance
+evidence: reviewer found an SSE keepalive path that scanned every registered
+project, a shared completion/invalidation journal, missing persistent SSE
+resume, and missing non-native-provider fallback/cache lifecycle gates. This
+correction is in progress until fresh source tests and a same-APK real AVD
+audit prove zero internal ProjectView/conversation requests during 180 seconds
+idle, durable offline completion recovery, resume/resync, safe fallback, and
+stale snapshot recovery. The deleted send-refresh scheduler must remain marked
+unproven until those gates complete.
+
+Product boundary: this package does not provide unconditional global background
+completion notifications for every mounted project. Completion events are
+authoritative only after explicit ProjectView/conversation observation, plus
+selected-target native invalidation watches. Kimi/OpenCode/unknown provider
+structured fallback remains an explicit conversation-load path unless a later
+provider-specific fingerprint source is added.
+
 ## Current Phase
 
 Current execution target added 2026-07-04: land the per-agent Terminal mode

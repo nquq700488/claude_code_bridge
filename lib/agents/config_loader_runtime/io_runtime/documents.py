@@ -293,6 +293,16 @@ def _deep_merge_dicts(base: dict[str, object], overlay: dict[str, object]) -> di
 
 def _load_config_document(path: Path, *, project_root: Path | None = None) -> dict[str, object]:
     text = path.read_text(encoding='utf-8')
+    return parse_config_document_text(text, path=path, project_root=project_root)
+
+
+def parse_config_document_text(
+    text: str,
+    *,
+    path: Path,
+    project_root: Path | None = None,
+) -> dict[str, object]:
+    """Parse config text with the same compact/rich/hybrid rules as disk loading."""
     kind, primary_text, overlay_text = _classify_config_document(text)
     if kind == 'rich':
         return _parse_toml_config_document(primary_text, path=path)
@@ -336,4 +346,4 @@ def load_project_config(project_root: Path, *, include_loop_overlays: bool = Tru
     )
 
 
-__all__ = ['load_project_config']
+__all__ = ['load_project_config', 'parse_config_document_text']

@@ -48,6 +48,12 @@ override the shipped contracts.
   package, install, command, and auth findings.
 - [topics/integration-design.md](topics/integration-design.md): CCB provider
   architecture, completion detection, configuration, and testing plan.
+- [topics/grok-ask-skill-test-plan.md](topics/grok-ask-skill-test-plan.md):
+  staged verification for native Grok ask-skill projection and cross-window
+  routing isolation.
+- [topics/grok-ccb-skills-design.md](topics/grok-ccb-skills-design.md): native
+  Grok `ask` and `ccb-clear` skill content, projection ownership, caller
+  identity, permission, and acceptance contracts.
 - [topics/kimi-receipt-and-diagnostics-hardening.md](topics/kimi-receipt-and-diagnostics-hardening.md):
   landed Kimi-only receipt, no-captured-reply, trace, and restore-diagnostics
   hardening notes with explicit non-impact constraints for other providers.

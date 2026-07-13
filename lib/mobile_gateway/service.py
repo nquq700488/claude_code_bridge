@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 from collections import OrderedDict
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
+from concurrent.futures import Future, TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
@@ -10,6 +10,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import mimetypes
 from pathlib import Path
+from queue import Empty, Full, Queue
 import re
 import shutil
 import sqlite3
@@ -21,7 +22,12 @@ from urllib.parse import parse_qs, unquote, urlparse
 
 from ccbd.api_models import DeliveryScope, MessageEnvelope
 from ccbd.socket_client import CcbdClientError
-from .notifications import MobileNotificationSnapshot, MobileNotificationStore, encode_sse_event
+from .notifications import (
+    MobileInvalidationSnapshot,
+    MobileNotificationSnapshot,
+    MobileNotificationStore,
+    encode_sse_event,
+)
 from .pairing import MobileGatewayPairingError, MobileGatewayPairingStore
 from .project_activity import MobileGatewayProjectActivityStore
 from .project_registry import MobileGatewayProject, MobileGatewayProjectRegistry
@@ -51,10 +57,18 @@ _PAIRING_CAPABILITIES = (
     'file_upload',
     'file_download',
     'notifications',
+    'invalidation_stream',
 )
 _REDACTED_NAMESPACE_KEYS = ('socket_path', 'session_name')
 _DEFAULT_ROUTE_PROVIDER = 'lan'
-_PROJECT_LIST_HEALTH_WORKERS = 8
+_PROJECT_HEALTH_CACHE_TTL_SECONDS = 5.0
+_PROJECT_HEALTH_CACHE_MAX_STALE_SECONDS = 30.0
+_PROJECT_HEALTH_CACHE_MAX_ENTRIES = 256
+_PROJECT_HEALTH_REFRESH_WORKERS = 4
+_PROJECT_HEALTH_REFRESH_QUEUE_MAX = 256
+_PROJECT_HEALTH_REFRESH_BUDGET = 256
+_PROJECT_HEALTH_FAILURE_BACKOFF_SECONDS = 2.0
+_PROJECT_HEALTH_FAILURE_BACKOFF_MAX_SECONDS = 30.0
 _DEFAULT_PAIRING_SCOPES = (
     'view',
     'content',
@@ -69,6 +83,9 @@ _DEFAULT_PAIRING_SCOPES = (
 )
 _MAX_MOBILE_FILE_BYTES = 25 * 1024 * 1024
 _NOTIFICATION_STREAM_POLL_SECONDS = 1.0
+_INVALIDATION_WATCH_MIN_INTERVAL_SECONDS = 0.75
+_INVALIDATION_WATCH_TARGET_LIMIT = 32
+_INVALIDATION_WATCH_TARGET_TTL_SECONDS = 45.0
 _CODEX_NATIVE_TAIL_FILE_BYTES = 64 * 1024
 _CODEX_NATIVE_TAIL_LINE_LIMIT = 120
 _CODEX_NATIVE_TAIL_THREAD_LIMIT = 2
@@ -81,6 +98,7 @@ _PROJECT_ACTIVITY_REFRESH_BUDGET_SECONDS = 0.75
 _PROJECT_ACTIVITY_REFRESH_PER_PROJECT_SECONDS = 0.25
 _CONVERSATION_PAGE_CACHE_MAX_ENTRIES = 64
 _CONVERSATION_PAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024
+_MOBILE_PROJECT_UPLOAD_DIR = ('.ccb', 'mobile', 'uploads')
 
 
 @dataclass(frozen=True)
@@ -116,6 +134,278 @@ class _ConversationPageCacheEntry:
     byte_size: int
 
 
+@dataclass(frozen=True)
+class _InvalidationWatchTarget:
+    project_id: str
+    project_short_name: str
+    agent: str
+    namespace_epoch: int | None
+    provider: str | None
+    expires_monotonic: float
+
+
+@dataclass(frozen=True)
+class _ProjectHealthCacheEntry:
+    payload: dict[str, object]
+    checked_at: str
+    checked_monotonic: float
+    next_refresh_monotonic: float
+    failure_count: int
+
+
+class _BoundedDaemonExecutor:
+    """Small daemon executor used by the gateway's non-request refresh work."""
+
+    def __init__(self, *, workers: int, max_pending: int) -> None:
+        self._queue: Queue[tuple[Future[object], Callable[[], object]] | None] = Queue(
+            maxsize=max(1, int(max_pending))
+        )
+        self._closed = threading.Event()
+        self._threads = [
+            threading.Thread(
+                target=self._run,
+                name=f'ccb-mobile-refresh-{index}',
+                daemon=True,
+            )
+            for index in range(max(1, int(workers)))
+        ]
+        for thread in self._threads:
+            thread.start()
+
+    def submit(self, task: Callable[[], object]) -> Future[object] | None:
+        if self._closed.is_set():
+            return None
+        future: Future[object] = Future()
+        try:
+            self._queue.put_nowait((future, task))
+        except Full:
+            return None
+        return future
+
+    def close(self) -> None:
+        self._closed.set()
+        for _thread in self._threads:
+            try:
+                self._queue.put_nowait(None)
+            except Full:
+                break
+
+    def _run(self) -> None:
+        while not self._closed.is_set() or not self._queue.empty():
+            try:
+                item = self._queue.get(timeout=0.1)
+            except Empty:
+                continue
+            if item is None:
+                return
+            future, task = item
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                future.set_result(task())
+            except BaseException as exc:
+                future.set_exception(exc)
+
+
+class _ProjectHealthCache:
+    """Per-project ping cache with bounded stale-while-revalidate scheduling."""
+
+    def __init__(
+        self,
+        *,
+        clock: Callable[[], str],
+        monotonic_clock: Callable[[], float],
+        submit: Callable[[Callable[[], object]], Future[object] | None],
+        ping: Callable[[MobileGatewayProject], dict[str, object]],
+    ) -> None:
+        self._clock = clock
+        self._monotonic_clock = monotonic_clock
+        self._submit = submit
+        self._ping = ping
+        self._entries: OrderedDict[str, _ProjectHealthCacheEntry] = OrderedDict()
+        self._registry_ids: tuple[str, ...] = ()
+        self._active_ids: set[str] = set()
+        self._refreshing: set[str] = set()
+        self._observed_ids: set[str] = set()
+        self._available_ids: set[str] = set()
+        self._observed_active_count = 0
+        self._overview_updated_monotonic: float | None = None
+        self._overview_available_project_ids: tuple[str, ...] = ()
+        self._lock = threading.Lock()
+        self._closed = False
+
+    def prime(self, projects: tuple[MobileGatewayProject, ...]) -> None:
+        """Record registry identity without pinging it, so host health stays O(1)."""
+        with self._lock:
+            self._reconcile_locked(projects)
+
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._refreshing.clear()
+
+    def health_by_project(
+        self,
+        projects: tuple[MobileGatewayProject, ...],
+    ) -> dict[str, dict[str, object]]:
+        now = self._monotonic_clock()
+        candidates: list[MobileGatewayProject] = []
+        results: dict[str, dict[str, object]] = {}
+        with self._lock:
+            self._reconcile_locked(projects)
+            for project in projects:
+                entry = self._entries.get(project.project_id)
+                if (
+                    len(candidates) < _PROJECT_HEALTH_REFRESH_BUDGET
+                    and self._needs_refresh_locked(project.project_id, entry, now=now)
+                ):
+                    self._refreshing.add(project.project_id)
+                    candidates.append(project)
+                results[project.project_id] = self._snapshot_locked(
+                    project.project_id,
+                    entry,
+                    now=now,
+                )
+        for project in candidates:
+            future = self._submit(lambda project=project: self._refresh(project))
+            if future is None:
+                with self._lock:
+                    self._refreshing.discard(project.project_id)
+        return results
+
+    def overview(self) -> dict[str, object]:
+        """Return the last observed project health without registry work or pings."""
+        now = self._monotonic_clock()
+        with self._lock:
+            project_count = len(self._registry_ids)
+            complete = self._observed_active_count == project_count
+            updated_at = self._overview_updated_monotonic
+            available_count = len(self._available_ids)
+            available_ids = self._overview_available_project_ids
+        if not complete or updated_at is None:
+            freshness = 'unknown'
+        elif now - updated_at <= _PROJECT_HEALTH_CACHE_TTL_SECONDS:
+            freshness = 'cached'
+        elif now - updated_at <= _PROJECT_HEALTH_CACHE_MAX_STALE_SECONDS:
+            freshness = 'stale'
+        else:
+            freshness = 'unknown'
+        return {
+            'project_count': project_count,
+            'available_project_count': available_count if freshness != 'unknown' else None,
+            'available_project_ids': list(available_ids) if freshness != 'unknown' else [],
+            'health_freshness': freshness,
+        }
+
+    def _reconcile_locked(self, projects: tuple[MobileGatewayProject, ...]) -> None:
+        project_ids = tuple(project.project_id for project in projects)
+        active_ids = set(project_ids)
+        if active_ids != self._active_ids:
+            self._overview_updated_monotonic = None
+        self._registry_ids = project_ids
+        self._active_ids = active_ids
+        for project_id in tuple(self._entries):
+            if project_id not in active_ids:
+                self._entries.pop(project_id, None)
+        self._observed_ids.intersection_update(active_ids)
+        self._available_ids.intersection_update(active_ids)
+        self._observed_active_count = len(self._observed_ids)
+        self._overview_available_project_ids = tuple(sorted(self._available_ids))[:10]
+        self._refreshing.intersection_update(active_ids)
+
+    def _snapshot_locked(
+        self,
+        project_id: str,
+        entry: _ProjectHealthCacheEntry | None,
+        *,
+        now: float,
+    ) -> dict[str, object]:
+        if entry is None:
+            return {
+                'health': 'unknown',
+                'mount_state': 'unknown',
+                'health_freshness': 'unknown',
+                'health_refreshing': project_id in self._refreshing,
+            }
+        age = max(0.0, now - entry.checked_monotonic)
+        if age <= _PROJECT_HEALTH_CACHE_TTL_SECONDS:
+            freshness = 'fresh'
+        elif age <= _PROJECT_HEALTH_CACHE_MAX_STALE_SECONDS:
+            freshness = 'stale'
+        else:
+            # Keep the last observed state visible while it is revalidated.
+            # Returning unknown here makes every idle cache interval briefly
+            # collapse the mobile project list to zero entries.
+            freshness = 'expired'
+        return {
+            **entry.payload,
+            'health_freshness': freshness,
+            'health_checked_at': entry.checked_at,
+            'health_refreshing': project_id in self._refreshing,
+        }
+
+    def _needs_refresh_locked(
+        self,
+        project_id: str,
+        entry: _ProjectHealthCacheEntry | None,
+        *,
+        now: float,
+    ) -> bool:
+        return (
+            not self._closed
+            and project_id not in self._refreshing
+            and (entry is None or now >= entry.next_refresh_monotonic)
+        )
+
+    def _refresh(self, project: MobileGatewayProject) -> None:
+        now = self._monotonic_clock()
+        try:
+            payload = dict(self._ping(project) or {})
+        except Exception:
+            payload = {
+                'health': 'unreachable',
+                'mount_state': 'unavailable',
+                'error': 'project unavailable',
+            }
+        failure = _project_health_refresh_failed(payload)
+        with self._lock:
+            prior = self._entries.get(project.project_id)
+            failure_count = (prior.failure_count if prior is not None else 0) + 1 if failure else 0
+            if failure:
+                delay = min(
+                    _PROJECT_HEALTH_FAILURE_BACKOFF_MAX_SECONDS,
+                    _PROJECT_HEALTH_FAILURE_BACKOFF_SECONDS * (2 ** max(0, failure_count - 1)),
+                )
+            else:
+                delay = _PROJECT_HEALTH_CACHE_TTL_SECONDS
+            if not self._closed and project.project_id in self._active_ids:
+                if project.project_id not in self._observed_ids:
+                    self._observed_ids.add(project.project_id)
+                    self._observed_active_count += 1
+                if _project_available_for_mobile_list(payload):
+                    self._available_ids.add(project.project_id)
+                else:
+                    self._available_ids.discard(project.project_id)
+                self._entries[project.project_id] = _ProjectHealthCacheEntry(
+                    payload=payload,
+                    checked_at=self._clock(),
+                    checked_monotonic=now,
+                    next_refresh_monotonic=now + delay,
+                    failure_count=failure_count,
+                )
+                self._entries.move_to_end(project.project_id)
+                while len(self._entries) > _PROJECT_HEALTH_CACHE_MAX_ENTRIES:
+                    evicted_project_id, _entry = self._entries.popitem(last=False)
+                    if evicted_project_id in self._observed_ids:
+                        self._observed_ids.discard(evicted_project_id)
+                        self._observed_active_count -= 1
+                    self._available_ids.discard(evicted_project_id)
+                if self._observed_active_count == len(self._registry_ids):
+                    self._overview_updated_monotonic = now
+                    self._overview_available_project_ids = tuple(sorted(self._available_ids))[:10]
+            self._refreshing.discard(project.project_id)
+
+
 class MobileGatewayError(RuntimeError):
     def __init__(self, message: str, *, status_code: int = 400) -> None:
         super().__init__(message)
@@ -132,8 +422,11 @@ class MobileGatewayService:
         mobile_dir: Path | None = None,
         pairing_store: MobileGatewayPairingStore | None = None,
         project_registry: MobileGatewayProjectRegistry | None = None,
+        project_registry_provider: Callable[[], MobileGatewayProjectRegistry] | None = None,
         mode: str = 'loopback_current_project',
         clock: Callable[[], str] | None = None,
+        monotonic_clock: Callable[[], float] | None = None,
+        background_executor: object | None = None,
         terminal_session_factory: Callable[[TerminalAttachTarget], object] | None = None,
         terminal_history_factory: Callable[[TerminalHistoryTarget], dict[str, object]] | None = None,
         terminal_message_sender: Callable[[PaneMessageTarget, str], dict[str, object]] | None = None,
@@ -146,8 +439,13 @@ class MobileGatewayService:
             project_root=self._project_root,
             ccbd_client_factory=self._ccbd_client_factory,
         )
+        self._project_registry_provider = project_registry_provider
         self._mode = str(mode or 'loopback_current_project').strip() or 'loopback_current_project'
         self._clock = clock or _utc_now
+        self._monotonic_clock = monotonic_clock or time.monotonic
+        self._background_executor = background_executor
+        self._owns_background_executor = False
+        self._closed = False
         self._terminal_session_factory = terminal_session_factory or create_tmux_terminal_session
         self._terminal_history_factory = terminal_history_factory or create_tmux_terminal_history
         self._terminal_message_sender = terminal_message_sender or send_tmux_pane_message
@@ -165,6 +463,34 @@ class MobileGatewayService:
         ] = OrderedDict()
         self._conversation_page_cache_bytes = 0
         self._conversation_page_cache_lock = threading.Lock()
+        self._project_activity_refreshing: set[str] = set()
+        self._project_activity_refresh_lock = threading.Lock()
+        # One bounded watcher/cache serves every SSE client.  It tracks only
+        # selected app subscriptions and never turns an SSE keepalive into a
+        # registry/project-view sweep.
+        self._invalidation_watch_lock = threading.Lock()
+        self._invalidation_watch_refreshing = False
+        self._invalidation_watch_last_refresh = float('-inf')
+        self._invalidation_watch_targets: OrderedDict[
+            tuple[str, str, int | None], _InvalidationWatchTarget
+        ] = OrderedDict()
+        self._invalidation_audit = {
+            'watch_refreshes': 0,
+            'watch_targets_checked': 0,
+            'watch_project_view_calls': 0,
+            'watch_conversation_requests': 0,
+            'ccbd_project_view_requests': 0,
+            'mobile_conversation_requests': 0,
+        }
+        self._project_health_cache: _ProjectHealthCache | None = None
+        if self._mode == 'loopback_server_registry':
+            self._project_health_cache = _ProjectHealthCache(
+                clock=self._clock,
+                monotonic_clock=self._monotonic_clock,
+                submit=self._submit_background,
+                ping=self._project_list_health,
+            )
+            self._project_health_cache.prime(self._project_registry.projects())
 
     @property
     def project_id(self) -> str:
@@ -199,33 +525,38 @@ class MobileGatewayService:
         }
 
     def _server_registry_health_payload(self) -> dict[str, object]:
-        registry_projects = self._project_registry.projects()
-        health_by_project = self._project_list_health_by_project(registry_projects)
-        available = [
-            project_id
-            for project_id, health in health_by_project.items()
-            if _project_available_for_mobile_list(health)
-        ]
-        status = 'ok' if available else 'degraded'
+        cache = self._project_health_cache
+        overview = cache.overview() if cache is not None else {
+            'project_count': 0,
+            'available_project_count': None,
+            'available_project_ids': [],
+            'health_freshness': 'unknown',
+        }
         return {
             'schema_version': _SCHEMA_VERSION,
-            'status': status,
+            'status': 'ok',
             'server_time': self._clock(),
             'mode': self._mode,
             'project_id': self._project_id,
             'capabilities': self._capabilities(),
             'ccbd': {
-                'reachable': bool(available),
-                'project_count': len(registry_projects),
-                'available_project_count': len(available),
-                'available_project_ids': available[:10],
+                'reachable': None,
+                **overview,
             },
         }
 
     def projects_payload(self) -> dict[str, object]:
         projects: list[dict[str, object]] = []
-        registry_projects = self._project_registry.projects()
-        health_by_project = self._project_list_health_by_project(registry_projects)
+        registry_projects = self._registry_projects(refresh=True)
+        if self._project_health_cache is not None:
+            health_by_project = self._project_health_cache.health_by_project(registry_projects)
+        else:
+            health_by_project = self._project_list_health_by_project(registry_projects)
+        unknown_project_count = sum(
+            1
+            for health in health_by_project.values()
+            if str(health.get('health_freshness') or 'unknown') == 'unknown'
+        )
         capabilities = self._capabilities()
         activity_refreshes_remaining = _PROJECT_ACTIVITY_REFRESH_LIMIT
         activity_deadline = time.monotonic() + _PROJECT_ACTIVITY_REFRESH_BUDGET_SECONDS
@@ -239,8 +570,13 @@ class MobileGatewayService:
                 'root': str(project.project_root),
                 'health': str(ccbd.get('health') or 'unknown'),
                 'mount_state': str(ccbd.get('mount_state') or ''),
+                'health_freshness': str(ccbd.get('health_freshness') or 'unknown'),
                 'capabilities': capabilities,
             }
+            if ccbd.get('health_checked_at'):
+                item['health_checked_at'] = str(ccbd.get('health_checked_at') or '')
+            if ccbd.get('health_refreshing'):
+                item['health_refreshing'] = True
             allow_activity_refresh = (
                 activity_refreshes_remaining > 0
                 and time.monotonic() < activity_deadline
@@ -260,13 +596,22 @@ class MobileGatewayService:
         return {
             'schema_version': _SCHEMA_VERSION,
             'projects': projects,
+            'registry_project_count': len(registry_projects),
+            'health_warming': unknown_project_count > 0,
+            'health_unknown_project_count': unknown_project_count,
         }
 
     def project_view_payload(self, project_id: str) -> dict[str, object]:
         project = self._require_project(project_id)
         payload = self._request_project_view(project)
+        self._observe_project_view_for_notifications(project, payload)
         self._record_project_opened(project.project_id)
         return _redact_project_view_payload(payload)
+
+    def invalidation_audit_payload(self) -> dict[str, int]:
+        """Test/diagnostic-only counters for proving idle stream cost."""
+        with self._invalidation_watch_lock:
+            return {key: int(value) for key, value in self._invalidation_audit.items()}
 
     def create_pairing_payload(
         self,
@@ -309,6 +654,13 @@ class MobileGatewayService:
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'ok',
                 'events': self.notification_events_since(path, headers),
+            }
+        if route == '/v1/mobile/notifications/audit':
+            self._authenticate(headers, required_scopes=('notify',))
+            return 200, {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'ok',
+                'audit': self.invalidation_audit_payload(),
             }
         prefix = '/v1/projects/'
         suffix = '/view'
@@ -366,15 +718,50 @@ class MobileGatewayService:
         query = parse_qs(parsed.query, keep_blank_values=True)
         self._authenticate(headers, required_scopes=('notify',))
         store = self._require_notification_store()
-        emitted = store.sync_snapshots(self._notification_snapshots())
-        for event in emitted:
-            self._record_project_activity(event.project_id, activity_at=event.completed_at)
+        self._register_invalidation_watch(query)
+        self._refresh_notification_stream_if_due(
+            store,
+            force=self.notification_stream_once_from_path(path),
+        )
         cursor = (
             last_event_id
             if last_event_id is not None
             else _query_text(query, 'last_event_id') or _header_value(headers, 'last-event-id')
         )
         return [event.to_payload() for event in store.events_since(cursor)]
+
+    def _refresh_notification_stream_if_due(
+        self,
+        store: MobileNotificationStore,
+        *,
+        force: bool = False,
+    ) -> None:
+        """Refresh the shared selected-agent file-metadata watcher.
+
+        This has no ccbd RPC path: it reads only bounded native transcript
+        metadata for subscribed targets. Project view/conversation remains an
+        explicit REST action, so idle SSE clients do not create hidden polling.
+        """
+        now = self._monotonic_clock()
+        with self._invalidation_watch_lock:
+            if (
+                self._invalidation_watch_refreshing
+                or (
+                    not force
+                    and now - self._invalidation_watch_last_refresh
+                    < _INVALIDATION_WATCH_MIN_INTERVAL_SECONDS
+                )
+            ):
+                return
+            self._invalidation_watch_refreshing = True
+        try:
+            snapshots = self._selected_invalidation_watch_snapshots()
+            if snapshots:
+                store.sync_invalidations(snapshots)
+        finally:
+            with self._invalidation_watch_lock:
+                self._invalidation_watch_last_refresh = self._monotonic_clock()
+                self._invalidation_watch_refreshing = False
 
     def terminal_history_payload(
         self,
@@ -418,9 +805,12 @@ class MobileGatewayService:
         query: Mapping[str, object],
         headers: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
+        with self._invalidation_watch_lock:
+            self._invalidation_audit['mobile_conversation_requests'] += 1
         project = self._require_project(project_id)
         self._authenticate(headers, required_scopes=('view',))
         view_payload = self._request_project_view(project)
+        self._observe_project_view_for_notifications(project, view_payload)
         target = _validate_agent_conversation_target(
             project_id=project.project_id,
             view_payload=view_payload,
@@ -452,19 +842,12 @@ class MobileGatewayService:
                     namespace_epoch=int(target['namespace_epoch']),
                     page=cached_page,
                 )
-        terminal_history = self._agent_terminal_history_for_conversation(
-            project_id=project.project_id,
-            view_payload=view_payload,
-            agent=str(target['agent']),
-            namespace_epoch=int(target['namespace_epoch']),
-        )
         conversation_items = _agent_conversation_items(
             view_payload,
             project_id=project.project_id,
             agent=target['agent'],
             namespace_epoch=int(target['namespace_epoch']),
             project_root=project.project_root,
-            terminal_history=terminal_history,
             mobile_files_dir=self._mobile_files_dir(),
             limit=limit,
             cursor=cursor,
@@ -556,33 +939,6 @@ class MobileGatewayService:
                 _, evicted = self._conversation_page_cache.popitem(last=False)
                 self._conversation_page_cache_bytes -= evicted.byte_size
 
-    def _agent_terminal_history_for_conversation(
-        self,
-        *,
-        project_id: str,
-        view_payload: dict[str, object],
-        agent: str,
-        namespace_epoch: int,
-    ) -> dict[str, object] | None:
-        try:
-            target = _terminal_history_target(
-                project_id=project_id,
-                view_payload=view_payload,
-                agent=agent,
-                namespace_epoch=namespace_epoch,
-                max_lines=240,
-            )
-            history = dict(self._terminal_history_factory(target) or {})
-        except Exception:
-            return None
-        history.setdefault('agent', target.agent)
-        history.setdefault('history_scope', 'tmux_scrollback')
-        history.setdefault('source_pane_id', target.pane_id)
-        history.setdefault('generated_at', self._clock())
-        history.setdefault('stale', False)
-        history.setdefault('blocks', [])
-        return history
-
     def file_upload_target_from_path(self, path: str) -> tuple[str, str] | None:
         parsed = urlparse(path)
         route = parsed.path.rstrip('/') or '/'
@@ -638,6 +994,16 @@ class MobileGatewayService:
         directory = self._mobile_file_dir(project.project_id, str(target_record['agent']), file_id)
         directory.mkdir(parents=True, exist_ok=False)
         (directory / 'content.bin').write_bytes(body)
+        project_relative_path = _mobile_project_upload_relative_path(
+            agent=str(target_record['agent']),
+            file_id=file_id,
+            file_name=file_name,
+        )
+        project_path = (project.project_root / project_relative_path).resolve(strict=False)
+        project_path.parent.mkdir(parents=True, exist_ok=True)
+        project_path.write_bytes(body)
+        record['project_relative_path'] = project_relative_path.as_posix()
+        record['project_path'] = str(project_path)
         (directory / 'metadata.json').write_text(
             json.dumps(record, ensure_ascii=False, sort_keys=True),
             encoding='utf-8',
@@ -650,6 +1016,8 @@ class MobileGatewayService:
             'mime_type': mime_type,
             'size_bytes': len(body),
             'sha256': digest,
+            'project_relative_path': project_relative_path.as_posix(),
+            'project_path': str(project_path),
         }
 
     def dispatch_file_download(
@@ -782,7 +1150,7 @@ class MobileGatewayService:
         attachments = _attachment_records(payload.get('attachments'))
         if not body and not attachments:
             raise MobileGatewayError('body or attachments are required', status_code=400)
-        submit_body = body or _attachment_submit_body(attachments)
+        submit_body = _message_submit_body(body, attachments)
         message_format = str(payload.get('format') or 'markdown').strip() or 'markdown'
         view_payload = self._request_project_view(project)
         target = _validate_agent_conversation_target(
@@ -1195,8 +1563,45 @@ class MobileGatewayService:
         redacted['focus'] = dict(focus or {}) if isinstance(focus, dict) else {}
         return redacted
 
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        if self._project_health_cache is not None:
+            self._project_health_cache.close()
+        if self._owns_background_executor and self._background_executor is not None:
+            close = getattr(self._background_executor, 'close', None)
+            if callable(close):
+                close()
+
+    def _registry_projects(self, *, refresh: bool = False) -> tuple[MobileGatewayProject, ...]:
+        if refresh and self._project_registry_provider is not None:
+            try:
+                self._project_registry = self._project_registry_provider()
+            except Exception:
+                pass
+        return self._project_registry.projects()
+
+    def _submit_background(self, task: Callable[[], object]) -> Future[object] | None:
+        if self._closed:
+            return None
+        executor = self._background_executor
+        if executor is None:
+            executor = _BoundedDaemonExecutor(
+                workers=_PROJECT_HEALTH_REFRESH_WORKERS,
+                max_pending=_PROJECT_HEALTH_REFRESH_QUEUE_MAX,
+            )
+            self._background_executor = executor
+            self._owns_background_executor = True
+        submit = getattr(executor, 'submit', None)
+        if not callable(submit):
+            return None
+        return submit(task)
+
     def _require_project(self, project_id: str) -> MobileGatewayProject:
         requested = str(project_id or '').strip()
+        if self._project_registry_provider is not None:
+            self._registry_projects(refresh=True)
         project = self._project_registry.get(requested)
         if project is None:
             raise MobileGatewayError('unknown project', status_code=404)
@@ -1212,14 +1617,90 @@ class MobileGatewayService:
             raise MobileGatewayError('mobile notification store is not configured', status_code=503)
         return self._notification_store
 
-    def _notification_snapshots(self) -> list[MobileNotificationSnapshot]:
-        snapshots: list[MobileNotificationSnapshot] = []
-        for project in self._project_registry.projects():
-            try:
-                payload = self._request_project_view(project)
-            except MobileGatewayError:
+    def _observe_project_view_for_notifications(
+        self,
+        project: MobileGatewayProject,
+        payload: dict[str, object],
+    ) -> None:
+        """Use an already-authorized ProjectView as the activity source.
+
+        This is deliberately called only from an explicit view/conversation
+        request, never from the SSE loop. It keeps completion detection precise
+        without an extra ccbd request and establishes watcher baselines.
+        """
+        store = self._notification_store
+        if store is None:
+            return
+        observed_at = self._clock()
+        invalidations = _invalidation_snapshots_for_project(project, payload, observed_at=observed_at)
+        store.sync_invalidations(invalidations)
+        emitted = store.sync_snapshots(
+            _notification_snapshots_for_project(project, payload, observed_at=observed_at)
+        )
+        for event in emitted:
+            self._record_project_activity(event.project_id, activity_at=event.completed_at)
+
+    def _register_invalidation_watch(self, query: Mapping[str, object]) -> None:
+        project_id = _query_text(query, 'watch_project_id')
+        agent = _query_text(query, 'watch_agent')
+        if not project_id or not agent:
+            return
+        # Do not refresh a dynamic registry for each SSE tick. A selected
+        # project was already resolved by the app's normal REST load; unknown
+        # targets are ignored rather than inducing a registry scan.
+        project = self._project_registry.get(project_id)
+        if project is None:
+            return
+        epoch = _query_int(query, 'watch_namespace_epoch')
+        key = (project.project_id, agent, epoch)
+        now = self._monotonic_clock()
+        target = _InvalidationWatchTarget(
+            project_id=project.project_id,
+            project_short_name=project.public_display_name,
+            agent=agent,
+            namespace_epoch=epoch,
+            provider=_query_text(query, 'watch_provider'),
+            expires_monotonic=now + _INVALIDATION_WATCH_TARGET_TTL_SECONDS,
+        )
+        with self._invalidation_watch_lock:
+            self._invalidation_watch_targets[key] = target
+            self._invalidation_watch_targets.move_to_end(key)
+            while len(self._invalidation_watch_targets) > _INVALIDATION_WATCH_TARGET_LIMIT:
+                self._invalidation_watch_targets.popitem(last=False)
+
+    def _selected_invalidation_watch_snapshots(self) -> list[MobileInvalidationSnapshot]:
+        now = self._monotonic_clock()
+        with self._invalidation_watch_lock:
+            expired = [
+                key for key, target in self._invalidation_watch_targets.items()
+                if target.expires_monotonic < now
+            ]
+            for key in expired:
+                self._invalidation_watch_targets.pop(key, None)
+            targets = list(self._invalidation_watch_targets.values())
+            self._invalidation_audit['watch_refreshes'] += 1
+        snapshots: list[MobileInvalidationSnapshot] = []
+        for target in targets:
+            project = self._project_registry.get(target.project_id)
+            if project is None:
                 continue
-            snapshots.extend(_notification_snapshots_for_project(project, payload, observed_at=self._clock()))
+            # Native fingerprints use stat/read of provider-owned local files;
+            # no ccbd project_view or mobile conversation HTTP/RPC occurs here.
+            fingerprint = _agent_native_conversation_cache_fingerprint(
+                project.project_root, agent=target.agent, provider=target.provider
+            )
+            digest = hashlib.sha256(repr(fingerprint).encode('utf-8')).hexdigest()[:24]
+            snapshots.append(MobileInvalidationSnapshot(
+                project_id=target.project_id,
+                project_short_name=target.project_short_name,
+                namespace_epoch=target.namespace_epoch,
+                agent=target.agent,
+                activity_state='unknown',
+                conversation_fingerprint=digest,
+                observed_at=self._clock(),
+            ))
+        with self._invalidation_watch_lock:
+            self._invalidation_audit['watch_targets_checked'] += len(snapshots)
         return snapshots
 
     def _mobile_file_dir(self, project_id: str, agent: str, file_id: str) -> Path:
@@ -1277,18 +1758,10 @@ class MobileGatewayService:
         self,
         projects: tuple[MobileGatewayProject, ...],
     ) -> dict[str, dict[str, object]]:
-        if len(projects) <= 1:
-            return {
-                project.project_id: self._project_list_health(project)
-                for project in projects
-            }
-        max_workers = min(_PROJECT_LIST_HEALTH_WORKERS, len(projects))
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            health_items = executor.map(self._project_list_health, projects)
-            return {
-                project.project_id: health
-                for project, health in zip(projects, health_items)
-            }
+        return {
+            project.project_id: self._project_list_health(project)
+            for project in projects
+        }
 
     def _project_list_health(self, project: MobileGatewayProject) -> dict[str, object]:
         try:
@@ -1307,6 +1780,11 @@ class MobileGatewayService:
         allow_refresh: bool,
         deadline: float,
     ) -> tuple[dict[str, object], bool]:
+        if self._mode == 'loopback_server_registry':
+            return self._server_project_activity_summary(
+                project,
+                allow_refresh=allow_refresh,
+            )
         store_record = (
             self._project_activity_store.project(project.project_id)
             if self._project_activity_store is not None
@@ -1353,6 +1831,49 @@ class MobileGatewayService:
         merged.update(fresh_summary)
         return merged, attempted_refresh
 
+    def _server_project_activity_summary(
+        self,
+        project: MobileGatewayProject,
+        *,
+        allow_refresh: bool,
+    ) -> tuple[dict[str, object], bool]:
+        if self._project_activity_store is None:
+            return {}, False
+        store_record = self._project_activity_store.project(project.project_id)
+        summary = _project_activity_summary_from_record(store_record)
+        if not allow_refresh or not _project_activity_record_stale(
+            store_record,
+            now_text=self._clock(),
+            max_age_seconds=_PROJECT_ACTIVITY_REFRESH_TTL_SECONDS,
+        ):
+            return summary, False
+        with self._project_activity_refresh_lock:
+            if project.project_id in self._project_activity_refreshing:
+                return summary, False
+            self._project_activity_refreshing.add(project.project_id)
+        future = self._submit_background(lambda: self._refresh_server_project_activity(project))
+        if future is None:
+            with self._project_activity_refresh_lock:
+                self._project_activity_refreshing.discard(project.project_id)
+            return summary, False
+        return summary, True
+
+    def _refresh_server_project_activity(self, project: MobileGatewayProject) -> None:
+        try:
+            view_payload = self._request_project_view(project)
+            fresh_summary = _project_activity_summary_from_view(view_payload)
+            if self._project_activity_store is not None:
+                self._project_activity_store.record_summary(
+                    project_id=project.project_id,
+                    summary=fresh_summary,
+                    checked_at=self._clock(),
+                )
+        except Exception:
+            pass
+        finally:
+            with self._project_activity_refresh_lock:
+                self._project_activity_refreshing.discard(project.project_id)
+
     def _record_project_opened(self, project_id: str) -> None:
         if self._project_activity_store is None:
             return
@@ -1376,6 +1897,8 @@ class MobileGatewayService:
             pass
 
     def _request_project_view(self, project: MobileGatewayProject) -> dict[str, object]:
+        with self._invalidation_watch_lock:
+            self._invalidation_audit['ccbd_project_view_requests'] += 1
         try:
             payload = project.client().project_view(schema_version=1)
         except CcbdClientError as exc:
@@ -1392,15 +1915,14 @@ class MobileGatewayService:
     ) -> dict[str, object]:
         if self._project_activity_store is None:
             return self._request_project_view(project)
-        executor = ThreadPoolExecutor(max_workers=1)
-        future = executor.submit(self._request_project_view, project)
+        future = self._submit_background(lambda: self._request_project_view(project))
+        if future is None:
+            raise MobileGatewayError('project activity refresh is busy', status_code=503)
         try:
             return future.result(timeout=max(0.01, timeout_seconds))
         except FutureTimeoutError as exc:
             future.cancel()
             raise MobileGatewayError('project activity unavailable', status_code=503) from exc
-        finally:
-            executor.shutdown(wait=False, cancel_futures=True)
 
     def _terminal_attach_target(self, record: dict[str, object]) -> TerminalAttachTarget:
         project = self._require_project(str(record.get('project_id') or ''))
@@ -1636,58 +2158,6 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
             except (BrokenPipeError, ConnectionResetError):
                 return
 
-        def _send_notification_stream(self) -> None:
-            once = service.notification_stream_once_from_path(self.path)
-            try:
-                events = service.notification_events_since(self.path, self.headers)
-            except MobileGatewayError as exc:
-                self._send_json(exc.status_code, {
-                    'schema_version': _SCHEMA_VERSION,
-                    'status': 'error',
-                    'error': _error_text(exc),
-                })
-                return
-            self.send_response(200)
-            self.send_header('content-type', 'text/event-stream; charset=utf-8')
-            self.send_header('cache-control', 'no-cache')
-            self.send_header('connection', 'close' if once else 'keep-alive')
-            self.end_headers()
-            last_event_id = self._write_notification_events(events)
-            if once:
-                self.close_connection = True
-                return
-            while True:
-                try:
-                    time.sleep(_NOTIFICATION_STREAM_POLL_SECONDS)
-                    events = service.notification_events_since(
-                        self.path,
-                        self.headers,
-                        last_event_id=last_event_id,
-                    )
-                    next_id = self._write_notification_events(events)
-                    if next_id is not None:
-                        last_event_id = next_id
-                    elif not self._write_sse_bytes(b': keepalive\n\n'):
-                        return
-                except (BrokenPipeError, ConnectionError, OSError):
-                    return
-
-        def _write_notification_events(self, events: list[dict[str, object]]) -> str | None:
-            last_event_id = None
-            for event in events:
-                if not self._write_sse_bytes(encode_sse_event(event)):
-                    return last_event_id
-                last_event_id = str(event.get('id') or '') or last_event_id
-            return last_event_id
-
-        def _write_sse_bytes(self, body: bytes) -> bool:
-            try:
-                self.wfile.write(body)
-                self.wfile.flush()
-                return True
-            except (BrokenPipeError, ConnectionError, OSError):
-                return False
-
         def _read_json_body(self) -> dict[str, object]:
             length_text = self.headers.get('content-length') or '0'
             try:
@@ -1714,7 +2184,12 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                 raise ValueError('request body too large')
             return self.rfile.read(length) if length else b''
 
-    return ThreadingHTTPServer((listen.host, listen.port), _Handler)
+    class _GatewayServer(ThreadingHTTPServer):
+        def server_close(self) -> None:
+            service.close()
+            super().server_close()
+
+    return _GatewayServer((listen.host, listen.port), _Handler)
 
 
 def _redact_project_view_payload(payload: dict[str, object]) -> dict[str, object]:
@@ -1924,6 +2399,58 @@ def _notification_snapshots_for_project(
     return snapshots
 
 
+def _invalidation_snapshots_for_project(
+    project: MobileGatewayProject,
+    payload: dict[str, object],
+    *,
+    observed_at: str,
+) -> list[MobileInvalidationSnapshot]:
+    """Build a low-sensitive, per-agent change fingerprint for mobile SSE.
+
+    File metadata is hashed before it leaves the gateway.  The app receives no
+    path, terminal output, native transcript, or device credential in an
+    invalidation event and follows it with its normal authenticated REST read.
+    """
+    view = _map(payload.get('view'))
+    cache = _map(payload.get('cache'))
+    project_record = _map(view.get('project'))
+    namespace = _map(view.get('namespace'))
+    namespace_epoch = _optional_int(namespace.get('epoch'))
+    generated_at = _optional_text(cache.get('generated_at')) or observed_at
+    project_short_name = (
+        _optional_text(project_record.get('display_name'))
+        or _optional_text(project_record.get('name'))
+        or project.public_display_name
+    )
+    snapshots: list[MobileInvalidationSnapshot] = []
+    for item in _iterable(view.get('agents')):
+        agent_record = _map(item)
+        agent_name = _optional_text(agent_record.get('name'))
+        if not agent_name:
+            continue
+        provider = _optional_text(agent_record.get('provider'))
+        fingerprint = _agent_native_conversation_cache_fingerprint(
+            project.project_root,
+            agent=agent_name,
+            provider=provider,
+        )
+        fingerprint_text = hashlib.sha256(
+            repr(fingerprint).encode('utf-8')
+        ).hexdigest()[:24]
+        snapshots.append(
+            MobileInvalidationSnapshot(
+                project_id=project.project_id,
+                project_short_name=project_short_name,
+                namespace_epoch=namespace_epoch,
+                agent=agent_name,
+                activity_state=(_optional_text(agent_record.get('activity_state')) or 'unknown').lower(),
+                conversation_fingerprint=fingerprint_text,
+                observed_at=generated_at,
+            )
+        )
+    return snapshots
+
+
 def _ccbd_health_summary(payload: dict[str, object]) -> dict[str, object]:
     return {
         'reachable': True,
@@ -1940,6 +2467,12 @@ def _project_available_for_mobile_list(payload: dict[str, object]) -> bool:
         str(payload.get('health') or '').strip().lower() == 'healthy'
         and str(payload.get('mount_state') or '').strip().lower() == 'mounted'
     )
+
+
+def _project_health_refresh_failed(payload: dict[str, object]) -> bool:
+    health = str(payload.get('health') or '').strip().lower()
+    mount_state = str(payload.get('mount_state') or '').strip().lower()
+    return health in {'', 'unknown', 'unreachable'} or mount_state in {'', 'unknown', 'unavailable'}
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -2003,22 +2536,63 @@ def _attachment_records(value: object) -> list[dict[str, object]]:
                 'mime_type': mime_type,
                 'size_bytes': _int(record.get('size_bytes'), 0),
                 'kind': _optional_text(record.get('kind')) or ('image' if mime_type.startswith('image/') else 'document'),
+                **(
+                    {'project_relative_path': project_relative_path}
+                    if (project_relative_path := _optional_text(record.get('project_relative_path')))
+                    else {}
+                ),
+                **(
+                    {'project_path': project_path}
+                    if (project_path := _optional_text(record.get('project_path')))
+                    else {}
+                ),
             }
         )
     return records
 
 
+def _message_submit_body(body: str, attachments: list[dict[str, object]]) -> str:
+    attachment_body = _attachment_submit_body(attachments)
+    if not body:
+        return attachment_body
+    if not attachments:
+        return body
+    return f'{body}\n\n{attachment_body}'
+
+
 def _attachment_submit_body(attachments: list[dict[str, object]]) -> str:
-    names = [
-        str(item.get('file_name') or 'attachment')
-        for item in attachments
-        if str(item.get('file_name') or '').strip()
-    ]
-    if not names:
+    lines: list[str] = []
+    for item in attachments:
+        name = str(item.get('file_name') or 'attachment').strip() or 'attachment'
+        mime_type = str(item.get('mime_type') or 'application/octet-stream')
+        size_bytes = _int(item.get('size_bytes'), 0)
+        file_id = str(item.get('file_id') or '').strip()
+        project_relative_path = str(item.get('project_relative_path') or '').strip()
+        if project_relative_path:
+            lines.append(
+                f'- [{name}]({project_relative_path}) '
+                f'({mime_type}, {size_bytes} bytes, file id: {file_id})'
+            )
+        else:
+            lines.append(f'- {name} ({mime_type}, {size_bytes} bytes, file id: {file_id})')
+    if not lines:
         return 'Uploaded attachment'
-    if len(names) == 1:
-        return f'Uploaded attachment: {names[0]}'
-    return f'Uploaded attachments: {", ".join(names)}'
+    return 'Attached files:\n' + '\n'.join(lines)
+
+
+def _mobile_project_upload_relative_path(*, agent: str, file_id: str, file_name: str) -> Path:
+    return Path(*_MOBILE_PROJECT_UPLOAD_DIR) / _safe_path_segment(agent) / (
+        f'{_safe_path_segment(file_id)}-{_safe_path_segment(file_name)}'
+    )
+
+
+def _workspace_artifact_relative_path_allowed(relative_path: Path) -> bool:
+    parts = relative_path.parts
+    if not parts or parts[0] == '.git':
+        return False
+    if parts[0] != '.ccb':
+        return True
+    return parts[: len(_MOBILE_PROJECT_UPLOAD_DIR)] == _MOBILE_PROJECT_UPLOAD_DIR
 
 
 def _safe_path_segment(value: object) -> str:
@@ -2144,7 +2718,6 @@ def _agent_conversation_items(
     agent: str,
     namespace_epoch: int,
     project_root: Path,
-    terminal_history: dict[str, object] | None = None,
     mobile_files_dir: Path | None = None,
     limit: int | None = None,
     cursor: str | None = None,
@@ -2162,255 +2735,111 @@ def _agent_conversation_items(
         limit=limit,
         cursor=cursor,
     )
-    if native_items.items:
+    # Codex/Claude files are the authority whenever those providers are in
+    # use, including an intentionally empty native history. Other providers do
+    # not all expose a native transcript, so retain the safe structured CCB
+    # records. Terminal scrollback is deliberately excluded from this path.
+    if provider_key in {'', 'codex', 'claude'} or native_items.items:
         return native_items
+    return _agent_structured_fallback_conversation_items(
+        view_payload,
+        project_root=project_root,
+        project_id=project_id,
+        agent=agent,
+        mobile_files_dir=mobile_files_dir,
+    )
 
-    items: list[dict[str, object]] = [
-        {
-            'id': f'status-{agent}',
-            'agent': agent,
-            'kind': 'status_event',
-            'title': 'Agent status',
-            'body': _agent_status_summary(agent_record),
-            'format': 'plain',
-            'source': 'project_view',
-        }
-    ]
-    content = _map(view.get('content'))
-    for item in _iterable(content.get('items')):
-        content_item = _map(item)
-        if not _conversation_item_belongs_to_agent(content_item, agent):
-            continue
-        content_id = str(content_item.get('id') or f'content-{len(items)}')
-        body = (
-            _optional_text(content_item.get('text'))
-            or _optional_text(content_item.get('body'))
-            or ''
-        )
-        if not body:
-            continue
-        reply_item = {
-            'id': f'reply-{content_id}',
-            'agent': agent,
-            'kind': 'agent_reply',
-            'title': _optional_text(content_item.get('title')) or 'Agent reply',
-            'body': body,
-            'format': _optional_text(content_item.get('format')) or 'plain',
-            'content_id': content_id,
-            'source': _optional_text(content_item.get('source')) or 'content',
-        }
-        _apply_mobile_conversation_timing(
-            reply_item,
-            sent_at=content_item.get('sent_at') or content_item.get('created_at'),
-            started_at=content_item.get('started_at') or content_item.get('execution_started_at'),
-            completed_at=(
-                content_item.get('completed_at')
-                or content_item.get('finished_at')
-                or content_item.get('execution_completed_at')
-            ),
-            duration_ms=content_item.get('duration_ms'),
-            duration_seconds=content_item.get('duration_seconds'),
-        )
-        items.append(
-            reply_item
-        )
-    seen_item_ids = {str(item.get('id') or '') for item in items}
 
-    if provider_key != 'claude':
-        terminal_items = _terminal_history_conversation_items(
-            terminal_history,
-            agent=agent,
-        )
-        if terminal_items:
-            return _ConversationItemsResult(terminal_items)
+def _agent_structured_fallback_conversation_items(
+    view_payload: dict[str, object],
+    *,
+    project_root: Path,
+    project_id: str,
+    agent: str,
+    mobile_files_dir: Path | None,
+) -> _ConversationItemsResult:
+    """Safe fallback for providers without a provider-native transcript.
 
+    Only comms, completion snapshots, and durable job records participate.
+    In particular this never reads ProjectView content as a terminal proxy and
+    never invokes the explicit tmux-history surface.
+    """
+    view = _map(view_payload.get('view'))
+    items: list[dict[str, object]] = []
+    seen: set[str] = set()
     for item in _agent_history_conversation_items(
         project_root,
         project_id=project_id,
         agent=agent,
+        mobile_files_dir=mobile_files_dir,
     ):
         item_id = str(item.get('id') or '')
-        if item_id and item_id in seen_item_ids:
-            continue
-        items.append(item)
-        if item_id:
-            seen_item_ids.add(item_id)
-    comm_records = [_map(item) for item in _iterable(view.get('comms'))]
-    comm_records = [
-        item
-        for _, item in sorted(
-            enumerate(comm_records),
-            key=lambda indexed: (
-                _optional_text(indexed[1].get('created_at'))
-                or _optional_text(indexed[1].get('updated_at'))
-                or '9999',
-                indexed[0],
-            ),
-        )
-    ]
-    for comm in comm_records:
+        if item_id and item_id not in seen:
+            items.append(item)
+            seen.add(item_id)
+    comms = [_map(item) for item in _iterable(view.get('comms'))]
+    comms.sort(key=lambda item: (
+        _optional_text(item.get('sent_at'))
+        or _optional_text(item.get('created_at'))
+        or _optional_text(item.get('updated_at'))
+        or '',
+        _optional_text(item.get('id')) or '',
+    ))
+    for comm in comms:
         if not _conversation_item_belongs_to_agent(comm, agent):
             continue
+        comm_id = _optional_text(comm.get('id')) or f'comms-{len(items)}'
         body = (
-            _optional_text(comm.get('body'))
-            or _optional_text(comm.get('text'))
-            or _optional_text(comm.get('message'))
-            or _optional_text(comm.get('body_preview'))
+            _optional_text(comm.get('body')) or _optional_text(comm.get('text'))
+            or _optional_text(comm.get('message')) or _optional_text(comm.get('body_preview')) or ''
         )
-        reply_dict = _completion_reply_for_job(
+        created_at = _first_mobile_conversation_timestamp(
+            comm.get('sent_at'), comm.get('created_at'), comm.get('updated_at')
+        )
+        if body and f'user-{comm_id}' not in seen:
+            user = {
+                'id': f'user-{comm_id}', 'agent': agent, 'kind': 'user_message',
+                'title': 'You', 'body': body,
+                'format': _optional_text(comm.get('format')) or 'markdown',
+                'source': 'comms', 'state': 'sent',
+                'attachments': _attachment_records(comm.get('attachments')),
+            }
+            _apply_mobile_conversation_timing(user, sent_at=created_at)
+            items.append(user)
+            seen.add(str(user['id']))
+        completion = _completion_reply_for_job(
             project_root,
-            _optional_text(comm.get('id')),
+            comm_id,
             project_id=project_id,
             agent=agent,
+            mobile_files_dir=mobile_files_dir,
         )
-        reply = str(reply_dict.get('body') or '')
-        reply_attachments = _attachment_records(reply_dict.get('attachments'))
-        attachments = _attachment_records(comm.get('attachments'))
-        comm_created_at = _first_mobile_conversation_timestamp(
-            comm.get('sent_at'),
-            comm.get('created_at'),
-            comm.get('updated_at'),
-        )
-        reply_completed_at = _first_mobile_conversation_timestamp(
-            reply_dict.get('completed_at'),
-            reply_dict.get('sent_at'),
-            comm.get('completed_at'),
-            comm.get('finished_at'),
-            comm.get('updated_at'),
-            comm_created_at,
-        )
-        if reply:
-            comm_id = str(comm.get('id') or f'comms-{len(items)}')
-            if body:
-                user_id = f'user-{comm_id}'
-                if user_id in seen_item_ids:
-                    continue
-                user_item = {
-                    'id': user_id,
-                    'agent': agent,
-                    'kind': 'user_message',
-                    'title': 'You',
-                    'body': body,
-                    'format': _optional_text(comm.get('format')) or 'markdown',
-                    'source': 'mobile',
-                    'state': 'sent',
-                    'attachments': attachments,
-                }
-                _apply_mobile_conversation_timing(user_item, sent_at=comm_created_at)
-                items.append(
-                    user_item
-                )
-                seen_item_ids.add(user_id)
-            reply_id = f'reply-{comm_id}'
-            if reply_id in seen_item_ids:
-                continue
-            reply_item = {
-                'id': reply_id,
-                'agent': agent,
-                'kind': 'agent_reply',
+        reply = _optional_text(completion.get('body')) or ''
+        reply_id = f'reply-{comm_id}'
+        if reply and reply_id not in seen:
+            completed_at = _first_mobile_conversation_timestamp(
+                completion.get('completed_at'), completion.get('sent_at'),
+                comm.get('completed_at'), comm.get('finished_at'), comm.get('updated_at'), created_at,
+            )
+            response = {
+                'id': reply_id, 'agent': agent, 'kind': 'agent_reply',
                 'title': _optional_text(comm.get('title')) or 'Agent reply',
-                'body': reply,
-                'format': 'markdown',
-                'source': 'completion_snapshot',
-                'attachments': reply_attachments,
+                'body': reply, 'format': 'markdown', 'source': 'completion_snapshot',
+                'attachments': _attachment_records(completion.get('attachments')),
             }
             _apply_mobile_conversation_timing(
-                reply_item,
-                sent_at=reply_completed_at,
-                started_at=reply_dict.get('started_at') or comm_created_at,
-                completed_at=reply_completed_at,
-                duration_ms=reply_dict.get('duration_ms'),
-                duration_seconds=reply_dict.get('duration_seconds'),
+                response, sent_at=completed_at, started_at=completion.get('started_at') or created_at,
+                completed_at=completed_at, duration_ms=completion.get('duration_ms'),
+                duration_seconds=completion.get('duration_seconds'),
             )
-            items.append(
-                reply_item
-            )
-            seen_item_ids.add(reply_id)
-            continue
-        if not body:
-            continue
-        comm_id = str(comm.get('id') or f'comms-{len(items)}')
-        item_id = f'comms-{comm_id}'
-        if item_id in seen_item_ids:
-            continue
-        comm_item = {
-            'id': item_id,
-            'agent': agent,
-            'kind': 'comms_item',
-            'title': _optional_text(comm.get('title')) or 'Comms',
-            'body': body,
-            'format': _optional_text(comm.get('format')) or 'plain',
-            'source': _optional_text(comm.get('source')) or 'project_view',
-            'attachments': attachments,
-        }
-        _apply_mobile_conversation_timing(comm_item, sent_at=comm_created_at)
-        items.append(
-            comm_item
-        )
-        seen_item_ids.add(item_id)
+            items.append(response)
+            seen.add(reply_id)
+    items.sort(key=lambda item: (
+        _optional_text(item.get('sent_at')) or _optional_text(item.get('completed_at')) or '',
+        0 if item.get('kind') == 'user_message' else 1,
+        str(item.get('id') or ''),
+    ))
     return _ConversationItemsResult(items)
-
-
-def _terminal_history_conversation_items(
-    history: dict[str, object] | None,
-    *,
-    agent: str,
-) -> list[dict[str, object]]:
-    history = _map(history)
-    if not history:
-        return []
-    history_scope = _optional_text(history.get('history_scope')) or 'tmux_scrollback'
-    source_pane_id = _optional_text(history.get('source_pane_id'))
-    items: list[dict[str, object]] = []
-    for block in _iterable(history.get('blocks')):
-        block_record = _map(block)
-        text = _optional_text(block_record.get('text')) or ''
-        if not text:
-            continue
-        block_id = _optional_text(block_record.get('id')) or f'history-{len(items) + 1}'
-        block_type = _optional_text(block_record.get('type')) or 'log'
-        is_input = block_type == 'command'
-        items.append(
-            {
-                'id': f'terminal-history-{block_id}',
-                'agent': agent,
-                'kind': 'user_message' if is_input else 'agent_reply',
-                'title': 'Terminal input'
-                if is_input
-                else (_optional_text(block_record.get('title')) or 'Terminal output'),
-                'body': _terminal_history_body(text, is_input=is_input),
-                'format': 'plain',
-                'source': _terminal_conversation_source(
-                    history_scope,
-                    source_pane_id=source_pane_id,
-                    is_input=is_input,
-                ),
-                'attachments': [],
-            }
-        )
-    return items
-
-
-def _terminal_history_body(text: str, *, is_input: bool) -> str:
-    body = text.strip()
-    if not is_input or body.startswith('$ '):
-        return body
-    return '$ ' + body
-
-
-def _terminal_conversation_source(
-    history_scope: str,
-    *,
-    source_pane_id: str | None,
-    is_input: bool,
-) -> str:
-    parts = [
-        'terminal input' if is_input else 'tmux output',
-        history_scope,
-    ]
-    if source_pane_id:
-        parts.append(source_pane_id)
-    return ' / '.join(parts)
 
 
 def _agent_native_conversation_items(
@@ -2903,7 +3332,7 @@ def _codex_native_conversation_latest_page(
     limit: int,
 ) -> _ConversationItemsResult:
     items: list[dict[str, object]] = []
-    parsed_thread_count = 0
+    total_chunk_count = 0
     has_older = False
     indexed_rows = list(enumerate(rows))
     latest_rows = sorted(
@@ -2915,17 +3344,17 @@ def _codex_native_conversation_latest_page(
         reverse=True,
     )
     for row_index, row in latest_rows:
-        if parsed_thread_count >= _CODEX_NATIVE_TAIL_THREAD_LIMIT:
+        if total_chunk_count >= _CODEX_NATIVE_TAIL_CHUNK_LIMIT:
             has_older = True
             break
         rollout_path = _codex_rollout_path(row, home=home)
         if rollout_path is None:
             continue
         before_offset: int | None = None
-        parsed_thread_count += 1
         chunk_count = 0
         while True:
             chunk_count += 1
+            total_chunk_count += 1
             tail_lines, complete = _codex_rollout_tail_lines(
                 rollout_path,
                 line_limit=_CODEX_NATIVE_TAIL_LINE_LIMIT,
@@ -2963,7 +3392,10 @@ def _codex_native_conversation_latest_page(
             if complete:
                 break
             has_older = True
-            if chunk_count >= _CODEX_NATIVE_TAIL_CHUNK_LIMIT:
+            if (
+                chunk_count >= _CODEX_NATIVE_TAIL_CHUNK_LIMIT
+                or total_chunk_count >= _CODEX_NATIVE_TAIL_CHUNK_LIMIT
+            ):
                 break
             before_offset = tail_lines[0][0]
         if len(_coalesce_codex_native_agent_replies(_codex_sort_native_items(items))) >= limit * 3:
@@ -3304,7 +3736,7 @@ def _codex_rollout_conversation_items(
             agent=agent,
             mobile_files_dir=mobile_files_dir,
         )
-        body = _clean_native_message_text(body)
+        body = _clean_codex_native_message_text(body)
         if not body:
             continue
         item_id = f'codex-{thread_id}-{line_number}-{role}'
@@ -3697,7 +4129,7 @@ def _codex_event_message_conversation_item(
         agent=agent,
         mobile_files_dir=mobile_files_dir,
     )
-    body = _clean_native_message_text(body)
+    body = _clean_codex_native_message_text(body)
     if not body:
         return None
     if payload_type == 'user_message':
@@ -3784,7 +4216,7 @@ def _inject_workspace_artifacts(
                 relative_path = target_path.relative_to(project_root_resolved)
             except ValueError:
                 return match.group(0)
-            if relative_path.parts and relative_path.parts[0] in {'.ccb', '.git'}:
+            if not _workspace_artifact_relative_path_allowed(relative_path):
                 return match.group(0)
             if not target_path.is_file():
                 return match.group(0)
@@ -3859,11 +4291,38 @@ def _clean_native_message_text(text: str) -> str:
     return '\n'.join(lines).strip()
 
 
+_CODEX_LOCAL_COMMAND_CAVEAT_RE = re.compile(
+    r'^\s*<local-command-caveat>.*?</local-command-caveat>\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+_CODEX_LOCAL_COMMAND_RE = re.compile(
+    r'^\s*<command-name>(?P<name>.*?)</command-name>\s*'
+    r'<command-message>.*?</command-message>\s*'
+    r'<command-args>(?P<args>.*?)</command-args>\s*$',
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def _clean_codex_native_message_text(text: str) -> str:
+    cleaned = _clean_native_message_text(text)
+    if not cleaned or _CODEX_LOCAL_COMMAND_CAVEAT_RE.fullmatch(cleaned):
+        return ''
+    command = _CODEX_LOCAL_COMMAND_RE.fullmatch(cleaned)
+    if command is None:
+        return cleaned
+    name = command.group('name').strip()
+    if name.casefold() == '/clear':
+        return ''
+    args = command.group('args').strip()
+    return f'{name} {args}'.strip()
+
+
 def _agent_history_conversation_items(
     project_root: Path,
     *,
     project_id: str,
     agent: str,
+    mobile_files_dir: Path | None = None,
 ) -> list[dict[str, object]]:
     latest_by_job: dict[str, dict[str, object]] = {}
     path = project_root / '.ccb' / 'agents' / agent / 'jobs.jsonl'
@@ -3934,6 +4393,7 @@ def _agent_history_conversation_items(
             record,
             project_id=project_id,
             agent=agent,
+            mobile_files_dir=mobile_files_dir,
         )
         reply = str(reply_dict.get('body') or '')
         if reply:
@@ -3992,6 +4452,7 @@ def _completion_reply_from_history_job(
     *,
     project_id: str,
     agent: str,
+    mobile_files_dir: Path | None = None,
 ) -> dict[str, object]:
     job_id = _optional_text(record.get('job_id'))
     terminal_decision = _map(record.get('terminal_decision'))
@@ -4001,6 +4462,7 @@ def _completion_reply_from_history_job(
         job_id,
         project_id=project_id,
         agent=agent,
+        mobile_files_dir=mobile_files_dir,
     )
     if not body:
         return reply_dict
@@ -4060,6 +4522,7 @@ def _completion_reply_for_job(
     *,
     project_id: str,
     agent: str,
+    mobile_files_dir: Path | None = None,
 ) -> dict[str, object]:
     if not job_id:
         return {'body': '', 'attachments': []}
@@ -4073,6 +4536,13 @@ def _completion_reply_for_job(
         _optional_text(latest_decision.get('reply'))
         or _optional_text(payload.get('latest_reply_preview'))
         or ''
+    )
+    body = _inject_workspace_artifacts(
+        body,
+        project_root=project_root,
+        project_id=project_id,
+        agent=agent,
+        mobile_files_dir=mobile_files_dir,
     )
     started_at = _first_mobile_conversation_timestamp(
         latest_decision.get('started_at'),
@@ -4110,7 +4580,14 @@ def _completion_reply_for_job(
     if not attachments:
         attachments = _artifact_link_attachments(
             body,
-            file_roots=_mobile_file_roots_for_job(project_root, agent, job_id),
+            file_roots=[
+                path
+                for path in (
+                    mobile_files_dir,
+                    *_mobile_file_roots_for_job(project_root, agent, job_id),
+                )
+                if path is not None
+            ],
             project_id=project_id,
             agent=agent,
         )

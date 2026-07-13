@@ -17,6 +17,10 @@ Date: 2026-06-13
 - Should next-wave providers get provider-native skill/instruction projection,
   or should the first release keep inherited ask guidance in prompt wrapping
   only until each native surface is source-confirmed?
+- Does the reported Grok ask cross-window behavior disappear after native
+  `.grok/skills/ask/SKILL.md` projection, or does the two-instance blackbox
+  test expose a separate session, leader-socket, or provider-instance binding
+  defect?
 
 ## Resolved
 
@@ -64,3 +68,8 @@ Date: 2026-06-13
   `zai` CLIs that support `--prompt`; keep official `@z_ai/coding-helper` out
   of provider runtime because it configures other coding tools rather than
   serving as an ask-completing agent.
+- Grok completion decision: successful result collection requires a
+  provider-native turn-end event such as `type=end` with
+  `stopReason=EndTurn`. `CCB_REQ_ID` is attribution metadata only; process
+  exit, model-printed CCB completion text, and internal `TURN_BOUNDARY` items
+  cannot independently complete a Grok job.

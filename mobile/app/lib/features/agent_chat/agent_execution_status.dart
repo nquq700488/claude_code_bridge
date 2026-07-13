@@ -15,12 +15,20 @@ class AgentExecutionStatus {
 AgentExecutionStatus agentExecutionStatus({
   required CcbAgent agent,
   required bool isAwaitingAgentResponse,
-  required bool isLoadingConversation,
   bool hasLocalExecutionException = false,
 }) {
   final state = _normalized(agent.activityState);
   final source = _normalized(agent.activitySource);
   final reason = _normalized(agent.activityReason);
+  // A failure must never be painted over by a retained working marker.
+  if (_isExceptionActivity(state: state, source: source, reason: reason) ||
+      hasLocalExecutionException) {
+    return const AgentExecutionStatus(
+      label: 'Exception',
+      state: 'exception',
+      isRefreshing: false,
+    );
+  }
   if (_isWorkingActivity(
     state: state,
     source: source,
@@ -33,31 +41,10 @@ AgentExecutionStatus agentExecutionStatus({
       isRefreshing: state == 'pending',
     );
   }
-  if (_isExceptionActivity(state: state, source: source, reason: reason)) {
-    return const AgentExecutionStatus(
-      label: 'Exception',
-      state: 'exception',
-      isRefreshing: false,
-    );
-  }
   if (isAwaitingAgentResponse) {
     return const AgentExecutionStatus(
       label: 'Working',
       state: 'working',
-      isRefreshing: false,
-    );
-  }
-  if (isLoadingConversation) {
-    return const AgentExecutionStatus(
-      label: 'Working',
-      state: 'working',
-      isRefreshing: true,
-    );
-  }
-  if (hasLocalExecutionException) {
-    return const AgentExecutionStatus(
-      label: 'Exception',
-      state: 'exception',
       isRefreshing: false,
     );
   }
@@ -79,7 +66,6 @@ bool agentHasSourceWorkingActivity(CcbAgent agent) {
   final status = agentExecutionStatus(
     agent: agent,
     isAwaitingAgentResponse: false,
-    isLoadingConversation: false,
   );
   return status.state == 'working';
 }

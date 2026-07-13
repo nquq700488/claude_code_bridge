@@ -40,7 +40,7 @@ The skill should present supported knobs in a structured way:
 - window names and agent placement;
 - agent names and providers;
 - Role Pack bindings;
-- managed Neovim tool window;
+- optional Rich non-agent pane;
 - sidebar mode and basic layout.
 
 ### Workspace
@@ -54,6 +54,7 @@ The skill should present supported knobs in a structured way:
 ### Model And API
 
 - `model`;
+- `thinking` for tested Codex and DeepSeek mappings;
 - `key`;
 - `url`;
 - legacy nested `[agents.<name>.api]` only as migration input.
@@ -84,9 +85,8 @@ The skill should present supported knobs in a structured way:
   and advanced workspace fields. Do not write redundant `provider`,
   `workspace_mode = "inplace"`, or `workspace_mode = "git-worktree"` fields in
   overlays.
-- Include `[tool_windows.neovim]` by default unless the user asks to disable it.
-- Disable Neovim by removing the `[tool_windows.neovim]` block, not by writing
-  `enabled = false`.
+- Use Rich as the only built-in non-agent pane when the user requests a file
+  surface. Do not generate removed editor-tool fields.
 - Keep provider credentials inherited by default.
 - Do not write secrets unless the user explicitly provides and accepts that they
   will be stored in config.

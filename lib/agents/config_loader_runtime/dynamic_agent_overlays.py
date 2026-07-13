@@ -300,6 +300,7 @@ def _agent_spec_from_state(state_path: Path, state: dict[str, object]) -> AgentS
             permission_default=PermissionMode.MANUAL,
             queue_policy=QueuePolicy.SERIAL_PER_AGENT,
             model=_optional_string(state.get('model')),
+            thinking=_optional_string(state.get('thinking')),
             startup_args=tuple(str(item) for item in tuple(state.get('startup_args') or ())),
             provider_profile=dict(state.get('provider_profile') or {}),
             role=_optional_string(state.get('role')),

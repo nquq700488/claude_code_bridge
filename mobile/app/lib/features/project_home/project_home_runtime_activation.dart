@@ -80,8 +80,17 @@ class ProjectHomeRuntimeSessionCoordinator {
       preferredProjectId: activation.activeProjectId,
       terminalTransport: terminalTransportFactory(profile),
       projectsFuture: Future<List<CcbProject>>(() async {
-        await verifyProjectHomeGatewayProfile(repository);
-        return sortCcbProjectsByRecentActivity(await repository.listProjects());
+        try {
+          await verifyProjectHomeGatewayProfile(repository);
+          return sortCcbProjectsByRecentActivity(
+            await repository.listProjects(),
+          );
+        } catch (error) {
+          if (error is ProjectHomeGatewayActivationException) {
+            rethrow;
+          }
+          throw projectHomeGatewayActivationExceptionFor(error);
+        }
       }).timeout(projectListTimeout),
     );
   }
@@ -141,11 +150,11 @@ Future<void> verifyProjectHomeGatewayProfile(
     if (error is ProjectHomeGatewayActivationException) {
       rethrow;
     }
-    throw _gatewayActivationExceptionFor(error);
+    throw projectHomeGatewayActivationExceptionFor(error);
   }
 }
 
-ProjectHomeGatewayActivationException _gatewayActivationExceptionFor(
+ProjectHomeGatewayActivationException projectHomeGatewayActivationExceptionFor(
   Object error,
 ) {
   if (error is GatewayHttpException &&

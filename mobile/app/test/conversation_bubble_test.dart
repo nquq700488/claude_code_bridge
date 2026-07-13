@@ -280,7 +280,7 @@ void main() {
     );
   });
 
-  testWidgets('working reply uses normal surface with active border and glow', (
+  testWidgets('working reply uses normal surface with active border and beat', (
     tester,
   ) async {
     final item = CcbConversationItem(
@@ -311,7 +311,7 @@ void main() {
       findsOneWidget,
     );
     expect(
-      find.byKey(const ValueKey('conversation-working-glow-reply-working')),
+      find.byKey(const ValueKey('conversation-working-beat-reply-working')),
       findsOneWidget,
     );
     expect(find.byIcon(Icons.pending_rounded), findsOneWidget);
@@ -332,15 +332,21 @@ void main() {
     expect(shape.side.color, isNot(colorScheme.tertiary));
     expect(shape.side.width, 2.4);
 
+    expect(conversationWorkingBubbleBorderSide(colorScheme).width, 2.4);
     expect(
-      conversationWorkingBubbleBorderSide(colorScheme, 1).width,
-      greaterThan(conversationWorkingBubbleBorderSide(colorScheme, 0).width),
+      find.descendant(
+        of: find.byKey(const ValueKey('conversation-item-reply-working')),
+        matching: find.byType(AnimatedBuilder),
+      ),
+      findsNothing,
     );
     expect(
-      conversationWorkingBubbleGlow(colorScheme, 1).single.blurRadius,
-      greaterThan(
-        conversationWorkingBubbleGlow(colorScheme, 0).single.blurRadius,
-      ),
+      tester
+          .widgetList<DecoratedBox>(find.byType(DecoratedBox))
+          .map((box) => box.decoration)
+          .whereType<BoxDecoration>()
+          .any((decoration) => decoration.boxShadow != null),
+      isFalse,
     );
   });
 
@@ -420,7 +426,7 @@ void main() {
       findsNothing,
     );
     expect(
-      find.byKey(const ValueKey('conversation-working-glow-reply-failed')),
+      find.byKey(const ValueKey('conversation-working-beat-reply-failed')),
       findsNothing,
     );
     expect(find.byIcon(Icons.pending_rounded), findsNothing);
@@ -475,14 +481,10 @@ void main() {
     expect(find.byType(Scrollbar), findsOneWidget);
   });
 
-  testWidgets('expanded bubble scrolling does not notify parent timeline', (
+  testWidgets('expanded bubble keeps a floating collapse action visible', (
     tester,
   ) async {
-    tester.view.physicalSize = const Size(400, 800);
-    tester.view.devicePixelRatio = 1;
-    addTearDown(tester.view.resetPhysicalSize);
-    addTearDown(tester.view.resetDevicePixelRatio);
-
+    final toggledIds = <String>[];
     final item = CcbConversationItem(
       id: 'long-reply',
       agentName: 'lead',
@@ -491,33 +493,107 @@ void main() {
       body: List.generate(80, (index) => 'line $index').join('\n'),
       source: 'completion_snapshot',
     );
-    var parentScrollNotifications = 0;
 
     await tester.pumpWidget(
       MaterialApp(
         home: Scaffold(
-          body: NotificationListener<ScrollNotification>(
-            onNotification: (_) {
-              parentScrollNotifications += 1;
-              return false;
-            },
-            child: ConversationBubble(
-              item: item,
-              expanded: true,
-              onToggleExpanded: (_) {},
-            ),
+          body: ConversationBubble(
+            item: item,
+            expanded: true,
+            onToggleExpanded: toggledIds.add,
           ),
         ),
       ),
     );
 
-    await tester.drag(
-      find.byKey(const ValueKey('conversation-body-viewport-long-reply')),
-      const Offset(0, -500),
+    final floatingButton = find.byKey(
+      const ValueKey('conversation-floating-collapse-long-reply'),
+    );
+    expect(floatingButton, findsOneWidget);
+    expect(tester.widget<Opacity>(floatingButton).opacity, closeTo(0.78, 0.01));
+
+    await tester.tap(
+      find.byKey(const ValueKey('conversation-expand-long-reply')),
     );
     await tester.pumpAndSettle();
+    expect(toggledIds, ['long-reply']);
+  });
 
-    expect(parentScrollNotifications, 0);
+  testWidgets('expanded bubble boundary overscroll hands off to timeline', (
+    tester,
+  ) async {
+    tester.view.physicalSize = const Size(400, 800);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(tester.view.resetPhysicalSize);
+    addTearDown(tester.view.resetDevicePixelRatio);
+
+    final timelineController = ScrollController();
+    addTearDown(timelineController.dispose);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: ListView(
+            key: const ValueKey('parent-timeline'),
+            controller: timelineController,
+            children: const [SizedBox(height: 1200)],
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    timelineController.jumpTo(250);
+    await tester.pump();
+
+    final context = tester.element(
+      find.byKey(const ValueKey('parent-timeline')),
+    );
+    final initialOffset = timelineController.offset;
+    final handedOff = handoffConversationBodyBoundaryOverscroll(
+      OverscrollNotification(
+        metrics: FixedScrollMetrics(
+          minScrollExtent: 0,
+          maxScrollExtent: 800,
+          pixels: 800,
+          viewportDimension: 360,
+          axisDirection: AxisDirection.down,
+          devicePixelRatio: 1,
+        ),
+        context: context,
+        dragDetails: DragUpdateDetails(
+          globalPosition: Offset(200, 200),
+          delta: Offset(0, -48),
+        ),
+        overscroll: 48,
+      ),
+      timelineController,
+    );
+
+    expect(handedOff, isTrue);
+    final afterBottomHandoff = timelineController.offset;
+    expect(afterBottomHandoff, greaterThan(initialOffset));
+
+    final handedBack = handoffConversationBodyBoundaryOverscroll(
+      OverscrollNotification(
+        metrics: FixedScrollMetrics(
+          minScrollExtent: 0,
+          maxScrollExtent: 800,
+          pixels: 0,
+          viewportDimension: 360,
+          axisDirection: AxisDirection.down,
+          devicePixelRatio: 1,
+        ),
+        context: context,
+        dragDetails: DragUpdateDetails(
+          globalPosition: const Offset(200, 200),
+          delta: const Offset(0, 48),
+        ),
+        overscroll: -48,
+      ),
+      timelineController,
+    );
+    expect(handedBack, isTrue);
+    expect(timelineController.offset, lessThan(afterBottomHandoff));
   });
 
   test('unconfirmed pane sends use check pane label', () {

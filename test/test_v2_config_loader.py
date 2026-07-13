@@ -10,6 +10,7 @@ import pytest
 
 from agents.config_identity import project_config_identity_payload
 import agents.config_loader_runtime.io_runtime.documents as config_documents
+import agents.config_loader_runtime.defaults_runtime.project as default_project
 from agents.config_loader import (
     CONFIG_SOURCE_BUILTIN_DEFAULT,
     CONFIG_SOURCE_PROJECT,
@@ -328,43 +329,87 @@ def test_load_project_config_uses_builtin_default_when_project_config_is_missing
 ) -> None:
     project_root = tmp_path / 'repo'
     monkeypatch.setenv('HOME', str(tmp_path / 'empty-home'))
+    monkeypatch.setattr(
+        default_project.shutil,
+        'which',
+        lambda command: '/usr/bin/claude' if command == 'claude' else None,
+    )
     config = build_default_project_config()
-    assert config.default_agents == ('agent1', 'agent2', 'agent3', 'ccb_self')
+    assert config.default_agents == ('demo',)
     assert config.cmd_enabled is False
     assert config.windows_explicit is True
     assert config.entry_window == 'main'
-    assert [window.name for window in config.windows] == ['main', 'ccb_self']
+    assert [window.name for window in config.windows] == ['main']
     assert config.tool_windows == ()
     loaded = load_project_config(project_root)
     assert loaded.source_path is None
     assert loaded.source_kind == CONFIG_SOURCE_BUILTIN_DEFAULT
     assert loaded.used_default is True
-    assert loaded.config.default_agents == ('agent1', 'agent2', 'agent3', 'ccb_self')
+    assert loaded.config.default_agents == ('demo',)
     assert loaded.config.cmd_enabled is False
     assert loaded.config.windows_explicit is True
     assert loaded.config.entry_window == 'main'
-    assert [window.name for window in loaded.config.windows] == ['main', 'ccb_self']
+    assert [window.name for window in loaded.config.windows] == ['main']
     assert loaded.config.tool_windows == ()
-    assert set(loaded.config.agents) == {'agent1', 'agent2', 'agent3', 'ccb_self'}
-    assert loaded.config.agents['agent1'].provider == 'codex'
-    assert loaded.config.agents['agent2'].provider == 'codex'
-    assert loaded.config.agents['agent3'].provider == 'claude'
-    assert loaded.config.agents['ccb_self'].provider == 'claude'
-    assert loaded.config.agents['ccb_self'].role == 'agentroles.ccb_self'
-    assert loaded.config.agents['agent1'].workspace_mode is WorkspaceMode.INPLACE
-    assert loaded.config.agents['agent1'].runtime_mode is RuntimeMode.PANE_BACKED
+    assert set(loaded.config.agents) == {'demo'}
+    assert loaded.config.agents['demo'].provider == 'claude'
+    assert loaded.config.agents['demo'].role is None
+    assert loaded.config.agents['demo'].workspace_mode is WorkspaceMode.INPLACE
+    assert loaded.config.agents['demo'].runtime_mode is RuntimeMode.PANE_BACKED
+
+
+@pytest.mark.parametrize(
+    ('available', 'expected'),
+    [
+        ({'codex', 'claude'}, 'codex'),
+        ({'claude'}, 'claude'),
+        ({'grok'}, 'grok'),
+        (set(), 'codex'),
+    ],
+)
+def test_builtin_default_selects_first_available_provider(
+    available: set[str],
+    expected: str,
+) -> None:
+    config = build_default_project_config(
+        which_fn=lambda command: f'/usr/bin/{command}' if command in available else None,
+    )
+
+    assert config.default_agents == ('demo',)
+    assert config.agents['demo'].provider == expected
+    assert config.windows[0].layout_spec == f'demo:{expected}'
+
+
+def test_builtin_default_provider_priority_tracks_runtime_registry() -> None:
+    from provider_command_defaults import SUPPORTED_PROVIDER_NAMES
+    from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
+
+    assert SUPPORTED_PROVIDER_NAMES == tuple(CORE_PROVIDER_NAMES + OPTIONAL_PROVIDER_NAMES)
+
+
+def test_builtin_default_provider_detection_honors_start_command_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: list[str] = []
+    monkeypatch.setenv('CODEX_START_CMD', '/opt/ccb/codex-wrapper --profile demo')
+
+    config = build_default_project_config(
+        which_fn=lambda command: observed.append(command) or '/opt/ccb/codex-wrapper',
+    )
+
+    assert observed == ['/opt/ccb/codex-wrapper']
+    assert config.agents['demo'].provider == 'codex'
 
 
 def test_render_default_project_config_text_omits_optional_tool_windows(tmp_path: Path) -> None:
     from agents.config_loader import render_default_project_config_text
 
-    rendered = render_default_project_config_text()
+    rendered = render_default_project_config_text(provider='codex')
 
     assert '[windows]' in rendered
-    assert 'main = "agent1:codex, agent2:codex, agent3:claude"' in rendered
-    assert 'ccb_self = "ccb_self:claude"' in rendered
-    assert '[agents.ccb_self]' in rendered
-    assert 'role = "agentroles.ccb_self"' in rendered
+    assert 'main = "demo:codex"' in rendered
+    assert '[agents.demo]' not in rendered
+    assert 'ccb_self' not in rendered
     assert '[tool_windows.' not in rendered
     assert '[ui.sidebar]' in rendered
     assert '[ui.sidebar.view]' not in rendered
@@ -376,7 +421,8 @@ def test_render_default_project_config_text_omits_optional_tool_windows(tmp_path
     _write(config_path, rendered)
     loaded = load_project_config(config_path.parents[1]).config
     assert loaded.tool_windows == ()
-    assert loaded.agents['ccb_self'].role == 'agentroles.ccb_self'
+    assert loaded.default_agents == ('demo',)
+    assert loaded.agents['demo'].provider == 'codex'
 
 
 def test_load_project_config_normalizes_legacy_ccb_self_role_alias(tmp_path: Path) -> None:
@@ -825,6 +871,17 @@ home = ".ccb/provider-profiles/agent1/{provider}"
             },
             True,
         ),
+        (
+            'deepseek',
+            'key = "deepseek-key"\nurl = "https://api.deepseek.com"\n',
+            'deepseek-key',
+            'https://api.deepseek.com',
+            {
+                'DEEPCODE_API_KEY': 'deepseek-key',
+                'DEEPCODE_BASE_URL': 'https://api.deepseek.com',
+            },
+            True,
+        ),
     ],
 )
 def test_load_project_config_supports_toml_agent_api_shortcut(
@@ -1092,6 +1149,96 @@ startup_args = ["--search"]
 
     assert spec.model == 'gpt-5'
     assert spec.startup_args == ('-m', 'gpt-5', '--search')
+
+
+@pytest.mark.parametrize(
+    ('provider', 'model_name', 'thinking', 'expected_startup_args'),
+    [
+        (
+            'codex',
+            'gpt-5.5',
+            'high',
+            ('-m', 'gpt-5.5', '-c', 'model_reasoning_effort="high"'),
+        ),
+        ('deepseek', 'deepseek-v4-pro', 'max', ()),
+        ('deepseek', 'deepseek-v4-flash', 'off', ()),
+    ],
+)
+def test_load_project_config_supports_static_agent_thinking_shortcut(
+    tmp_path: Path,
+    provider: str,
+    model_name: str,
+    thinking: str,
+    expected_startup_args: tuple[str, ...],
+) -> None:
+    project_root = tmp_path / f'repo-{provider}-thinking'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        f'''cmd; agent1:{provider}
+
+[agents.agent1]
+model = "{model_name}"
+thinking = "{thinking}"
+''',
+    )
+
+    spec = load_project_config(project_root).config.agents['agent1']
+
+    assert spec.model == model_name
+    assert spec.thinking == thinking
+    assert spec.startup_args == expected_startup_args
+
+
+def test_load_project_config_supports_static_thinking_with_inherited_model(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-thinking-without-model'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; agent1:codex
+
+[agents.agent1]
+thinking = "high"
+''',
+    )
+
+    spec = load_project_config(project_root).config.agents['agent1']
+
+    assert spec.model is None
+    assert spec.thinking == 'high'
+    assert spec.startup_args == ('-c', 'model_reasoning_effort="high"')
+
+
+def test_load_project_config_rejects_static_thinking_startup_arg_conflict(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-thinking-startup-conflict'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; agent1:codex
+
+[agents.agent1]
+model = "gpt-5.5"
+thinking = "high"
+startup_args = ["-c", "model_reasoning_effort=low"]
+''',
+    )
+
+    with pytest.raises(ConfigValidationError, match='thinking cannot be combined with startup_args'):
+        load_project_config(project_root)
+
+
+def test_load_project_config_rejects_deepseek_structured_env_conflict(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-deepseek-env-conflict'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        '''cmd; agent1:deepseek
+
+[agents.agent1]
+model = "deepseek-v4-pro"
+thinking = "max"
+env = { DEEPCODE_MODEL = "deepseek-v4-flash" }
+''',
+    )
+
+    with pytest.raises(ConfigValidationError, match='model/thinking cannot be combined with env runtime overrides'):
+        load_project_config(project_root)
 
 
 def test_load_project_config_rejects_agent_model_shortcut_for_unsupported_provider(tmp_path: Path) -> None:
@@ -2162,6 +2309,44 @@ url = "https://api.example.test/v1"
     assert spec.model == 'gpt-5'
     assert spec.startup_args == ('-m', 'gpt-5', '--search')
     assert spec.api == AgentApiSpec(key='sk-test', url='https://api.example.test/v1')
+
+
+@pytest.mark.parametrize(
+    ('provider', 'model_name', 'thinking'),
+    [
+        ('codex', 'gpt-5.5', 'xhigh'),
+        ('deepseek', 'deepseek-v4-flash', 'high'),
+    ],
+)
+def test_render_project_config_text_round_trips_static_thinking(
+    tmp_path: Path,
+    provider: str,
+    model_name: str,
+    thinking: str,
+) -> None:
+    project_root = tmp_path / f'repo-render-{provider}-thinking'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        f'''cmd; agent1:{provider}
+
+[agents.agent1]
+model = "{model_name}"
+thinking = "{thinking}"
+startup_args = ["--demo"]
+''',
+    )
+
+    rendered = render_project_config_text(load_project_config(project_root).config)
+
+    assert f'model = "{model_name}"' in rendered
+    assert f'thinking = "{thinking}"' in rendered
+    assert 'model_reasoning_effort' not in rendered
+    assert 'startup_args = ["--demo"]' in rendered
+    rewritten = tmp_path / f'repo-render-{provider}-thinking-roundtrip'
+    _write(rewritten / '.ccb' / 'ccb.config', rendered)
+    spec = load_project_config(rewritten).config.agents['agent1']
+    assert spec.model == model_name
+    assert spec.thinking == thinking
 
 
 def test_render_project_config_text_round_trips_noncompact_provider_profile(tmp_path: Path) -> None:

@@ -19,12 +19,12 @@ Keyboard controls:
 
 The top panel shows inline controls on the right side of the `Sidebar` title bar:
 
-- `↻`: restart every configured project pane (`r`)
+- `⚙`: open the current project's local `ccb config ui` page
 - `×`: kill project (`Q`)
 
-The sidebar does not enable terminal mouse capture by default so tmux copy-mode
-mouse dragging remains available. Project tmux bindings translate clicks on the
-inline controls into the same `r` and `Q` key actions.
+The settings action launches the project-scoped CCB CLI without blocking the
+sidebar. Keyboard `r` remains available for deliberate pane restart, but restart
+is no longer exposed as a header icon.
 
 Upstream inspiration and future UI component migration come from
 `hiroppy/tmux-agent-sidebar`; its MIT license is retained in `LICENSE.upstream`.

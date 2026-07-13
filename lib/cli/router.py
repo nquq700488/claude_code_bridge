@@ -69,6 +69,7 @@ def print_start_help(*, file=None) -> None:
               ccb restart [agent...]  Restart managed agent panes. Default: all agents.
               ccb reload            Apply a safe additive config reload, or reject with diagnostics.
               ccb reload --dry-run  Validate and plan config reload without mutation.
+              ccb config ui        Open the local project configuration panel.
               ccb maintenance status Show maintenance heartbeat config and stored status.
               ccb maintenance tick   Run one maintenance heartbeat diagnosis tick.
               ccb mobile serve       Start the loopback CCB Mobile gateway for the current project.
@@ -532,10 +533,13 @@ _COMMAND_HELP = {
           Legacy `ack` / `retry` / `resubmit` commands remain compatibility entrypoints.
     """,
     "config": """
-        usage: ccb config validate
+        usage: ccb config <validate|ui>
 
-        Config validation:
+        Config:
           ccb config validate   Validate `.ccb/ccb.config` for the current project.
+          ccb config ui         Open the local-only project configuration panel.
+          ccb config ui --no-open [--port PORT]
+                                Serve the panel without opening a browser.
     """,
     "reload": """
         usage: ccb reload [--dry-run]

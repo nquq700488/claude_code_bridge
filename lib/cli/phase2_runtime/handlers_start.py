@@ -23,6 +23,28 @@ def handle_config_validate(context, command, out, services) -> int:
     return 0
 
 
+def handle_config_ui(context, command, out, services) -> int:
+    handle = services.prepare_config_ui(context, command)
+    services.write_lines(
+        out,
+        tuple(f'{key}: {value}' for key, value in handle.summary.items()),
+    )
+    flush = getattr(out, 'flush', None)
+    if callable(flush):
+        flush()
+    if not command.no_open and not services.open_config_ui_url(handle.url):
+        services.write_lines(out, ('browser_open: failed; open the URL above manually',))
+        if callable(flush):
+            flush()
+    try:
+        handle.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        handle.close()
+    return 0
+
+
 def handle_start(context, command, out, services) -> int:
     interactive_attach = (
         not _env_truthy('CCB_NO_ATTACH')
@@ -66,4 +88,4 @@ def _terminal_size_for_streams(*streams: object) -> tuple[int, int] | None:
     return None
 
 
-__all__ = ['handle_config_validate', 'handle_start']
+__all__ = ['handle_config_ui', 'handle_config_validate', 'handle_start']

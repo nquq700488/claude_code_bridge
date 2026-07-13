@@ -71,6 +71,8 @@ class CcbMobileLocalizations {
 
   String get retry => isChinese ? '重试' : 'Retry';
 
+  String get rePair => isChinese ? '重新配对' : 'Re-pair';
+
   String get deleteMessage => isChinese ? '删除' : 'Delete';
 
   String get collapseMessage => isChinese ? '折叠消息' : 'Collapse message';

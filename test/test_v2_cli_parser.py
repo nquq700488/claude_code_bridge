@@ -11,6 +11,7 @@ from cli.models import (
     ParsedCancelCommand,
     ParsedClearCommand,
     ParsedCleanupCommand,
+    ParsedConfigUiCommand,
     ParsedConfigValidateCommand,
     ParsedDoctorCommand,
     ParsedFaultArmCommand,
@@ -496,6 +497,18 @@ def test_parse_repair_rejects_invalid_forms(parser: CliParser) -> None:
 
 def test_parse_config_validate(parser: CliParser) -> None:
     assert parser.parse(['config', 'validate']) == ParsedConfigValidateCommand(project=None)
+
+
+def test_parse_config_ui(parser: CliParser) -> None:
+    assert parser.parse(['config', 'ui']) == ParsedConfigUiCommand(project=None)
+    assert parser.parse(
+        ['--project', '/tmp/demo', 'config', 'ui', '--no-open', '--port', '43123']
+    ) == ParsedConfigUiCommand(project='/tmp/demo', no_open=True, port=43123)
+
+
+def test_parse_config_ui_rejects_invalid_port(parser: CliParser) -> None:
+    with pytest.raises(CliUsageError, match='between 0 and 65535'):
+        parser.parse(['config', 'ui', '--port', '70000'])
 
 
 def test_parse_config_validate_rejects_extra_args(parser: CliParser) -> None:

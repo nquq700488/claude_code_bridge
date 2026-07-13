@@ -26,6 +26,9 @@ def _spec(
     *,
     startup_args: tuple[str, ...] = (),
     provider_command_template: str | None = None,
+    model: str | None = None,
+    thinking: str | None = None,
+    env: dict[str, str] | None = None,
 ) -> AgentSpec:
     return AgentSpec(
         name=name,
@@ -39,6 +42,9 @@ def _spec(
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
         startup_args=startup_args,
         provider_command_template=provider_command_template,
+        model=model,
+        thinking=thinking,
+        env=env or {},
     )
 
 
@@ -175,6 +181,41 @@ def test_deepseek_start_cmd_supports_env_override_and_template(monkeypatch, tmp_
     cmd = build_deepseek_start_cmd(command, spec, tmp_path / "runtime", "launch-1")
 
     assert cmd.endswith("sandbox=1 /tmp/deepcode --config demo")
+
+
+def test_deepseek_start_cmd_compiles_model_and_thinking_to_deepcode_env(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("DEEPSEEK_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("deep_agent",), restore=False, auto_permission=False)
+    spec = _spec(
+        "deep_agent",
+        "deepseek",
+        model="deepseek-v4-pro",
+        thinking="max",
+    )
+
+    cmd = build_deepseek_start_cmd(command, spec, tmp_path / "runtime", "launch-1")
+
+    assert "DEEPCODE_MODEL=deepseek-v4-pro" in cmd
+    assert "DEEPCODE_THINKING_ENABLED=true" in cmd
+    assert "DEEPCODE_REASONING_EFFORT=max" in cmd
+    assert cmd.endswith("deepcode")
+
+
+def test_deepseek_start_cmd_compiles_thinking_off_without_effort(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.delenv("DEEPSEEK_START_CMD", raising=False)
+    command = ParsedStartCommand(project=None, agent_names=("deep_agent",), restore=False, auto_permission=False)
+    spec = _spec(
+        "deep_agent",
+        "deepseek",
+        model="deepseek-v4-flash",
+        thinking="off",
+    )
+
+    cmd = build_deepseek_start_cmd(command, spec, tmp_path / "runtime", "launch-1")
+
+    assert "DEEPCODE_MODEL=deepseek-v4-flash" in cmd
+    assert "DEEPCODE_THINKING_ENABLED=false" in cmd
+    assert "DEEPCODE_REASONING_EFFORT" not in cmd
 
 
 def test_mimo_start_cmd_uses_managed_home_config_and_env_override(monkeypatch, tmp_path: Path) -> None:

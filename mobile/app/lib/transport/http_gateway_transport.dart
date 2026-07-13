@@ -31,9 +31,13 @@ class HttpGatewayTransport
     String? deviceToken,
     HttpClient? httpClient,
     Duration timeout = const Duration(seconds: 5),
+    Duration projectListWarmupRetryDelay = const Duration(milliseconds: 200),
+    int projectListWarmupMaxAttempts = 16,
   }) : _httpClient = httpClient ?? HttpClient(),
        _deviceToken = deviceToken,
-       _timeout = timeout;
+       _timeout = timeout,
+       _projectListWarmupRetryDelay = projectListWarmupRetryDelay,
+       _projectListWarmupMaxAttempts = projectListWarmupMaxAttempts;
 
   @override
   final GatewayHostProfile profile;
@@ -41,6 +45,8 @@ class HttpGatewayTransport
   final HttpClient _httpClient;
   final String? _deviceToken;
   final Duration _timeout;
+  final Duration _projectListWarmupRetryDelay;
+  final int _projectListWarmupMaxAttempts;
   final Map<String, Future<WebSocket>> _terminalSockets = {};
 
   Uri get _baseUrl => profile.routeProvider.gatewayUrl;
@@ -63,18 +69,31 @@ class HttpGatewayTransport
 
   @override
   Future<List<CcbProject>> listProjects() async {
-    final json = await _getJson('/v1/projects');
-    final projects = json['projects'];
-    if (projects is! Iterable) {
-      throw FormatException('gateway projects response missing projects list');
+    final attempts =
+        _projectListWarmupMaxAttempts < 1 ? 1 : _projectListWarmupMaxAttempts;
+    for (var attempt = 0; attempt < attempts; attempt += 1) {
+      final json = await _getJson('/v1/projects');
+      final projects = json['projects'];
+      if (projects is! Iterable) {
+        throw FormatException(
+          'gateway projects response missing projects list',
+        );
+      }
+      final parsed = [
+        for (final item in projects)
+          if (item is Map)
+            CcbProject.fromJson({
+              for (final entry in item.entries)
+                entry.key.toString(): entry.value,
+            }),
+      ];
+      final warming = json['health_warming'] == true;
+      if (!warming || attempt == attempts - 1) {
+        return parsed;
+      }
+      await Future<void>.delayed(_projectListWarmupRetryDelay);
     }
-    return [
-      for (final item in projects)
-        if (item is Map)
-          CcbProject.fromJson({
-            for (final entry in item.entries) entry.key.toString(): entry.value,
-          }),
-    ];
+    return const <CcbProject>[];
   }
 
   @override

@@ -24,6 +24,10 @@ _PROVIDER_API_SHORTCUT_ENV = {
         'key': 'MINIMAX_API_KEY',
         'url': 'MINIMAX_BASE_URL',
     },
+    'deepseek': {
+        'key': 'DEEPCODE_API_KEY',
+        'url': 'DEEPCODE_BASE_URL',
+    },
 }
 
 

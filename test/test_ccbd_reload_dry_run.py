@@ -107,6 +107,16 @@ bottom_height = 20
             {'replace_agent'},
         ),
         (
+            BASE_CONFIG
+            + '''
+[agents.agent1]
+model = "gpt-5.5"
+thinking = "high"
+''',
+            'replace_agent',
+            {'replace_agent'},
+        ),
+        (
             BASE_CONFIG.replace('agent1:codex, agent2:claude', 'agent2:claude, agent1:codex'),
             'layout_change',
             {'layout_change'},

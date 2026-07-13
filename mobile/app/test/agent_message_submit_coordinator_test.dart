@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:ccb_mobile/features/agent_chat/agent_chat_controller.dart';
@@ -39,7 +40,6 @@ void main() {
         );
         final acceptedDrafts = <String>[];
         final loads = <String>[];
-        final scheduled = <String>[];
         final scrolled = <String>[];
         final coordinator = _coordinator(
           chatController: chatController,
@@ -47,7 +47,6 @@ void main() {
             loads.add(agentName);
             return Future.value();
           },
-          scheduleConversationRefresh: scheduled.add,
           scrollTimelineToEnd: scrolled.add,
         );
 
@@ -77,7 +76,6 @@ void main() {
         ]);
         expect(scrolled, ['lead']);
         expect(loads, ['lead']);
-        expect(scheduled, ['lead']);
       },
     );
 
@@ -102,7 +100,6 @@ void main() {
         );
         final transport = _RecordingTerminalTransport();
         final loads = <String>[];
-        final scheduled = <String>[];
         final coordinator = _coordinator(
           chatController: chatController,
           paneSubmitter: AgentPaneMessageSubmitter(onEvent: (_) {}),
@@ -110,7 +107,6 @@ void main() {
             loads.add(agentName);
             return Future.value();
           },
-          scheduleConversationRefresh: scheduled.add,
         );
 
         await coordinator.send(
@@ -131,7 +127,6 @@ void main() {
           CcbConversationDeliveryState.sent,
         );
         expect(loads, ['lead']);
-        expect(scheduled, ['lead']);
       },
     );
 
@@ -142,7 +137,6 @@ void main() {
         final repository = _SubmitRepository();
         final transport = _RecordingTerminalTransport();
         final loads = <String>[];
-        final scheduled = <String>[];
         final coordinator = _coordinator(
           chatController: chatController,
           paneSubmitter: AgentPaneMessageSubmitter(onEvent: (_) {}),
@@ -150,7 +144,6 @@ void main() {
             loads.add(agentName);
             return Future.value();
           },
-          scheduleConversationRefresh: scheduled.add,
         );
 
         await coordinator.send(
@@ -175,9 +168,62 @@ void main() {
           CcbConversationDeliveryState.sent,
         );
         expect(loads, ['lead']);
-        expect(scheduled, ['lead']);
       },
     );
+
+    test('pane-backed attachment send includes project file link', () async {
+      final attachmentFile = File(
+        '${Directory.systemTemp.path}/ccb-mobile-pane-attachment.txt',
+      );
+      await attachmentFile.writeAsString('attachment');
+      addTearDown(() async {
+        if (await attachmentFile.exists()) {
+          await attachmentFile.delete();
+        }
+      });
+      final chatController = AgentChatController();
+      final repository = _SubmitRepository(
+        uploadResult: const GatewayFileUploadResult(
+          fileId: 'file-1',
+          fileName: 'notes.txt',
+          mimeType: 'text/plain',
+          sizeBytes: 10,
+          projectRelativePath: '.ccb/mobile/uploads/lead/file-1-notes.txt',
+          projectPath: '/repo/.ccb/mobile/uploads/lead/file-1-notes.txt',
+        ),
+      );
+      final transport = _RecordingTerminalTransport();
+      final coordinator = _coordinator(
+        chatController: chatController,
+        paneSubmitter: AgentPaneMessageSubmitter(onEvent: (_) {}),
+      );
+
+      await coordinator.send(
+        agent: _leadAgent,
+        body: 'review this',
+        attachments: [
+          CcbMessageAttachment(
+            fileId: 'local-file',
+            fileName: 'notes.txt',
+            mimeType: 'text/plain',
+            sizeBytes: 10,
+            localPath: attachmentFile.path,
+          ),
+        ],
+        view: _view(epoch: 7),
+        repository: repository,
+        terminalTransport: transport,
+        usePaneInput: true,
+        refreshView: null,
+        onAccepted: () {},
+      );
+
+      expect(transport.sessions.single.pasted.single, contains('review this'));
+      expect(
+        transport.sessions.single.pasted.single,
+        contains('[notes.txt](.ccb/mobile/uploads/lead/file-1-notes.txt)'),
+      );
+    });
 
     test(
       'does not fallback to repository submit when pane input is required',
@@ -224,7 +270,6 @@ void main() {
           ],
         );
         final loads = <String>[];
-        final scheduled = <String>[];
         final scrolled = <String>[];
         final coordinator = _coordinator(
           chatController: chatController,
@@ -233,7 +278,6 @@ void main() {
             loads.add(agentName);
             return Future.value();
           },
-          scheduleConversationRefresh: scheduled.add,
           scrollTimelineToEnd: scrolled.add,
         );
 
@@ -263,7 +307,6 @@ void main() {
         expect(chatController.hasNewMessages('lead'), isFalse);
         expect(scrolled, ['lead', 'lead']);
         expect(loads, isEmpty);
-        expect(scheduled, isEmpty);
       },
     );
 
@@ -552,7 +595,6 @@ AgentMessageSubmitCoordinator _coordinator({
   bool Function(String agentName)? isTimelineNearEnd,
   void Function(String agentName)? scrollTimelineToEnd,
   Future<void> Function(String agentName)? loadConversation,
-  void Function(String agentName)? scheduleConversationRefresh,
   AgentPaneMessageSubmitter? paneSubmitter,
 }) {
   return AgentMessageSubmitCoordinator(
@@ -564,7 +606,6 @@ AgentMessageSubmitCoordinator _coordinator({
     isTimelineNearEnd: isTimelineNearEnd ?? (_) => true,
     scrollTimelineToEnd: scrollTimelineToEnd ?? (_) {},
     loadConversation: loadConversation ?? (_) => Future.value(),
-    scheduleConversationRefresh: scheduleConversationRefresh ?? (_) {},
     paneSubmitter: paneSubmitter,
   );
 }
@@ -655,9 +696,10 @@ CcbAgentConversation _conversationWithItems(List<CcbConversationItem> items) {
 }
 
 class _SubmitRepository implements MobileCcbRepository {
-  _SubmitRepository({this.responses = const []});
+  _SubmitRepository({this.responses = const [], this.uploadResult});
 
   final List<Object> responses;
+  final GatewayFileUploadResult? uploadResult;
   final requests = <CcbAgentMessageSubmitRequest>[];
   var _responseIndex = 0;
 
@@ -745,7 +787,7 @@ class _SubmitRepository implements MobileCcbRepository {
     required String mimeType,
     required List<int> bytes,
   }) async {
-    throw UnimplementedError();
+    return uploadResult ?? (throw UnimplementedError());
   }
 
   @override

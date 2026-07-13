@@ -75,6 +75,7 @@ class NativeCliExecutionConfig:
     run_error_reason: str = ""
     complete_reason: str = ""
     process_exit_complete_reason: str = ""
+    missing_terminal_reason: str = ""
     timeout_reason: str = ""
     run_timeout_s: float = 900.0
     terminal_on_process_exit: bool = True
@@ -430,6 +431,25 @@ def _terminal_result_if_ready(
                 "stdout_path": str(state.get("stdout_path") or ""),
                 "stderr_path": str(state.get("stderr_path") or ""),
                 "returncode": returncode,
+            },
+        )
+
+    if returncode == 0 and not config.terminal_on_process_exit:
+        return _terminal(
+            config,
+            submission,
+            state,
+            items,
+            now,
+            status=CompletionStatus.INCOMPLETE,
+            reason=config.reason("missing_terminal_reason"),
+            reply=reply,
+            confidence=CompletionConfidence.DEGRADED,
+            diagnostics_extra={
+                "finish_reason": observation.finish_reason,
+                "returncode": returncode,
+                "stdout_path": str(state.get("stdout_path") or ""),
+                "stderr_path": str(state.get("stderr_path") or ""),
             },
         )
 

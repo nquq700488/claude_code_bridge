@@ -1,0 +1,507 @@
+from __future__ import annotations
+
+import base64
+import json
+import re
+import threading
+import time
+from pathlib import Path
+from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, urlencode, urlparse
+from urllib.request import Request, urlopen
+
+import pytest
+
+import cli.services.config_ui as config_ui_module
+from cli.models import ParsedConfigUiCommand
+from cli.services.config_ui import (
+    config_ui_asset_path,
+    config_ui_provider_capabilities,
+    open_config_ui_url,
+    prepare_config_ui,
+)
+
+
+def _context(project_root: Path):
+    return SimpleNamespace(project=SimpleNamespace(project_root=project_root))
+
+
+def test_config_ui_asset_is_packaged_source_content() -> None:
+    path = config_ui_asset_path()
+
+    assert path.is_file()
+    page = path.read_text(encoding='utf-8')
+    assert '<title>CCB Config Control Panel Demo</title>' in page
+    match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
+    assert match is not None
+    embedded_icon = base64.b64decode(match.group(1))
+    mobile_icon = (
+        path.parents[6]
+        / 'mobile'
+        / 'app'
+        / 'android'
+        / 'app'
+        / 'src'
+        / 'main'
+        / 'res'
+        / 'mipmap-mdpi'
+        / 'ic_launcher.png'
+    )
+    assert embedded_icon == mobile_icon.read_bytes()
+
+
+def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text('agent1:codex\n', encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=0.3,
+    )
+    time.sleep(0.35)
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        with urlopen(handle.url, timeout=2) as response:
+            assert response.status == 200
+            assert b'<title>settings</title>' in response.read()
+
+        parsed = urlparse(handle.url)
+        token = parse_qs(parsed.query)['token'][0]
+        session_url = f'{parsed.scheme}://{parsed.netloc}/api/session?{urlencode({"token": token})}'
+        with urlopen(session_url, timeout=2) as response:
+            payload = json.loads(response.read())
+        assert payload == {
+            'schema_version': 2,
+            'mode': 'editor',
+            'project_root': str(project_root.resolve()),
+            'config_path': str(config_path.resolve()),
+            'config_exists': True,
+        }
+
+        capabilities_url = f'{parsed.scheme}://{parsed.netloc}/api/capabilities?{urlencode({"token": token})}'
+        with urlopen(capabilities_url, timeout=2) as response:
+            capabilities = json.loads(response.read())
+        assert capabilities['schema_version'] == 1
+        assert {provider['id'] for provider in capabilities['providers']} >= {
+            'codex',
+            'claude',
+            'gemini',
+            'deepseek',
+        }
+        by_provider = {provider['id']: provider for provider in capabilities['providers']}
+        assert by_provider['codex']['static_thinking'] is True
+        assert by_provider['deepseek']['model_shortcut'] is True
+        assert by_provider['deepseek']['api_shortcut'] is True
+        assert by_provider['deepseek']['static_thinking'] is True
+        assert {
+            model['id']: model['reasoning_levels']
+            for model in by_provider['deepseek']['models']
+        } == {
+            'deepseek-v4-pro': ['off', 'high', 'max'],
+            'deepseek-v4-flash': ['off', 'high', 'max'],
+        }
+
+        with pytest.raises(HTTPError) as exc_info:
+            urlopen(f'{parsed.scheme}://{parsed.netloc}/', timeout=2)
+        assert exc_info.value.code == 403
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_uses_builtin_demo_config_when_project_config_is_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo'
+    (project_root / '.ccb').mkdir(parents=True)
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    monkeypatch.setattr(
+        config_ui_module,
+        'render_default_project_config_text',
+        lambda: 'version = 2\n\n[windows]\nmain = "demo:claude"\n',
+    )
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=0.3,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        assert config['exists'] is False
+        assert config['digest'] is None
+        assert config['text'].endswith('main = "demo:claude"\n')
+        assert config['editor']['windows'][0]['tree'] == {
+            'kind': 'leaf',
+            'name': 'demo',
+            'provider': 'claude',
+            'workspace_mode': 'inplace',
+            'percent': None,
+        }
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_validates_saves_with_digest_guard_and_hot_reloads(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = 'version = 2\n\n[windows]\nmain = "agent1:codex"\n'
+    updated = original.replace('agent1:codex', 'agent1:codex, agent2:claude')
+    config_path.write_text(original, encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    reload_calls: list[bool] = []
+
+    def _reload(dry_run: bool) -> dict[str, object]:
+        reload_calls.append(dry_run)
+        if dry_run:
+            return {'status': 'ok', 'plan_class': 'add_agent', 'future_safe_to_apply': True}
+        return {'status': 'published', 'plan_class': 'add_agent'}
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=1.0,
+        reload_action=_reload,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        assert config['text'] == original
+        assert isinstance(config['digest'], str)
+        assert config['editor']['entry_window'] == 'main'
+        assert config['editor']['windows'][0]['tree'] == {
+            'kind': 'leaf',
+            'name': 'agent1',
+            'provider': 'codex',
+            'workspace_mode': 'inplace',
+            'percent': None,
+        }
+
+        document = config['editor']['document']
+        document['ui'] = {
+            'sidebar': {
+                'agents_height': '45%',
+                'comms_height': '20%',
+                'tips_height': '35%',
+                'tips': ['first line', 'second line'],
+            }
+        }
+        rendered = _post_json(handle.url, '/api/render', {'document': document})
+        assert rendered['status'] == 'rendered'
+        assert 'agents_height = "45%"' in rendered['text']
+        assert 'tips = ["first line", "second line"]' in rendered['text']
+        assert rendered['validation']['agent_names'] == ['agent1']
+
+        thinking_document = json.loads(json.dumps(document))
+        thinking_document['agents'] = {
+            'agent1': {'model': 'gpt-5.5', 'thinking': 'high'},
+        }
+        thinking_rendered = _post_json(handle.url, '/api/render', {'document': thinking_document})
+        assert 'model = "gpt-5.5"' in thinking_rendered['text']
+        assert 'thinking = "high"' in thinking_rendered['text']
+        assert 'model_reasoning_effort' not in thinking_rendered['text']
+
+        rich_document = json.loads(json.dumps(document))
+        rich_document['windows']['main'] = 'agent1:codex, rich'
+        rich_rendered = _post_json(handle.url, '/api/render', {'document': rich_document})
+        assert 'main = "agent1:codex, rich"' in rich_rendered['text']
+        assert rich_rendered['editor']['windows'][0]['tree']['right']['name'] == 'rich'
+
+        validation = _post_json(handle.url, '/api/validate', {'text': updated})
+        assert validation['status'] == 'valid'
+        assert validation['agent_names'] == ['agent1', 'agent2']
+
+        preview = _post_json(
+            handle.url,
+            '/api/preview',
+            {'text': updated, 'expected_digest': config['digest']},
+        )
+        assert preview['status'] == 'previewed'
+        assert preview['changed'] is True
+        assert '-main = "agent1:codex"' in preview['diff']
+        assert '+main = "agent1:codex, agent2:claude"' in preview['diff']
+
+        profile = _post_json(
+            handle.url,
+            '/api/profile',
+            {'name': 'two-agents', 'text': updated},
+        )
+        assert profile['status'] == 'saved'
+        assert Path(profile['path']).read_text(encoding='utf-8') == updated
+        loaded_profile = _get_json(handle.url, '/api/profile?name=two-agents')
+        assert loaded_profile['name'] == 'two-agents'
+        assert loaded_profile['editor']['windows'][0]['tree']['kind'] == 'vertical'
+
+        _post_json(
+            handle.url,
+            '/api/profile',
+            {'name': 'compact-cmd', 'text': 'cmd, demo:codex\n'},
+        )
+        compact_profile = _get_json(handle.url, '/api/profile?name=compact-cmd')
+        assert compact_profile['editor']['visual_supported'] is False
+
+        with pytest.raises(HTTPError) as conflict:
+            _post_json(
+                handle.url,
+                '/api/apply',
+                {'text': updated, 'expected_digest': 'stale', 'mode': 'save'},
+            )
+        assert conflict.value.code == 409
+        assert config_path.read_text(encoding='utf-8') == original
+
+        applied = _post_json(
+            handle.url,
+            '/api/apply',
+            {'text': updated, 'expected_digest': config['digest'], 'mode': 'hot_reload'},
+        )
+        assert applied['status'] == 'reloaded'
+        assert applied['saved'] is True
+        assert applied['dry_run']['plan_class'] == 'add_agent'
+        assert applied['reload']['status'] == 'published'
+        assert reload_calls == [True, False]
+        assert config_path.read_text(encoding='utf-8') == updated
+        backup_path = Path(applied['backup_path'])
+        assert backup_path.read_text(encoding='utf-8') == original
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_rejects_invalid_candidate_without_writing(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = 'version = 2\n\n[windows]\nmain = "agent1:codex"\n'
+    config_path.write_text(original, encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=0.5,
+        reload_action=lambda _dry_run: {},
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        with pytest.raises(HTTPError) as invalid:
+            _post_json(
+                handle.url,
+                '/api/apply',
+                {
+                    'text': 'version = 3\n',
+                    'expected_digest': config['digest'],
+                    'mode': 'save',
+                },
+            )
+        assert invalid.value.code == 422
+        assert config_path.read_text(encoding='utf-8') == original
+        assert not tuple(config_path.parent.glob('ccb.config.bak.*'))
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def _get_json(base_url: str, path: str) -> dict[str, object]:
+    parsed = urlparse(base_url)
+    token = parse_qs(parsed.query)['token'][0]
+    separator = '&' if '?' in path else '?'
+    url = f'{parsed.scheme}://{parsed.netloc}{path}{separator}{urlencode({"token": token})}'
+    with urlopen(url, timeout=2) as response:
+        return json.loads(response.read())
+
+
+def _post_json(base_url: str, path: str, payload: dict[str, object]) -> dict[str, object]:
+    parsed = urlparse(base_url)
+    token = parse_qs(parsed.query)['token'][0]
+    url = f'{parsed.scheme}://{parsed.netloc}{path}?{urlencode({"token": token})}'
+    request = Request(
+        url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    with urlopen(request, timeout=2) as response:
+        return json.loads(response.read())
+
+
+def test_config_ui_browser_open_uses_wsl_fallback(monkeypatch) -> None:
+    seen: list[tuple[str, ...]] = []
+    monkeypatch.setattr(config_ui_module.webbrowser, 'open', lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(
+        config_ui_module.shutil,
+        'which',
+        lambda name: f'/usr/bin/{name}' if name == 'wslview' else None,
+    )
+    monkeypatch.setattr(
+        config_ui_module.subprocess,
+        'Popen',
+        lambda command, **_kwargs: seen.append(tuple(command)),
+    )
+
+    assert open_config_ui_url('http://127.0.0.1:43123/?token=test') is True
+    assert seen == [('wslview', 'http://127.0.0.1:43123/?token=test')]
+
+
+def test_config_ui_provider_capabilities_use_current_safe_model_sources(tmp_path: Path) -> None:
+    cache_path = tmp_path / 'models_cache.json'
+    cache_path.write_text(
+        json.dumps(
+            {
+                'models': [
+                    {
+                        'slug': 'gpt-5.6-sol',
+                        'display_name': 'GPT-5.6 SOL',
+                        'visibility': 'list',
+                        'default_reasoning_level': 'low',
+                        'supported_reasoning_levels': [
+                            {'effort': 'low'},
+                            {'effort': 'medium'},
+                            {'effort': 'ultra'},
+                        ],
+                    },
+                    {
+                        'slug': 'gpt-5.5',
+                        'display_name': 'GPT-5.5',
+                        'visibility': 'list',
+                        'default_reasoning_level': 'medium',
+                        'supported_reasoning_levels': [{'effort': 'high'}],
+                    },
+                    {'slug': 'gpt-5.4', 'display_name': 'GPT-5.4', 'visibility': 'list'},
+                    {'slug': 'codex-auto-review', 'display_name': 'Auto Review', 'visibility': 'hide'},
+                ]
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    payload = config_ui_provider_capabilities(
+        environ={'HOME': str(tmp_path), 'PATH': ''},
+        codex_models_path=cache_path,
+        cli_models={
+            'opencode': ['openai/gpt-5.6-sol'],
+            'mimo': ['xiaomi/mimo-v2.5-pro'],
+        },
+    )
+    providers = {provider['id']: provider for provider in payload['providers']}
+
+    assert [model['id'] for model in providers['codex']['models']] == ['gpt-5.6-sol', 'gpt-5.5']
+    assert providers['codex']['models'][0]['reasoning_levels'] == ['low', 'medium', 'ultra']
+    assert providers['codex']['models'][0]['default_reasoning_level'] == 'low'
+    assert {model['id'] for model in providers['claude']['models']} >= {
+        'claude-fable-5',
+        'claude-opus-4-8',
+        'claude-sonnet-5',
+        'claude-haiku-4-5',
+    }
+    assert {model['id'] for model in providers['gemini']['models']} >= {
+        'gemini-3.5-flash',
+        'gemini-3.1-pro-preview',
+        'gemini-3.1-flash-lite',
+    }
+    assert [model['id'] for model in providers['deepseek']['models']] == [
+        'deepseek-v4-pro',
+        'deepseek-v4-flash',
+    ]
+    assert providers['deepseek']['models'][0]['reasoning_levels'] == ['off', 'high', 'max']
+    assert providers['deepseek']['model_shortcut'] is True
+    assert providers['codex']['api_shortcut'] is True
+    assert providers['deepseek']['api_shortcut'] is True
+    assert providers['deepseek']['model_source'] == 'deepseek_v4_and_deepcode_contract'
+    assert [model['id'] for model in providers['opencode']['models']] == ['openai/gpt-5.6-sol']
+    assert [model['id'] for model in providers['mimo']['models']] == ['xiaomi/mimo-v2.5-pro']
+    assert providers['codex']['static_thinking'] is True
+    assert providers['deepseek']['static_thinking'] is True
+    assert all(
+        provider['static_thinking'] is False
+        for name, provider in providers.items()
+        if name not in {'codex', 'deepseek'}
+    )
+
+
+def test_config_ui_codex_fallback_keeps_current_56_family_and_55(tmp_path: Path) -> None:
+    payload = config_ui_provider_capabilities(
+        environ={'HOME': str(tmp_path), 'PATH': ''},
+        codex_models_path=tmp_path / 'missing-models-cache.json',
+        cli_models={'opencode': [], 'mimo': []},
+    )
+    codex = next(provider for provider in payload['providers'] if provider['id'] == 'codex')
+
+    assert codex['model_source'] == 'ccb_catalog_fallback'
+    assert [model['id'] for model in codex['models']] == [
+        'gpt-5.6-sol',
+        'gpt-5.6-terra',
+        'gpt-5.6-luna',
+        'gpt-5.5',
+    ]
+
+
+def test_config_ui_prefers_project_managed_codex_model_cache(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    managed_cache = (
+        project_root
+        / '.ccb'
+        / 'agents'
+        / 'coder'
+        / 'provider-state'
+        / 'codex'
+        / 'home'
+        / 'models_cache.json'
+    )
+    managed_cache.parent.mkdir(parents=True)
+    managed_cache.write_text(
+        json.dumps(
+            {
+                'models': [
+                    {
+                        'slug': 'gpt-5.6-sol',
+                        'display_name': 'GPT-5.6 SOL',
+                        'visibility': 'list',
+                        'default_reasoning_level': 'ultra',
+                        'supported_reasoning_levels': [{'effort': 'ultra'}],
+                    }
+                ]
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    payload = config_ui_provider_capabilities(
+        environ={'HOME': str(tmp_path / 'empty-home'), 'PATH': ''},
+        project_root=project_root,
+        cli_models={'opencode': [], 'mimo': []},
+    )
+    codex = next(provider for provider in payload['providers'] if provider['id'] == 'codex')
+
+    assert codex['model_source'] == 'codex_cache_managed'
+    assert [model['id'] for model in codex['models']] == ['gpt-5.6-sol']

@@ -99,6 +99,11 @@ def build_agent_spec(agent_name: str, raw: dict[str, Any]) -> AgentSpec:
                 if raw.get('model') is not None
                 else None
             ),
+            thinking=(
+                expect_string(raw['thinking'], field_name=f'agents.{agent_name}.thinking')
+                if raw.get('thinking') is not None
+                else None
+            ),
             startup_args=expect_string_list(raw.get('startup_args', []), field_name=f'agents.{agent_name}.startup_args'),
             env=env,
             api=api,

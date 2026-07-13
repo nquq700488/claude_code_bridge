@@ -3,15 +3,17 @@ from __future__ import annotations
 import json
 import re
 
-from agents.models import LayoutLeaf, LayoutNode, normalize_agent_name, parse_layout_spec
+from agents.models import LayoutLeaf, LayoutNode, is_layout_tool_alias, normalize_agent_name, parse_layout_spec
 
 from ..project import build_default_project_config
 from .compact import can_render_compact
 from .serialization import agent_spec_to_hybrid_overlay_dict, loop_capacity_to_config_dict
 
 
-def render_default_project_config_text() -> str:
-    return render_project_config_text(build_default_project_config())
+def render_default_project_config_text(*, provider: str | None = None, which_fn=None) -> str:
+    return render_project_config_text(
+        build_default_project_config(provider=provider, which_fn=which_fn)
+    )
 
 
 def render_project_config_text(config) -> str:
@@ -24,16 +26,21 @@ def render_project_config_text(config) -> str:
     overlay_payload = _build_hybrid_overlay_payload(config)
     if not overlay_payload:
         return f'{hybrid_layout}\n'
-    return f'{hybrid_layout}\n\n{_render_toml_document(overlay_payload)}'
+    return f'{hybrid_layout}\n\n{render_config_document_text(overlay_payload)}'
 
 
 _BARE_TOML_KEY_PATTERN = re.compile(r'^[A-Za-z0-9_-]+$')
 
 
-def _render_toml_document(payload: dict[str, object]) -> str:
+def render_config_document_text(payload: dict[str, object]) -> str:
+    """Render a validated config document as deterministic TOML text."""
     lines: list[str] = []
     _render_toml_mapping(lines, (), payload, emit_header=False)
     return '\n'.join(lines).rstrip() + '\n'
+
+
+# Kept for internal callers and tests while the public renderer name is adopted.
+_render_toml_document = render_config_document_text
 
 
 def _render_toml_mapping(
@@ -130,7 +137,7 @@ def _build_hybrid_overlay_payload(config) -> dict[str, object] | None:
 
 def _render_windows_config_text(config) -> str:
     payload = _build_windows_payload(config)
-    return _render_toml_document(payload)
+    return render_config_document_text(payload)
 
 
 def _build_windows_payload(config) -> dict[str, object]:
@@ -233,6 +240,8 @@ def _annotate_layout_with_agent_specs(node, config):
         name = str(node.leaf.name or '').strip()
         if name.lower() == 'cmd':
             return LayoutNode(kind='leaf', leaf=LayoutLeaf(name='cmd', percent=node.leaf.percent))
+        if is_layout_tool_alias(name):
+            return LayoutNode(kind='leaf', leaf=LayoutLeaf(name=name, percent=node.leaf.percent))
         normalized_name = normalize_agent_name(name)
         spec = config.agents[normalized_name]
         return LayoutNode(
@@ -253,4 +262,8 @@ def _annotate_layout_with_agent_specs(node, config):
     )
 
 
-__all__ = ['render_default_project_config_text', 'render_project_config_text']
+__all__ = [
+    'render_config_document_text',
+    'render_default_project_config_text',
+    'render_project_config_text',
+]

@@ -114,6 +114,9 @@ msg() {
     pip_missing)
       en_msg="WARN: pip not available for selected Python"
       zh_msg="警告：当前 Python 未提供 pip" ;;
+    pip_index_fallback)
+      en_msg="WARN: pip could not reach the primary package index; retrying with: $1"
+      zh_msg="警告：pip 无法访问主软件源；正在改用备用源重试：$1" ;;
     root_error)
       en_msg="ERROR: Do not run as root/sudo. Please run as normal user."
       zh_msg="错误：请勿以 root/sudo 身份运行。请使用普通用户执行。" ;;
@@ -395,6 +398,9 @@ Optional environment variables:
                            auto = enabled for macOS release installs, disabled for source/dev installs
   CCB_INSTALL_TOMLI        Auto-install tomli on Python versions without tomllib (default: 1; set 0 to skip)
   CCB_INSTALL_WATCHDOG     Auto-install optional watchdog dependency (default: 1; set 0 to skip)
+  CCB_PIP_INDEX_URL        Package index used by install-time pip commands (default: pip configuration)
+  CCB_PIP_FALLBACK_INDEX_URL Fallback after TLS/network errors (default on macOS: TUNA PyPI; set 0 to disable)
+  PIP_CERT                 PEM CA bundle used by pip for HTTPS verification
   CCB_INSTALL_ROLES        Install catalog Role Packs and dependencies: auto soft (default), 1 required, 0 skip
   CCB_ALLOW_ROOT_INSTALL   Set to 1 to explicitly allow a root-owned install
   CCB_ALLOW_TEMP_INSTALL_GLOBAL_BIN Set to 1 to allow a temporary install prefix to write outside its isolated bin/home
@@ -648,6 +654,159 @@ raise SystemExit(0 if is_virtualenv else 1)
 PY
 }
 
+pip_should_use_system_truststore() {
+  local python_cmd="$1"
+  "$python_cmd" - <<'PY' >/dev/null 2>&1
+import re
+import sys
+from importlib.metadata import PackageNotFoundError, distribution, version
+from importlib.util import find_spec
+
+try:
+    pip_version = version("pip")
+    pip_distribution = distribution("pip")
+except PackageNotFoundError:
+    raise SystemExit(1)
+
+parts = tuple(int(item) for item in re.findall(r"\d+", pip_version)[:2])
+if len(parts) < 2:
+    raise SystemExit(1)
+has_truststore = (
+    find_spec("truststore") is not None
+    or pip_distribution.locate_file("pip/_vendor/truststore").is_dir()
+)
+supports_system_trust = (
+    sys.version_info >= (3, 10)
+    and (22, 2) <= parts < (24, 2)
+    and has_truststore
+)
+raise SystemExit(0 if supports_system_trust else 1)
+PY
+}
+
+pip_needs_system_trust_refresh() {
+  local python_cmd="$1"
+  "$python_cmd" - <<'PY' >/dev/null 2>&1
+import re
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    pip_version = version("pip")
+except PackageNotFoundError:
+    raise SystemExit(1)
+
+parts = tuple(int(item) for item in re.findall(r"\d+", pip_version)[:2])
+if len(parts) < 2:
+    raise SystemExit(1)
+raise SystemExit(0 if parts < (24, 2) else 1)
+PY
+}
+
+pip_primary_index_url() {
+  if [[ -n "${_CCB_INSTALL_PIP_ACTIVE_INDEX_URL:-}" ]]; then
+    echo "$_CCB_INSTALL_PIP_ACTIVE_INDEX_URL"
+    return 0
+  fi
+  if [[ -n "${CCB_PIP_INDEX_URL:-}" ]]; then
+    echo "$CCB_PIP_INDEX_URL"
+    return 0
+  fi
+  return 1
+}
+
+pip_fallback_index_url() {
+  if [[ -n "${CCB_PIP_FALLBACK_INDEX_URL+x}" ]]; then
+    case "${CCB_PIP_FALLBACK_INDEX_URL:-}" in
+      ""|0|false|off|none|no)
+        return 1
+        ;;
+      *)
+        echo "$CCB_PIP_FALLBACK_INDEX_URL"
+        return 0
+        ;;
+    esac
+  fi
+  if [[ "$(detect_platform)" == "macos" ]]; then
+    echo "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
+    return 0
+  fi
+  return 1
+}
+
+pip_failure_allows_index_fallback() {
+  local pip_log="$1"
+  if [[ "$pip_log" == "/dev/null" ]]; then
+    return 0
+  fi
+  grep -Eiq \
+    'CERTIFICATE_VERIFY_FAILED|SSLCertVerificationError|Could not fetch URL|Connection (aborted|broken|error|refused|reset)|ConnectTimeout|ReadTimeout|TimeoutError|timed out|ProxyError|NameResolutionError|NewConnectionError|Temporary failure|Name or service not known|nodename nor servname|Network is (down|unreachable)|No route to host|Max retries exceeded|RemoteDisconnected|Remote end closed connection' \
+    "$pip_log" 2>/dev/null
+}
+
+pip_index_display_url() {
+  printf '%s\n' "$1" | sed -E 's#(https?://)[^/@]+@#\1***@#'
+}
+
+pip_install_once() {
+  local python_cmd="$1"
+  local pip_log="$2"
+  local log_mode="$3"
+  local index_url="$4"
+  shift 4
+
+  local -a pip_command=("$python_cmd" -m pip)
+  if pip_should_use_system_truststore "$python_cmd"; then
+    pip_command+=(--use-feature=truststore)
+  fi
+  pip_command+=(install)
+  if [[ -n "$index_url" ]]; then
+    pip_command+=(--index-url "$index_url")
+  fi
+  pip_command+=("$@")
+
+  if [[ "$log_mode" == "append" ]]; then
+    "${pip_command[@]}" >>"$pip_log" 2>&1
+  else
+    "${pip_command[@]}" >"$pip_log" 2>&1
+  fi
+}
+
+pip_install_with_index_fallback() {
+  local python_cmd="$1"
+  local pip_log="$2"
+  shift 2
+
+  local primary_index=""
+  primary_index="$(pip_primary_index_url 2>/dev/null || true)"
+  local first_status=0
+  if pip_install_once "$python_cmd" "$pip_log" "write" "$primary_index" "$@"; then
+    return 0
+  else
+    first_status=$?
+  fi
+
+  if ! pip_failure_allows_index_fallback "$pip_log"; then
+    return "$first_status"
+  fi
+
+  local fallback_index=""
+  fallback_index="$(pip_fallback_index_url 2>/dev/null || true)"
+  if [[ -z "$fallback_index" || "$fallback_index" == "$primary_index" ]]; then
+    return "$first_status"
+  fi
+
+  local fallback_display
+  fallback_display="$(pip_index_display_url "$fallback_index")"
+  msg pip_index_fallback "$fallback_display"
+  printf '\nCCB pip fallback index: %s\n' "$fallback_display" >>"$pip_log"
+  if pip_install_once "$python_cmd" "$pip_log" "append" "$fallback_index" "$@"; then
+    _CCB_INSTALL_PIP_ACTIVE_INDEX_URL="$fallback_index"
+    return 0
+  else
+    return $?
+  fi
+}
+
 tomli_manual_install_command() {
   local use_venv_scope="${1:-0}"
   if [[ "$use_venv_scope" == "1" ]]; then
@@ -670,7 +829,7 @@ install_tomli_into_virtualenv() {
     pip_log_cleanup=1
   fi
 
-  if "$PYTHON_BIN" -m pip install "tomli>=2.0.0" >"$pip_log" 2>&1; then
+  if pip_install_with_index_fallback "$PYTHON_BIN" "$pip_log" "tomli>=2.0.0"; then
     if python_has_toml_reader; then
       if [[ "$pip_log_cleanup" -eq 1 ]]; then
         rm -f "$pip_log"
@@ -752,7 +911,7 @@ install_tomli() {
   else
     pip_log_cleanup=1
   fi
-  if "$PYTHON_BIN" -m pip install --user "tomli>=2.0.0" >"$pip_log" 2>&1; then
+  if pip_install_with_index_fallback "$PYTHON_BIN" "$pip_log" --user "tomli>=2.0.0"; then
     if python_has_toml_reader; then
       if [[ "$pip_log_cleanup" -eq 1 ]]; then
         rm -f "$pip_log"
@@ -765,7 +924,7 @@ install_tomli() {
     last_failure="$PYTHON_BIN -m pip install --user 'tomli>=2.0.0' failed"
   fi
 
-  if "$PYTHON_BIN" -m pip install --user --break-system-packages "tomli>=2.0.0" >"$pip_log" 2>&1; then
+  if pip_install_with_index_fallback "$PYTHON_BIN" "$pip_log" --user --break-system-packages "tomli>=2.0.0"; then
     if python_has_toml_reader; then
       if [[ "$pip_log_cleanup" -eq 1 ]]; then
         rm -f "$pip_log"
@@ -824,7 +983,7 @@ install_watchdog_into_virtualenv() {
     pip_log_cleanup=1
   fi
 
-  if "$PYTHON_BIN" -m pip install "watchdog>=2.1.0" >"$pip_log" 2>&1; then
+  if pip_install_with_index_fallback "$PYTHON_BIN" "$pip_log" "watchdog>=2.1.0"; then
     if python_has_module "watchdog"; then
       if [[ "$pip_log_cleanup" -eq 1 ]]; then
         rm -f "$pip_log"
@@ -911,7 +1070,7 @@ install_watchdog() {
   else
     pip_log_cleanup=1
   fi
-  if "$PYTHON_BIN" -m pip install --user "watchdog>=2.1.0" >"$pip_log" 2>&1; then
+  if pip_install_with_index_fallback "$PYTHON_BIN" "$pip_log" --user "watchdog>=2.1.0"; then
     if python_has_module "watchdog"; then
       if [[ "$pip_log_cleanup" -eq 1 ]]; then
         rm -f "$pip_log"
@@ -925,7 +1084,7 @@ install_watchdog() {
   fi
 
   # 3. PEP 668 fallback: --break-system-packages (Homebrew Python, Debian 12+, etc.)
-  if "$PYTHON_BIN" -m pip install --user --break-system-packages "watchdog>=2.1.0" >"$pip_log" 2>&1; then
+  if pip_install_with_index_fallback "$PYTHON_BIN" "$pip_log" --user --break-system-packages "watchdog>=2.1.0"; then
     if python_has_module "watchdog"; then
       if [[ "$pip_log_cleanup" -eq 1 ]]; then
         rm -f "$pip_log"
@@ -1513,6 +1672,16 @@ require_terminal_backend() {
   exit 1
 }
 
+preserve_managed_venv_in_staging() {
+  local staging="$1"
+  local existing_venv="$INSTALL_PREFIX/.venv"
+  if [[ ! -d "$existing_venv" ]]; then
+    return 0
+  fi
+  echo "Preserving managed Python venv across update"
+  mv "$existing_venv" "$staging/.venv"
+}
+
 copy_project() {
   local staging
   staging="$(mktemp -d)"
@@ -1543,6 +1712,7 @@ copy_project() {
       -cf - . | tar -C "$staging" -xf -
   fi
 
+  preserve_managed_venv_in_staging "$staging"
   rm -rf "$INSTALL_PREFIX"
   mkdir -p "$(dirname "$INSTALL_PREFIX")"
   mv "$staging" "$INSTALL_PREFIX"
@@ -1618,26 +1788,53 @@ install_managed_venv() {
   local venv_dir venv_python
   venv_dir="$(managed_venv_path)"
   venv_python="$(managed_venv_python)"
-  echo "Creating managed Python venv: $venv_dir"
-  rm -rf "$venv_dir"
-  if ! "$PYTHON_BIN" -m venv "$venv_dir"; then
-    echo "ERROR: Failed to create managed Python venv at $venv_dir"
-    case "$(detect_platform)" in
-      macos)
-        echo "   macOS: install or repair Homebrew Python: brew install python"
-        ;;
-      linux)
-        echo "   Debian/Ubuntu: sudo apt-get install -y python3-venv"
-        ;;
-    esac
-    exit 1
+  local reused_venv=0
+  if [[ -z "${CCB_PYTHON_BIN:-}" && -x "$venv_python" ]] && \
+     _python_check_310 "$venv_python" && \
+     "$venv_python" -m pip --version >/dev/null 2>&1; then
+    reused_venv=1
+    echo "Reusing managed Python venv: $venv_dir"
+  else
+    echo "Creating managed Python venv: $venv_dir"
+    rm -rf "$venv_dir"
+    if ! "$PYTHON_BIN" -m venv "$venv_dir"; then
+      echo "ERROR: Failed to create managed Python venv at $venv_dir"
+      case "$(detect_platform)" in
+        macos)
+          echo "   macOS: install or repair Homebrew Python: brew install python"
+          ;;
+        linux)
+          echo "   Debian/Ubuntu: sudo apt-get install -y python3-venv"
+          ;;
+      esac
+      exit 1
+    fi
   fi
   if [[ ! -x "$venv_python" ]]; then
     echo "ERROR: Managed venv Python not executable: $venv_python"
     exit 1
   fi
-  if ! "$venv_python" -m pip install --upgrade pip >/dev/null 2>&1; then
-    echo "WARN: unable to upgrade pip inside managed venv; continuing"
+  local refresh_pip=0
+  if [[ "$reused_venv" -eq 0 ]]; then
+    refresh_pip=1
+  elif pip_needs_system_trust_refresh "$venv_python"; then
+    refresh_pip=1
+    echo "Refreshing managed Python pip for system certificate support"
+  fi
+  if [[ "$refresh_pip" -eq 1 ]]; then
+    local pip_log pip_log_cleanup=0
+    pip_log="$(mktemp "${TMPDIR:-/tmp}/ccb-pip-upgrade.XXXXXX.log" 2>/dev/null || mktemp "/tmp/ccb-pip-upgrade.XXXXXX.log" 2>/dev/null || true)"
+    if [[ -z "$pip_log" ]]; then
+      pip_log="/dev/null"
+    else
+      pip_log_cleanup=1
+    fi
+    if ! pip_install_with_index_fallback "$venv_python" "$pip_log" --upgrade "pip>=24.2"; then
+      echo "WARN: unable to upgrade pip inside managed venv; continuing"
+    fi
+    if [[ "$pip_log_cleanup" -eq 1 ]]; then
+      rm -f "$pip_log"
+    fi
   fi
   install_tomli_for_python "$venv_python"
   install_watchdog_for_python "$venv_python"

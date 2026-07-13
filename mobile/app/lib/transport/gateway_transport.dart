@@ -101,12 +101,16 @@ class GatewayFileUploadResult {
     required this.fileName,
     this.mimeType,
     this.sizeBytes,
+    this.projectRelativePath,
+    this.projectPath,
   });
 
   final String fileId;
   final String fileName;
   final String? mimeType;
   final int? sizeBytes;
+  final String? projectRelativePath;
+  final String? projectPath;
 
   factory GatewayFileUploadResult.fromJson(Map<String, Object?> json) {
     return GatewayFileUploadResult(
@@ -120,6 +124,8 @@ class GatewayFileUploadResult {
           '',
       mimeType: _optionalPayloadText(json['mime_type']),
       sizeBytes: _optionalPayloadInt(json['size_bytes']),
+      projectRelativePath: _optionalPayloadText(json['project_relative_path']),
+      projectPath: _optionalPayloadText(json['project_path']),
     );
   }
 
@@ -129,6 +135,9 @@ class GatewayFileUploadResult {
       'file_name': fileName,
       if (mimeType != null) 'mime_type': mimeType,
       if (sizeBytes != null) 'size_bytes': sizeBytes,
+      if (projectRelativePath != null)
+        'project_relative_path': projectRelativePath,
+      if (projectPath != null) 'project_path': projectPath,
     };
   }
 }

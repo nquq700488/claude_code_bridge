@@ -306,6 +306,7 @@ void main() {
           mimeType: 'text/plain',
           sizeBytes: 12,
           localPath: '/tmp/notes.txt',
+          projectRelativePath: '.ccb/mobile/uploads/mobile/file-1-notes.txt',
           state: CcbMessageAttachmentState.downloaded,
         ),
       ],
@@ -326,6 +327,8 @@ void main() {
           'mime_type': 'text/plain',
           'size_bytes': 12,
           'kind': 'document',
+          'project_relative_path':
+              '.ccb/mobile/uploads/mobile/file-1-notes.txt',
         },
       ],
     });

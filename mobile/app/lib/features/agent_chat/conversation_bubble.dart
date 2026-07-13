@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../../l10n/ccb_mobile_localizations.dart';
 import '../../models/ccb_conversation_item.dart';
+import '../../widgets/working_attention_beat.dart';
 import 'conversation_item_presentation.dart';
 
 const double _minLimitedConversationBodyHeight = 220;
@@ -22,6 +23,7 @@ class ConversationBubble extends StatelessWidget {
     this.downloadingAttachmentIds = const {},
     this.downloadedAttachmentIds = const {},
     this.timelineViewportHeight,
+    this.timelineScrollController,
     this.isWorking = false,
     super.key,
   });
@@ -37,6 +39,7 @@ class ConversationBubble extends StatelessWidget {
   final Set<String> downloadingAttachmentIds;
   final Set<String> downloadedAttachmentIds;
   final double? timelineViewportHeight;
+  final ScrollController? timelineScrollController;
   final bool isWorking;
 
   void _toggleExpanded() {
@@ -112,153 +115,206 @@ class ConversationBubble extends StatelessWidget {
             color: bubbleColor,
             borderColor: borderColor,
             borderWidth: borderWidth,
-            child: Padding(
-              padding: const EdgeInsets.all(10),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Material(
-                    color: Colors.transparent,
-                    child: InkWell(
-                      onTap: collapsible ? _toggleExpanded : null,
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(conversationIcon(item.kind), size: 16),
-                          const SizedBox(width: 6),
-                          Expanded(
-                            child: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                Flexible(
-                                  child: Text(
-                                    conversationDisplayTitle(item),
-                                    style:
-                                        Theme.of(context).textTheme.titleSmall,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+            child: Stack(
+              children: [
+                Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Material(
+                        color: Colors.transparent,
+                        child: InkWell(
+                          onTap: collapsible ? _toggleExpanded : null,
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(conversationIcon(item.kind), size: 16),
+                              const SizedBox(width: 6),
+                              Expanded(
+                                child: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Flexible(
+                                      child: Text(
+                                        conversationDisplayTitle(item),
+                                        style:
+                                            Theme.of(
+                                              context,
+                                            ).textTheme.titleSmall,
+                                        maxLines: 1,
+                                        overflow: TextOverflow.ellipsis,
+                                      ),
+                                    ),
+                                    if (timestampLabel != null) ...[
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        timestampLabel,
+                                        key: ValueKey(
+                                          'conversation-timestamp-${item.id}',
+                                        ),
+                                        style: Theme.of(context)
+                                            .textTheme
+                                            .bodySmall
+                                            ?.copyWith(color: metadataColor),
+                                        maxLines: 1,
+                                        softWrap: false,
+                                        overflow: TextOverflow.fade,
+                                      ),
+                                    ],
+                                    if (showWorking) ...[
+                                      const SizedBox(width: 8),
+                                      _ConversationWorkingStatus(
+                                        key: ValueKey(
+                                          'conversation-working-${item.id}',
+                                        ),
+                                        startedAt:
+                                            item.startedAt ?? item.sentAt,
+                                      ),
+                                    ],
+                                  ],
                                 ),
-                                if (timestampLabel != null) ...[
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    timestampLabel,
-                                    key: ValueKey(
-                                      'conversation-timestamp-${item.id}',
-                                    ),
-                                    style: Theme.of(context).textTheme.bodySmall
-                                        ?.copyWith(color: metadataColor),
-                                    maxLines: 1,
-                                    softWrap: false,
-                                    overflow: TextOverflow.fade,
+                              ),
+                              if (visibleState != null)
+                                ConversationStateChip(
+                                  key: ValueKey(
+                                    'conversation-state-${item.id}',
                                   ),
-                                ],
-                                if (showWorking) ...[
-                                  const SizedBox(width: 8),
-                                  _ConversationWorkingStatus(
-                                    key: ValueKey(
-                                      'conversation-working-${item.id}',
-                                    ),
-                                    startedAt: item.startedAt ?? item.sentAt,
+                                  state: visibleState,
+                                ),
+                              if (collapsible && !expanded)
+                                IconButton(
+                                  key: ValueKey(
+                                    'conversation-expand-${item.id}',
                                   ),
-                                ],
-                              ],
-                            ),
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints.tightFor(
+                                    width: 32,
+                                    height: 32,
+                                  ),
+                                  tooltip: strings.expandMessage,
+                                  onPressed: _toggleExpanded,
+                                  icon: const Icon(Icons.expand_more),
+                                ),
+                            ],
                           ),
-                          if (visibleState != null)
-                            ConversationStateChip(
-                              key: ValueKey('conversation-state-${item.id}'),
-                              state: visibleState,
-                            ),
-                          if (collapsible)
-                            IconButton(
-                              key: ValueKey('conversation-expand-${item.id}'),
-                              visualDensity: VisualDensity.compact,
-                              padding: EdgeInsets.zero,
-                              constraints: const BoxConstraints.tightFor(
-                                width: 32,
-                                height: 32,
-                              ),
-                              tooltip:
-                                  expanded
-                                      ? strings.collapseMessage
-                                      : strings.expandMessage,
-                              onPressed: _toggleExpanded,
-                              icon: Icon(
-                                expanded
-                                    ? Icons.expand_less
-                                    : Icons.expand_more,
-                              ),
-                            ),
-                        ],
+                        ),
                       ),
+                      if (sourceLabel != null) ...[
+                        const SizedBox(height: 1),
+                        Text(
+                          sourceLabel,
+                          style: Theme.of(context).textTheme.bodySmall,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ],
+                      const SizedBox(height: 6),
+                      if (collapsible && !expanded)
+                        Material(
+                          color: Colors.transparent,
+                          child: InkWell(
+                            onTap: _toggleExpanded,
+                            child: ConversationPreview(item: item),
+                          ),
+                        )
+                      else
+                        ConversationBodyViewport(
+                          item: item,
+                          timelineViewportHeight: timelineViewportHeight,
+                          timelineScrollController: timelineScrollController,
+                          child: body,
+                        ),
+                      if (item.attachments.isNotEmpty) ...[
+                        const SizedBox(height: 6),
+                        ConversationAttachmentList(
+                          item: item,
+                          onDownloadAttachment: onDownloadAttachment,
+                          onOpenAttachment: onOpenAttachment,
+                          downloadingAttachmentIds: downloadingAttachmentIds,
+                          downloadedAttachmentIds: downloadedAttachmentIds,
+                        ),
+                      ],
+                      if (onRetry != null || onDelete != null) ...[
+                        const SizedBox(height: 6),
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Wrap(
+                            alignment: WrapAlignment.end,
+                            spacing: 4,
+                            runSpacing: 4,
+                            children: [
+                              if (onDelete != null)
+                                TextButton.icon(
+                                  key: ValueKey('delete-message-${item.id}'),
+                                  onPressed: onDelete,
+                                  icon: const Icon(Icons.delete_outline),
+                                  label: Text(strings.deleteMessage),
+                                ),
+                              if (onRetry != null)
+                                TextButton.icon(
+                                  key: ValueKey('retry-message-${item.id}'),
+                                  onPressed: onRetry,
+                                  icon: const Icon(Icons.refresh),
+                                  label: Text(strings.retry),
+                                ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                if (collapsible && expanded)
+                  Positioned(
+                    top: 42,
+                    right: 8,
+                    child: _FloatingConversationCollapseButton(
+                      itemId: item.id,
+                      tooltip: strings.collapseMessage,
+                      onPressed: _toggleExpanded,
                     ),
                   ),
-                  if (sourceLabel != null) ...[
-                    const SizedBox(height: 1),
-                    Text(
-                      sourceLabel,
-                      style: Theme.of(context).textTheme.bodySmall,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ],
-                  const SizedBox(height: 6),
-                  if (collapsible && !expanded)
-                    Material(
-                      color: Colors.transparent,
-                      child: InkWell(
-                        onTap: _toggleExpanded,
-                        child: ConversationPreview(item: item),
-                      ),
-                    )
-                  else
-                    ConversationBodyViewport(
-                      item: item,
-                      timelineViewportHeight: timelineViewportHeight,
-                      child: body,
-                    ),
-                  if (item.attachments.isNotEmpty) ...[
-                    const SizedBox(height: 6),
-                    ConversationAttachmentList(
-                      item: item,
-                      onDownloadAttachment: onDownloadAttachment,
-                      onOpenAttachment: onOpenAttachment,
-                      downloadingAttachmentIds: downloadingAttachmentIds,
-                      downloadedAttachmentIds: downloadedAttachmentIds,
-                    ),
-                  ],
-                  if (onRetry != null || onDelete != null) ...[
-                    const SizedBox(height: 6),
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Wrap(
-                        alignment: WrapAlignment.end,
-                        spacing: 4,
-                        runSpacing: 4,
-                        children: [
-                          if (onDelete != null)
-                            TextButton.icon(
-                              key: ValueKey('delete-message-${item.id}'),
-                              onPressed: onDelete,
-                              icon: const Icon(Icons.delete_outline),
-                              label: Text(strings.deleteMessage),
-                            ),
-                          if (onRetry != null)
-                            TextButton.icon(
-                              key: ValueKey('retry-message-${item.id}'),
-                              onPressed: onRetry,
-                              icon: const Icon(Icons.refresh),
-                              label: Text(strings.retry),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ],
-              ),
+              ],
             ),
           ),
+        ),
+      ),
+    );
+  }
+}
+
+class _FloatingConversationCollapseButton extends StatelessWidget {
+  const _FloatingConversationCollapseButton({
+    required this.itemId,
+    required this.tooltip,
+    required this.onPressed,
+  });
+
+  final String itemId;
+  final String tooltip;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Opacity(
+      key: ValueKey('conversation-floating-collapse-$itemId'),
+      opacity: 0.78,
+      child: Material(
+        color: colorScheme.surfaceContainerHighest,
+        elevation: 3,
+        shape: const CircleBorder(),
+        clipBehavior: Clip.antiAlias,
+        child: IconButton(
+          key: ValueKey('conversation-expand-$itemId'),
+          visualDensity: VisualDensity.compact,
+          padding: EdgeInsets.zero,
+          constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+          tooltip: tooltip,
+          onPressed: onPressed,
+          icon: const Icon(Icons.expand_less),
         ),
       ),
     );
@@ -287,88 +343,46 @@ class _ConversationBubbleSurface extends StatefulWidget {
       _ConversationBubbleSurfaceState();
 }
 
-class _ConversationBubbleSurfaceState extends State<_ConversationBubbleSurface>
-    with SingleTickerProviderStateMixin {
-  late final AnimationController _controller = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 1600),
-  );
-  late final Animation<double> _pulse = CurvedAnimation(
-    parent: _controller,
-    curve: Curves.easeInOut,
-  );
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _syncAnimation();
-  }
-
-  @override
-  void didUpdateWidget(_ConversationBubbleSurface oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _syncAnimation();
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  void _syncAnimation() {
-    final shouldAnimate =
-        widget.isWorking && !_conversationWorkingAnimationDisabled(context);
-    if (shouldAnimate) {
-      if (!_controller.isAnimating) {
-        _controller.repeat(reverse: true);
-      }
-      return;
-    }
-    if (_controller.isAnimating) {
-      _controller.stop();
-    }
-    _controller.value = 0;
-  }
-
+class _ConversationBubbleSurfaceState
+    extends State<_ConversationBubbleSurface> {
   @override
   Widget build(BuildContext context) {
     if (!widget.isWorking) {
-      return _buildMaterial(context, pulse: 0);
+      return _buildMaterial(context);
     }
-    return AnimatedBuilder(
-      key: ValueKey('conversation-working-glow-${widget.itemId}'),
-      animation: _pulse,
-      child: widget.child,
-      builder: (context, child) {
-        final pulse = _pulse.value;
-        return DecoratedBox(
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(8),
-            boxShadow: conversationWorkingBubbleGlow(
-              Theme.of(context).colorScheme,
-              pulse,
+    final accent = conversationWorkingBubbleAccent(
+      Theme.of(context).colorScheme,
+    );
+    return Stack(
+      clipBehavior: Clip.hardEdge,
+      children: [
+        _buildMaterial(context),
+        Positioned(
+          right: 5,
+          top: 7,
+          bottom: 7,
+          child: IgnorePointer(
+            child: WorkingAttentionBeat(
+              key: ValueKey('conversation-working-beat-${widget.itemId}'),
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  color: accent,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+                child: const SizedBox(width: 3),
+              ),
             ),
           ),
-          child: _buildMaterial(
-            context,
-            pulse: pulse,
-            child: child ?? widget.child,
-          ),
-        );
-      },
+        ),
+      ],
     );
   }
 
-  Widget _buildMaterial(
-    BuildContext context, {
-    required double pulse,
-    Widget? child,
-  }) {
+  Widget _buildMaterial(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
     final borderSide =
         widget.isWorking
-            ? conversationWorkingBubbleBorderSide(colorScheme, pulse)
+            ? conversationWorkingBubbleBorderSide(colorScheme)
             : BorderSide(color: widget.borderColor, width: widget.borderWidth);
     return Material(
       key: ValueKey('conversation-item-${widget.itemId}'),
@@ -378,7 +392,7 @@ class _ConversationBubbleSurfaceState extends State<_ConversationBubbleSurface>
         side: borderSide,
         borderRadius: BorderRadius.circular(8),
       ),
-      child: child ?? widget.child,
+      child: widget.child,
     );
   }
 }
@@ -391,39 +405,11 @@ Color conversationWorkingBubbleAccent(ColorScheme colorScheme) {
 }
 
 @visibleForTesting
-BorderSide conversationWorkingBubbleBorderSide(
-  ColorScheme colorScheme,
-  double pulse,
-) {
-  final clampedPulse = pulse.clamp(0.0, 1.0);
+BorderSide conversationWorkingBubbleBorderSide(ColorScheme colorScheme) {
   return BorderSide(
     color: conversationWorkingBubbleAccent(colorScheme),
-    width: 2.4 + (0.4 * clampedPulse),
+    width: 2.4,
   );
-}
-
-@visibleForTesting
-List<BoxShadow> conversationWorkingBubbleGlow(
-  ColorScheme colorScheme,
-  double pulse,
-) {
-  final clampedPulse = pulse.clamp(0.0, 1.0);
-  final accent = conversationWorkingBubbleAccent(colorScheme);
-  return [
-    BoxShadow(
-      color: accent.withValues(alpha: 0.16 + (0.10 * clampedPulse)),
-      blurRadius: 6 + (8 * clampedPulse),
-      spreadRadius: 0.5 + (1.4 * clampedPulse),
-    ),
-  ];
-}
-
-bool _conversationWorkingAnimationDisabled(BuildContext context) {
-  final mediaQuery = MediaQuery.maybeOf(context);
-  final isWidgetTest = WidgetsBinding.instance.runtimeType.toString().contains(
-    'Test',
-  );
-  return isWidgetTest || (mediaQuery?.disableAnimations ?? false);
 }
 
 class _ConversationWorkingStatus extends StatefulWidget {
@@ -463,8 +449,7 @@ class _ConversationWorkingStatusState
   void _syncTimer() {
     _timer?.cancel();
     _timer = null;
-    if (widget.startedAt == null ||
-        _conversationWorkingAnimationDisabled(context)) {
+    if (widget.startedAt == null || _workingElapsedTimerDisabled(context)) {
       return;
     }
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
@@ -506,6 +491,14 @@ class _ConversationWorkingStatusState
       ),
     );
   }
+}
+
+bool _workingElapsedTimerDisabled(BuildContext context) {
+  final mediaQuery = MediaQuery.maybeOf(context);
+  final isWidgetTest = WidgetsBinding.instance.runtimeType.toString().contains(
+    'Test',
+  );
+  return isWidgetTest || (mediaQuery?.disableAnimations ?? false);
 }
 
 String? _workingElapsedLabel(DateTime? startedAt) {
@@ -563,12 +556,14 @@ class ConversationBodyViewport extends StatefulWidget {
     required this.item,
     required this.child,
     this.timelineViewportHeight,
+    this.timelineScrollController,
     super.key,
   });
 
   final CcbConversationItem item;
   final Widget child;
   final double? timelineViewportHeight;
+  final ScrollController? timelineScrollController;
 
   @override
   State<ConversationBodyViewport> createState() =>
@@ -600,7 +595,13 @@ class _ConversationBodyViewportState extends State<ConversationBodyViewport> {
       key: ValueKey('conversation-body-viewport-${widget.item.id}'),
       height: maxHeight,
       child: NotificationListener<ScrollNotification>(
-        onNotification: (_) => true,
+        onNotification: (notification) {
+          handoffConversationBodyBoundaryOverscroll(
+            notification,
+            widget.timelineScrollController,
+          );
+          return true;
+        },
         child: Scrollbar(
           controller: _scrollController,
           thumbVisibility: true,
@@ -614,6 +615,30 @@ class _ConversationBodyViewportState extends State<ConversationBodyViewport> {
       ),
     );
   }
+}
+
+@visibleForTesting
+bool handoffConversationBodyBoundaryOverscroll(
+  ScrollNotification notification,
+  ScrollController? timelineScrollController,
+) {
+  if (notification is! OverscrollNotification ||
+      notification.dragDetails == null ||
+      timelineScrollController == null ||
+      !timelineScrollController.hasClients ||
+      notification.overscroll == 0) {
+    return false;
+  }
+  final position = timelineScrollController.position;
+  final target = (position.pixels + notification.overscroll).clamp(
+    position.minScrollExtent,
+    position.maxScrollExtent,
+  );
+  if (target == position.pixels) {
+    return false;
+  }
+  position.jumpTo(target.toDouble());
+  return true;
 }
 
 class ConversationAttachmentList extends StatelessWidget {

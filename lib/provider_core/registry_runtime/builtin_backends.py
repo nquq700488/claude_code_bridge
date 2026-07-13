@@ -18,6 +18,7 @@ OPTIONAL_PROVIDER_NAMES = (
     "kiro",
     "pi",
     "zai",
+    "grok",
 )
 
 
@@ -31,6 +32,7 @@ def build_builtin_backends(*, include_optional: bool = True) -> list[ProviderBac
     from provider_backends.deepseek import build_backend as build_deepseek_backend
     from provider_backends.droid import build_backend as build_droid_backend
     from provider_backends.gemini import build_backend as build_gemini_backend
+    from provider_backends.grok import build_backend as build_grok_backend
     from provider_backends.kiro import build_backend as build_kiro_backend
     from provider_backends.kimi import build_backend as build_kimi_backend
     from provider_backends.mimo import build_backend as build_mimo_backend
@@ -61,6 +63,7 @@ def build_builtin_backends(*, include_optional: bool = True) -> list[ProviderBac
             build_kiro_backend(),
             build_pi_backend(),
             build_zai_backend(),
+            build_grok_backend(),
         ])
     return backends
 

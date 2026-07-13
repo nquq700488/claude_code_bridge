@@ -14,6 +14,9 @@ from provider_core.caller_env import (
 )
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
+from provider_model_shortcuts import provider_model_runtime_env
+from provider_profiles import load_resolved_provider_profile
+from provider_thinking_shortcuts import provider_thinking_runtime_env
 from workspace.models import WorkspacePlan
 
 
@@ -53,13 +56,20 @@ def build_start_cmd(
 ) -> str:
     del command, prepared_state
     runtime_dir = Path(runtime_dir)
+    profile = load_resolved_provider_profile(runtime_dir)
+    runtime_env = {
+        **(dict(profile.env) if profile is not None else {}),
+        **spec.env,
+        **provider_model_runtime_env(spec.provider, model=spec.model),
+        **provider_thinking_runtime_env(spec.provider, thinking=spec.thinking),
+    }
     cmd_parts = provider_start_parts("deepseek")
     cmd_parts.extend(spec.startup_args)
     cmd = " ".join(shlex.quote(str(part)) for part in cmd_parts)
     cmd = apply_provider_command_template(cmd, spec.provider_command_template)
     env_prefix = join_env_prefix(
         export_env_clause(provider_user_session_env()),
-        export_env_clause(spec.env),
+        export_env_clause(runtime_env),
         export_env_clause(
             caller_context_env(actor=spec.name, runtime_dir=runtime_dir, launch_session_id=launch_session_id)
         ),

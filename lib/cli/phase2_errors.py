@@ -69,7 +69,7 @@ def parse_phase2_command(
 
 
 def handle_phase2_exception(err: TextIO, *, command_kind: str, exc: Exception) -> int:
-    is_config = command_kind == 'config-validate'
+    is_config = command_kind in {'config-ui', 'config-validate'}
     print_phase2_error(
         err,
         kind='failed',

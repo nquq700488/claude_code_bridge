@@ -301,6 +301,52 @@ def test_phase2_mobile_serve_uses_gateway_prepare(monkeypatch, tmp_path: Path) -
     assert 'mode: loopback_current_project' in stdout
 
 
+def test_phase2_config_ui_opens_and_serves_project_panel(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-config-ui'
+    (project_root / '.ccb').mkdir(parents=True)
+    seen: dict[str, object] = {}
+
+    class _FakeHandle:
+        url = 'http://127.0.0.1:43210/?token=test'
+        summary = {
+            'config_ui_status': 'serving',
+            'url': url,
+            'project_root': str(project_root),
+        }
+
+        def serve_forever(self) -> None:
+            seen['served'] = True
+
+        def close(self) -> None:
+            seen['closed'] = True
+
+    def _fake_prepare(context, command):
+        seen['project_root'] = context.project.project_root
+        seen['port'] = command.port
+        return _FakeHandle()
+
+    monkeypatch.setattr(phase2_module, 'prepare_config_ui', _fake_prepare)
+    monkeypatch.setattr(
+        phase2_module,
+        'open_config_ui_url',
+        lambda url: seen.setdefault('opened_url', url) is not None,
+    )
+
+    code, stdout, stderr = _run_phase2_local(['config', 'ui'], cwd=project_root)
+
+    assert code == 0, stderr
+    assert seen == {
+        'project_root': project_root.resolve(),
+        'port': 0,
+        'opened_url': _FakeHandle.url,
+        'served': True,
+        'closed': True,
+    }
+    assert 'config_ui_status: serving' in stdout
+    assert f'url: {_FakeHandle.url}' in stdout
+    assert (project_root / '.ccb' / 'ccb.config').exists() is False
+
+
 def test_phase2_config_validate_rejects_duplicate_effective_runtime_home(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-config-validate'
     _write(
@@ -5665,10 +5711,22 @@ def test_ccb_gemini_real_adapter_recovers_after_ccbd_restart_and_waits_for_post_
         else:
             raise AssertionError('expected session_snapshot before restart')
 
-        running = _wait_for_phase2_status(project_root, 'demo', 'running')
-        assert f'job_id: {job_id}' in running
-        assert 'reply: partial stable' in running
-        assert 'completion_reason: None' in running
+        deadline = time.time() + 3.0
+        last_stdout = ''
+        while time.time() < deadline:
+            code, running, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+            assert code == 0, stderr
+            last_stdout = running
+            if (
+                f'job_id: {job_id}' in running
+                and 'status: running' in running
+                and 'reply: partial stable' in running
+            ):
+                assert 'completion_reason: None' in running
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f'expected running partial preview before restart; last={last_stdout!r}')
 
         app1.request_shutdown()
         thread1.join(timeout=2)

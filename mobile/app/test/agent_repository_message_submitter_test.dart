@@ -84,7 +84,7 @@ void main() {
     );
 
     test(
-      'refreshes view once when submit hits stale namespace epoch',
+      'does not replay input when submit hits stale namespace epoch',
       () async {
         final repository = _SubmitRepository(
           responses: [
@@ -111,10 +111,10 @@ void main() {
           },
         ).submit(agent: _leadAgent, message: _localMessage(), view: _view(4));
 
-        expect(outcome.replacement?.state, CcbConversationDeliveryState.sent);
-        expect(outcome.shouldRefreshConversation, isTrue);
-        expect(refreshCount, 1);
-        expect(repository.requests.map((item) => item.namespaceEpoch), [4, 5]);
+        expect(outcome.replacement?.state, CcbConversationDeliveryState.failed);
+        expect(outcome.shouldRefreshConversation, isFalse);
+        expect(refreshCount, 0);
+        expect(repository.requests.map((item) => item.namespaceEpoch), [4]);
       },
     );
 
@@ -191,8 +191,16 @@ void main() {
         expect(repository.uploads.single.bytes, 'hello attachment'.codeUnits);
         expect(repository.requests.single.body, isEmpty);
         expect(repository.requests.single.attachments.single.fileId, 'file-1');
+        expect(
+          repository.requests.single.attachments.single.projectRelativePath,
+          '.ccb/mobile/uploads/lead/file-1-notes.txt',
+        );
         expect(repository.requests.single.attachments.single.localPath, isNull);
         expect(outcome.replacement?.attachments.single.fileId, 'file-1');
+        expect(
+          outcome.replacement?.attachments.single.projectRelativePath,
+          '.ccb/mobile/uploads/lead/file-1-notes.txt',
+        );
         expect(
           outcome.replacement?.attachments.single.state,
           CcbMessageAttachmentState.available,
@@ -480,6 +488,10 @@ class _SubmitRepository implements MobileCcbRepository {
       fileName: fileName,
       mimeType: mimeType,
       sizeBytes: bytes.length,
+      projectRelativePath:
+          '.ccb/mobile/uploads/$agentName/file-${uploads.length}-$fileName',
+      projectPath:
+          '/repo/.ccb/mobile/uploads/$agentName/file-${uploads.length}-$fileName',
     );
   }
 
@@ -532,6 +544,10 @@ class _PathUploadRepository extends _SubmitRepository
       fileName: fileName,
       mimeType: mimeType,
       sizeBytes: await File(path).length(),
+      projectRelativePath:
+          '.ccb/mobile/uploads/$agentName/path-file-${pathUploads.length}-$fileName',
+      projectPath:
+          '/repo/.ccb/mobile/uploads/$agentName/path-file-${pathUploads.length}-$fileName',
     );
   }
 }

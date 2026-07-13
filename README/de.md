@@ -2,19 +2,20 @@
 
 # CCB - Die Mobile App ist da!
 
-**Entwickelt fuer dezentrale Multi-Agent-Kollaboration**  
-**Ein sichtbarer und steuerbarer Multi-Agent-TUI-Arbeitsbereich**
+**Ein leichtgewichtiges Multi-Agent-TUI mit stabiler provider-uebergreifender Kollaborationsschicht**<br>
+**Koordiniere Codex, Claude, Gemini und andere CLI-Agenten in sichtbaren, steuerbaren Workflows, die du direkt uebernehmen kannst**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.0.15-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.1.3-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
-  <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285.svg" alt="providers">
+  <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
 <p>
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
   <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
   <img src="https://img.shields.io/badge/Qwen-6A5CFF?style=flat-square" alt="Qwen">
@@ -29,12 +30,12 @@
   <img src="https://img.shields.io/badge/Droid-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Droid">
 </p>
 
-[中文](README.md) | [English](readme_en.md) | [日本語](readme_ja.md) | [Français](readme_fr.md) | **Deutsch** | [العربية](readme_ar.md) | [Español](readme_es.md) | [Português](readme_pt.md) | [한국어](readme_ko.md) | [Русский](readme_ru.md)
+[中文](zh.md) | [English](../README.md) | [日本語](ja.md) | [Français](fr.md) | **Deutsch** | [العربية](ar.md) | [Español](es.md) | [Português](pt.md) | [한국어](ko.md) | [Русский](ru.md)
 
-[Schnellstart](#quick-start) · [Mobile App](#mobile-app) · [Rich-Modus](#rich-mode) · [Agents konfigurieren](#configure-agents) · [Benutzerhandbuch](docs/manuals/user-guide/) · [Entwicklerhandbuch](docs/manuals/developer-guide/)
+[Schnellstart](#quick-start) · [Mobile App](#mobile-app) · [Rich-Modus](#rich-mode) · [Agents konfigurieren](#configure-agents) · [Benutzerhandbuch](../docs/manuals/user-guide/) · [Entwicklerhandbuch](../docs/manuals/developer-guide/)
 
 <p align="center">
-  <img src="assets/readme_v7/ccb-hero-en-light.png" alt="Sichtbarer Multi-Agent-CLI-Arbeitsbereich von CCB" width="960">
+  <img src="../assets/readme_v7/ccb-hero-en-light.png" alt="Sichtbarer Multi-Agent-CLI-Arbeitsbereich von CCB" width="960">
 </p>
 
 </div>
@@ -110,7 +111,17 @@ mkdir -p .ccb
 
 ### 2. Projektkonfiguration erstellen
 
-Erstellen Sie `.ccb/ccb.config` im Projektwurzelverzeichnis. Die empfohlene v2-Topologie `[windows]` verwendet `,` und `;`, um vertikale Stapelung und horizontale Splits innerhalb jedes Windows zu steuern; `A,B;C,D` entspricht etwa einem Vier-Pane-Layout.
+Ein leeres Projekt startet schlank: CCB öffnet nur ein `main`-Window mit einem Agent namens `demo` und wählt das erste auf dem Rechner verfügbare unterstützte CLI. Ein Multi-Agent-Team wird nicht mehr standardmäßig gemountet.
+
+Klicken Sie oben links in der CCB-Sidebar auf **⚙ Einstellungen**, um das lokale Konfigurationspanel zu öffnen. Alternativ können Sie `ccb config ui` ausführen.
+
+<p align="center">
+  <img src="../assets/readme_v7/config-control-panel.png" alt="CCB-Konfigurationspanel für den Standard-Agent demo" width="960">
+</p>
+
+Das Panel konfiguriert Windows, Pane-Splits, Provider, Modelle, Thinking-Level, API-Overrides, Workspaces, Rich-Modus und Sidebar. Es validiert Änderungen vor dem Speichern und unterstützt Reload-Dry-Runs sowie geschützten Hot Reload.
+
+Für eine fortgeschrittene Multi-Agent-Topologie können Sie visuell weitere Agents hinzufügen oder `.ccb/ccb.config` manuell erstellen. `,` und `;` steuern dabei vertikale Stapelung und horizontale Splits; `A,B;C,D` entspricht etwa vier Panes.
 
 ```toml
 version = 2
@@ -160,20 +171,20 @@ ccb update mobile
 Dieser Befehl fuehrt durch Installation und Konfiguration.
 
 <p align="center">
-  <img src="assets/readme_v7/mobile-control-chat.jpg" alt="CCB Mobile Agent-Chat" width="180">
-  <img src="assets/readme_v7/mobile-control-terminal.jpg" alt="CCB Mobile Terminalsteuerung" width="180">
-  <img src="assets/readme_v7/mobile-control-files.jpg" alt="CCB Mobile Dateiuebertragung" width="180">
-  <img src="assets/readme_v7/mobile-control-pairing.jpg" alt="CCB Mobile Pairing und Verbindung" width="180">
+  <img src="../assets/readme_v7/mobile-control-chat.jpg" alt="CCB Mobile Agent-Chat" width="180">
+  <img src="../assets/readme_v7/mobile-control-terminal.jpg" alt="CCB Mobile Terminalsteuerung" width="180">
+  <img src="../assets/readme_v7/mobile-control-files.jpg" alt="CCB Mobile Dateiuebertragung" width="180">
+  <img src="../assets/readme_v7/mobile-control-pairing.jpg" alt="CCB Mobile Pairing und Verbindung" width="180">
 </p>
 
 <details>
 <summary><b>Mobile-App-Details, Sicherheitsgrenze und Source</b></summary>
 
-CCB 8.0.15 enthaelt den Flutter-Quellcode von CCB Mobile in [`mobile/`](mobile/) und veroeffentlicht das Android APK ueber GitHub Releases:
+CCB 8.1.3 enthaelt den Flutter-Quellcode von CCB Mobile in [`mobile/`](../mobile/) und veroeffentlicht das Android APK ueber GitHub Releases:
 
-- [CCB Mobile v8.0.15 APK herunterladen](https://github.com/bfly123/claude_code_bridge/releases/download/v8.0.15/ccb-mobile-v8.0.15.apk)
-- App-Source: [`mobile/app`](mobile/app)
-- Server-gateway-Source: [`lib/mobile_gateway`](lib/mobile_gateway)
+- [CCB Mobile v8.1.3 APK herunterladen](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.1.3/ccb-mobile-v8.1.3.apk)
+- App-Source: [`mobile/app`](../mobile/app)
+- Server-gateway-Source: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
 Die Smartphone-App ist eine Fernsteuerung fuer echte CCB-Projekte auf einem Server. Sie kann gemountete Projekte ueber das server-wide mobile gateway finden, windows und agents wechseln, Agent-Konversationen rendern, Text ueber pane-native input senden, eine Terminalansicht oeffnen und Bilder sowie Dokumente ueber das authentifizierte gateway hoch- und herunterladen.
 
@@ -193,7 +204,7 @@ Sicherheitsgrenze:
 Dateibaeume durchsuchen, Dateien oeffnen, Dokumente bearbeiten und Medien im Terminal anzeigen.
 
 <p align="center">
-  <img src="assets/readme_v7/rich-workbench.png" alt="CCB Rich-Medien-Workbench mit Yazi-Vorschau in WezTerm" width="860">
+  <img src="../assets/readme_v7/rich-workbench.png" alt="CCB Rich-Medien-Workbench mit Yazi-Vorschau in WezTerm" width="860">
 </p>
 
 ```bash
@@ -221,7 +232,7 @@ CCB unterstuetzt [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec
 
 ## Konfiguration und gemeinsame Memory
 
-Wenn Sie nicht sicher sind, wie windows gruppiert werden sollen, wie viele worker noetig sind, welche Agents worktrees verwenden sollten oder welche Agents eigene Modelle oder API-Routen brauchen, fragen Sie `ccb_self` im aktuellen Arbeitsbereich. Das ist der eingebaute self-agent von CCB: Er versteht CCB-Befehle, Konfigurationsautoritaet, roles, windows, reload-Grenzen und gaengige Wiederherstellungspfade und kann mit seinem privaten `ccb-config` skill gemeinsam mit Ihnen eine Konfiguration entwerfen. Leere Projekte enthalten `ccb_self`; bestehende Custom-Konfigurationen koennen ihn mit `ccb roles add agentroles.ccb_self:codex` hinzufuegen.
+Für normale Projektkonfigurationen wird das **⚙ Einstellungen**-Panel empfohlen. Für Agent-gestützte Konfiguration und Laufzeitdiagnose bleibt `ccb_self` als optionales Role Pack verfügbar und kann mit `ccb roles add agentroles.ccb_self:codex` hinzugefügt werden.
 
 `.ccb/ccb_memory.md` ist das projektweite gemeinsame Memory-Dokument. Nutzen Sie es fuer Teamregeln, Projektbeschraenkungen, langlebigen Kontext und Uebergabekonventionen zwischen Agents. Stabile agent-uebergreifende Informationen gehoeren dorthin, statt in mehrere provider-private Memory-Dateien kopiert zu werden.
 
@@ -234,7 +245,7 @@ Wenn Sie nicht sicher sind, wie windows gruppiert werden sollen, wie viele worke
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.jpg" alt="WeChat-Gruppe" width="240">
+  <img src="../assets/weixin.jpg" alt="WeChat-Gruppe" width="240">
 </p>
 
 <a id="community"></a>
@@ -250,11 +261,20 @@ Danke an [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fue
 ## Release Notes
 
 <details open>
+<summary><b>v8.0.14</b> - README-Verzeichnis bereinigt und Mobile-Release-Flaeche synchronisiert</summary>
+
+- Das Root-`README.md` ist wieder die englische GitHub-Startseite.
+- Lokalisierte README-Dateien liegen jetzt unter [`README/`](./), die chinesische Version unter [`zh.md`](zh.md).
+- Mobile-App-Links, package metadata und release notes zeigen auf das 8.0.14 APK.
+
+</details>
+
+<details>
 <summary><b>v8.0.12</b> - Release-CI-Portabilitaet und README-Lokalisierung</summary>
 
 - Mobile-host-registry-Tests legen temporaere Unix sockets jetzt unter einem kurzen `/tmp/ccb-sock-*` Pfad ab und vermeiden dadurch `AF_UNIX path too long` Fehler in macOS CI.
 - `ccb update mobile`, README-Links, package metadata und das mobile release manifest zeigen jetzt auf das 8.0.12 APK.
-- Das chinesische README ist jetzt das GitHub-Haupt-README; Englisch wurde nach `readme_en.md` verschoben, und Japanisch, Franzoesisch, Deutsch, Arabisch, Spanisch, Portugiesisch, Koreanisch und Russisch wurden mit derselben Abschnittsstruktur ergaenzt.
+- v8.0.12 fuehrte mehrsprachige READMEs mit gemeinsamer Abschnittsstruktur ein; die aktuellen lokalisierten Dateien liegen im Verzeichnis `README/`.
 
 </details>
 
@@ -285,4 +305,4 @@ Danke an [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fue
 
 </details>
 
-Die vollstaendige Historie steht in [CHANGELOG.md](CHANGELOG.md).
+Die vollstaendige Historie steht in [CHANGELOG.md](../CHANGELOG.md).

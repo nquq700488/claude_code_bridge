@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:xterm/xterm.dart';
@@ -128,6 +130,143 @@ void main() {
     expect(find.text('Pair a gateway profile first'), findsNothing);
   });
 
+  testWidgets(
+    'temporary activation failure preserves the token and Retry verifies it again',
+    (tester) async {
+      final successful = _pairedHost(hostId: 'proj-demo', deviceId: 'phone');
+      final recovering = _pairedHost(
+        hostId: 'proj-demo',
+        deviceId: 'tablet',
+        gatewayUrl: Uri.parse('https://recovering.example.test'),
+      );
+      final profileStore = await _profileStoreWith([successful, recovering]);
+      await profileStore.markSuccessful(successful);
+      final recoveringRepository =
+          _HealthCheckedGatewayRepository()
+            ..healthError = TimeoutException('gateway warming');
+      final factoryProfiles = <GatewayPairedHost>[];
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: RecordingGatewayRepository(),
+            profileStore: profileStore,
+            gatewayRepositoryFactory: (profile) {
+              factoryProfiles.add(profile);
+              return profile.profile.deviceId == recovering.profile.deviceId
+                  ? recoveringRepository
+                  : _HealthCheckedGatewayRepository();
+            },
+            gatewayTerminalTransportFactory:
+                (_) => RecordingTerminalTransport(),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await openConnectionDetails(tester);
+      await expandTile(tester, const ValueKey('runtime-mode-panel'));
+      _runtimeSegments(
+        tester,
+      ).onSelectionChanged?.call({AppRuntimeMode.pairedGateway});
+      await tester.pumpAndSettle();
+      await tester.tap(find.byType(DropdownButtonFormField<GatewayPairedHost>));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('proj-demo / tablet / lan').last);
+      await tester.pumpAndSettle();
+      await dismissConnectionDetails(tester);
+
+      expect(
+        find.byKey(const ValueKey('project-list-load-error')),
+        findsOneWidget,
+      );
+      expect(
+        (await profileStore.read(
+          hostId: 'proj-demo',
+          deviceId: 'tablet',
+        ))?.deviceToken,
+        recovering.deviceToken,
+      );
+      expect(
+        (await profileStore.resolvePreferred(
+          await profileStore.list(),
+        ))?.profile.deviceId,
+        'phone',
+      );
+
+      recoveringRepository.healthError = null;
+      await tester.tap(find.byKey(const ValueKey('project-list-retry-button')));
+      await tester.pumpAndSettle();
+
+      expect(find.byKey(const ValueKey('project-list')), findsOneWidget);
+      expect(
+        factoryProfiles
+            .where(
+              (profile) =>
+                  profile.profile.deviceId == recovering.profile.deviceId,
+            )
+            .map((profile) => profile.deviceToken),
+        [recovering.deviceToken, recovering.deviceToken],
+      );
+      expect(
+        (await profileStore.resolvePreferred(
+          await profileStore.list(),
+        ))?.profile.deviceId,
+        'tablet',
+      );
+    },
+  );
+
+  testWidgets('revoked profile fails closed and directs the user to Re-pair', (
+    tester,
+  ) async {
+    final profile = _pairedHost(hostId: 'proj-demo', deviceId: 'phone');
+    final profileStore = await _profileStoreWith([profile]);
+    final repository = _HealthCheckedGatewayRepository()..revoked = true;
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: RecordingGatewayRepository(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => repository,
+          gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await openConnectionDetails(tester);
+    await expandTile(tester, const ValueKey('runtime-mode-panel'));
+    _runtimeSegments(
+      tester,
+    ).onSelectionChanged?.call({AppRuntimeMode.pairedGateway});
+    await tester.pumpAndSettle();
+    await dismissConnectionDetails(tester);
+
+    expect(
+      find.byKey(const ValueKey('project-list-repair-button')),
+      findsOneWidget,
+    );
+    expect(
+      find.byKey(const ValueKey('project-list-retry-button')),
+      findsNothing,
+    );
+    expect(find.text('Re-pair'), findsOneWidget);
+    expect(
+      await profileStore.read(hostId: 'proj-demo', deviceId: 'phone'),
+      isNull,
+    );
+
+    await tester.tap(find.byKey(const ValueKey('project-list-repair-button')));
+    await tester.pumpAndSettle();
+
+    expect(
+      find.byKey(const ValueKey('project-home-onboarding')),
+      findsOneWidget,
+    );
+  });
+
   testWidgets('activation syncs gateway settings on project list', (
     tester,
   ) async {
@@ -191,6 +330,7 @@ void main() {
       routeKind: RouteProviderKind.relay,
     );
     final profileStore = await _profileStoreWith([first, second]);
+    await profileStore.markSelected(first);
     final seenRepositoryProfiles = <GatewayPairedHost>[];
 
     await tester.pumpWidget(
@@ -225,6 +365,12 @@ void main() {
     expect(loadedSecond.profile.deviceId, second.profile.deviceId);
     expect(seenRepositoryProfiles.first, same(loadedFirst));
     expect(seenRepositoryProfiles.last, same(loadedSecond));
+    expect(
+      (await profileStore.resolvePreferred(
+        await profileStore.list(),
+      ))?.profile.deviceId,
+      'tablet',
+    );
     expect(find.text('Pair a gateway profile first'), findsNothing);
     expect(find.text('proj-demo / tablet / relay'), findsWidgets);
   });
@@ -313,6 +459,32 @@ class _FailingProfileStore extends GatewayHostProfileStore {
   @override
   Future<List<GatewayPairedHost>> list() {
     throw StateError('profile load failed');
+  }
+}
+
+class _HealthCheckedGatewayRepository extends RecordingGatewayRepository
+    implements MobileGatewayProfileHealthProbe {
+  Object? healthError;
+  bool revoked = false;
+
+  @override
+  Future<GatewayHealth> health() async {
+    final error = healthError;
+    if (error != null) {
+      throw error;
+    }
+    return GatewayHealth(status: 'ok', serverTime: DateTime.utc(2026, 7, 10));
+  }
+
+  @override
+  Future<GatewayDevice> device() async {
+    return GatewayDevice(
+      deviceId: 'phone',
+      projectId: 'proj-demo',
+      scopes: const {'view'},
+      routeProvider: RouteProviderKind.lan,
+      revoked: revoked,
+    );
   }
 }
 

@@ -125,7 +125,7 @@ def test_phase2_fault_commands_manage_rules(tmp_path: Path) -> None:
     bootstrap_project(project_root)
 
     code, stdout, stderr = _run_phase2_local(
-        ['fault', 'arm', 'agent1', '--task-id', 'drill-3', '--reason', 'api_error', '--count', '2'],
+        ['fault', 'arm', 'demo', '--task-id', 'drill-3', '--reason', 'api_error', '--count', '2'],
         cwd=project_root,
     )
     assert code == 0

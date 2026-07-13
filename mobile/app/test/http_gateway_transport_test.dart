@@ -16,6 +16,7 @@ void main() {
   final fileNameHeaders = <String?>[];
   final contentTypes = <String?>[];
   final terminalMessages = <Map<String, Object?>>[];
+  final projectListPayloads = <Map<String, Object?>>[];
 
   setUp(() async {
     requests.clear();
@@ -26,6 +27,7 @@ void main() {
     fileNameHeaders.clear();
     contentTypes.clear();
     terminalMessages.clear();
+    projectListPayloads.clear();
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       requests.add(request.uri.path);
@@ -78,13 +80,16 @@ void main() {
       }
       final body = await utf8.decodeStream(request);
       bodies.add(body);
-      final payload = _payloadForRequest(
-        request.method,
-        request.uri.path,
-        body,
-        authorization,
-        request.headers.value(HttpHeaders.hostHeader),
-      );
+      final payload =
+          request.uri.path == '/v1/projects' && projectListPayloads.isNotEmpty
+              ? _GatewayResponse(projectListPayloads.removeAt(0))
+              : _payloadForRequest(
+                request.method,
+                request.uri.path,
+                body,
+                authorization,
+                request.headers.value(HttpHeaders.hostHeader),
+              );
       request.response.headers.contentType = ContentType.json;
       request.response.statusCode = payload.statusCode;
       request.response.write(jsonEncode(payload.body));
@@ -164,6 +169,44 @@ void main() {
     expect(projects.single.lastActivityAt, DateTime.utc(2026, 7, 4, 9, 2));
     expect(requests, ['/v1/projects']);
   });
+
+  test(
+    'waits for server-wide project health warmup before returning',
+    () async {
+      projectListPayloads.addAll([
+        {
+          'schema_version': 1,
+          'projects': <Object?>[],
+          'health_warming': true,
+          'health_unknown_project_count': 1,
+        },
+        {
+          'schema_version': 1,
+          'projects': [
+            {
+              'id': 'proj-live',
+              'display_name': 'live',
+              'health': 'healthy',
+              'capabilities': ['http_json', 'project_view'],
+            },
+          ],
+          'health_warming': false,
+          'health_unknown_project_count': 0,
+        },
+      ]);
+      final warmupTransport = HttpGatewayTransport(
+        profile: transport.profile,
+        projectListWarmupRetryDelay: Duration.zero,
+        projectListWarmupMaxAttempts: 3,
+      );
+      addTearDown(() => warmupTransport.close(force: true));
+
+      final projects = await warmupTransport.listProjects();
+
+      expect(projects.map((project) => project.id), ['proj-live']);
+      expect(requests, ['/v1/projects', '/v1/projects']);
+    },
+  );
 
   test(
     'reads redacted ProjectView without route or tmux attach evidence',

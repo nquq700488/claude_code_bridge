@@ -24,9 +24,18 @@ It is the authoritative design anchor for:
 - `~/.ccb/ccb.config` is the user-level config file used only when project config is absent.
 - CCB must not auto-create, reconstruct, or rewrite `.ccb/ccb.config`; it is a user-authored project file.
 - When both `.ccb/ccb.config` and `~/.ccb/ccb.config` are absent, config loading must use the built-in default project config from code and report the source kind as `builtin_default`.
-- The built-in default project config must provide a usable maintenance route:
-  `agent1:codex`, `agent2:codex`, `agent3:claude`, and `ccb_self:codex`
-  in the main window, with `ccb_self` bound to `agentroles.ccb_self`.
+- The built-in default project config contains exactly one `demo` agent in the
+  `main` window. It selects the first locally available supported provider CLI,
+  preferring `codex`, then `claude`, then `gemini`, followed by the remaining
+  built-in providers in registry order.
+- Provider availability uses the effective provider executable, including a
+  configured `*_START_CMD` override. If no supported provider executable is
+  available, the default remains `demo:codex` so startup fails with the normal
+  actionable missing-executable diagnostic instead of inventing an invalid
+  empty topology.
+- Built-in provider selection is evaluated while the built-in default is in
+  use. Saving from the config control panel creates an explicit project config
+  and therefore pins the selected provider and topology.
 - User help text, validation output, diagnostics, and docs must report the active config source kind: `project_config`, `user_config`, or `builtin_default`.
 - `.ccb/config.yaml` is not part of the contract and must not be read or written by current code.
 
@@ -102,12 +111,13 @@ Examples:
 - Each configured agent must appear exactly once in the layout.
 - Built-in provider keys are currently `codex`, `claude`, `gemini`,
   `opencode`, `droid`, `agy`, `kimi`, `deepseek`, `mimo`, `qwen`, `cursor`,
-  `copilot`, `crush`, `kiro`, and `pi`. The `deepseek` provider key launches the
+  `copilot`, `crush`, `kiro`, `pi`, `zai`, and `grok`. The `deepseek` provider key launches the
   DeepSeek-oriented Deep Code CLI command `deepcode` by default; `mimo`
   launches Xiaomi MiMo Code with command `mimo`; `qwen`, `cursor`, `copilot`,
   `crush`, `kiro`, and `pi` launch `qwen`, `agent`, `copilot`, `crush`,
-  `kiro-cli`, and `pi` respectively unless overridden by their provider start-command
-  environment variable.
+  `kiro-cli`, and `pi` respectively; `zai` and `grok` launch `zai` and `grok`.
+  Each command may be overridden by its provider start-command environment
+  variable.
 - The command pane remains a runtime anchor outside the `[windows]` agent leaf
   grammar.
 - Compact config leaf order defines `default_agents`.
@@ -462,20 +472,50 @@ model = "gpt-5"
 
 Contract:
 
-- `model` is supported only for providers with first-class CLI model flags:
+- `model` is supported only for providers with first-class launch mappings:
   - `codex`
   - `claude`
   - `gemini`
   - `opencode`
-- `model` is user-facing sugar only. The loader/runtime model must compile it
-  onto the existing provider startup-argument path instead of introducing a
-  second launch authority.
+  - `mimo`
+  - `deepseek`
+- `model` is user-facing sugar only. Providers with model flags compile it onto
+  the existing startup-argument path. DeepSeek compiles it to
+  `DEEPCODE_MODEL`, the Deep Code CLI's documented runtime override.
 - `model` may coexist with unrelated `startup_args`, but must not be combined
   with provider model flags already present in `startup_args`.
 - Config rendering and recovery must preserve the user-facing `model` field
   instead of expanding it into provider-specific `startup_args`.
 
-### 4.4 Provider Command Template
+### 4.5 Static Agent Thinking Shortcut
+
+Static rich or hybrid agent overlays may select a provider-supported reasoning
+level:
+
+```toml
+[agents.agent1]
+model = "gpt-5.5"
+thinking = "high"
+```
+
+Contract:
+
+- `thinking` may accompany an explicit `model` or apply to the provider's
+  inherited default model. The control panel requires an explicit model before
+  offering model-specific levels; manual inherited-model use remains valid.
+- Codex accepts the model-specific level exposed by the installed Codex model
+  catalog and compiles it to `-c model_reasoning_effort="<level>"`.
+- DeepSeek V4 Pro and V4 Flash accept `off`, `high`, or `max`. CCB compiles
+  these to the Deep Code CLI's `DEEPCODE_THINKING_ENABLED` and
+  `DEEPCODE_REASONING_EFFORT` environment overrides.
+- Other providers do not have a static CCB thinking mapping. Their `thinking`
+  field must fail validation instead of being ignored.
+- Structured `thinking` must not be combined with an equivalent Codex
+  `startup_args` config override or Deep Code environment override.
+- Config rendering preserves `thinking` and removes generated provider launch
+  arguments from user-facing TOML.
+
+### 4.6 Provider Command Template
 
 For provider-specific launch wrappers, rich or hybrid `ccb.config` may define an
 agent-local command template:
@@ -497,7 +537,7 @@ Contract:
 - Providers must reject malformed templates during config loading rather than
   attempting partial fallback at startup.
 
-### 4.5 Workspace Mode Semantics
+### 4.7 Workspace Mode Semantics
 
 - `workspace_mode = "inplace"` means the agent uses the project root directly.
 - `workspace_mode = "git-worktree"` means the project root must be a valid git
@@ -517,7 +557,7 @@ Contract:
 - `workspace_mode = "copy"` is the only mode that may create an explicit
   directory copy of the project tree.
 
-### 4.6 Loop Capacity Role Profiles
+### 4.8 Loop Capacity Role Profiles
 
 Rich or hybrid `ccb.config` may define loop capacity policy under `[loop]`.
 This is source policy for dynamic execution nodes, not a configured agent set
@@ -581,9 +621,9 @@ Contract:
 - `model` is preserved as a user-facing field and must not be combined with a
   provider model flag in `startup_args`.
 - `thinking` is a provider-neutral source-policy field and currently accepts
-  `low`, `medium`, or `high`. Provider-specific compilation belongs to the
-  future loop capacity runtime adapter; unsupported mappings must fail visibly
-  rather than being ignored.
+  `low`, `medium`, or `high`. When a profile becomes a runtime agent, the same
+  provider compiler used by static agents applies it; unsupported
+  provider/model mappings fail visibly instead of being ignored.
 - `workspace_group` requires `workspace_mode = "git-worktree"`.
 - `provider_profile` follows the same source-configuration boundary as
   `[agents.<name>.provider_profile]`; provider sessions and auth remain

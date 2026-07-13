@@ -36,6 +36,11 @@ headless `--prompt` support, such as `@guizmo-ai/zai-cli`; official
 `@z_ai/coding-helper` remains a setup helper for loading GLM Coding Plan into
 other tools, not a standalone CCB ask runtime.
 
+Grok completion hardening has landed in source. Successful Grok asks now
+require provider-native `EndTurn` evidence with a non-empty reply. Process exit
+without native terminal evidence is incomplete, and neither model-printed
+`CCB_DONE` nor an internal CCB turn-boundary item is completion authority.
+
 ## Last Landed
 
 - Shared pane-quiet support and Kimi/DeepSeek provider backends were added in
@@ -135,11 +140,15 @@ other tools, not a standalone CCB ask runtime.
 
 ## Active TODO
 
-1. Decide whether to keep the smoke/real test projects as reusable validation
+1. Land the Grok `ask` and `ccb-clear` design in
+   [topics/grok-ccb-skills-design.md](topics/grok-ccb-skills-design.md), then
+   execute the unit, isolated source-runtime, and real two-instance gates in
+   [topics/grok-ask-skill-test-plan.md](topics/grok-ask-skill-test-plan.md).
+2. Decide whether to keep the smoke/real test projects as reusable validation
    fixtures.
-2. Decide whether provider-specific auth diagnostics should land before the
+3. Decide whether provider-specific auth diagnostics should land before the
    next public release or remain a follow-up.
-3. Decide whether real authenticated blackbox asks for all six next-wave CLIs
+4. Decide whether real authenticated blackbox asks for all six next-wave CLIs
    should be required before a public release or tracked as manual follow-up.
 
 ## Blocked By
@@ -153,6 +162,16 @@ Kimi hardening source work is unblocked. Remaining Kimi prompt-mode and auth
 diagnostic ideas stay deferred/open until real usage needs them.
 
 ## Last Verified
+
+Grok native completion verification:
+
+- Focused Grok and structured-event tests: `25 passed, 29 deselected`.
+- Complete Grok/native CLI execution files: `54 passed`.
+- Wider provider/registry tests: `31 passed`.
+- Real authenticated source-runtime job `job_8e38805500d5` returned
+  `GROK_NATIVE_ENDTURN_OK_0711`; raw provider output contained
+  `type=end`, `stopReason=EndTurn`, and trace terminalized with
+  `grok_run_stop`.
 
 AGY delivery stability focused verification:
 

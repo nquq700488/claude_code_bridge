@@ -219,10 +219,13 @@ If `.ccb/ccb.config` is missing, bootstrap should use the built-in default:
 entry_window = "main"
 
 [windows]
-main = "agent1:codex, agent2:codex, agent3:claude, ccb_self:codex"
+main = "demo:codex"
 ```
 
-The sidebar defaults are implicit and need not be written unless the user overrides them.
+The provider shown above is the fallback. Runtime config loading selects the
+first locally available supported provider CLI and keeps exactly one `demo`
+agent. The sidebar defaults are implicit and need not be written unless the
+user overrides them.
 
 ### 4.4 Parser And Normalization Rules
 
@@ -809,7 +812,8 @@ Recommended defaults:
 - RPC timeout: `500ms` for sidebar UI calls
 - first failure backoff: `2000ms`
 - repeated failure backoff: `5000ms`
-- manual refresh key: `r`
+- explicit refresh remains available through terminal redraw / `Ctrl-L`; normal
+  ProjectView freshness is polling-driven
 
 Rationale:
 
@@ -941,7 +945,16 @@ Keyboard Phase 1:
 - `k` / `Up`: move selection up
 - `Enter`: switch to selected window or selected agent pane
 - `Tab`: move focus between sidebar and the last focused managed pane in the same window when possible
-- `r`: refresh ProjectView if a manual refresh action is still needed
+- `r`: deliberately restart configured agent panes through `ccbd`
+- `Ctrl-L`: force an immediate ProjectView refresh
+
+Header controls:
+
+- `⚙`: launch the current project's loopback-only `ccb config ui`
+- `×`: kill the current project
+
+Restart is intentionally keyboard-only because it is disruptive and should not
+share the prominent header click surface with ordinary settings access.
 
 Window row behavior:
 
@@ -1786,7 +1799,7 @@ Current implementation notes:
 - `ProjectConfig` now normalizes `windows`, `entry_window`, `sidebar`, and `topology_signature` for both legacy compact config and new TOML topology config.
 - New missing-config bootstrap uses the built-in topology shape:
   - `entry_window = "main"`
-  - `[windows] main = "agent1:codex, agent2:codex, agent3:claude, ccb_self:codex"`
+  - `[windows] main = "demo:<first-available-provider>"`
 - Existing compact configs remain accepted and are normalized into one logical `main` window with the legacy `cmd` leaf pruned out of `ProjectConfig.windows`.
 - New TOML `windows` topology rejects `cmd`, duplicate agents across windows, missing provider declarations, unknown `entry_window`, mixed `layout`, mixed `cmd_enabled`, and explicit `default_agents`.
 - Explicit `windows` config may still use `[agents.<name>]` for richer agent fields, but the provider declared in that table must not conflict with the provider declared in the window leaf.
@@ -1944,7 +1957,13 @@ Current implementation notes:
 - The client sends ccbd RPC requests using the existing newline-delimited JSON protocol and reads `project_view`.
 - The model layer deserializes the Phase 1 ProjectView window, agent, and Comms rows, including compact job id/reason, display status, reply-delivery, and body-preview fields when present.
 - The TUI renders the window/agent tree plus compact two-line Comms panel. It preserves `activity_symbol`/`activity_color` supplied by ProjectView, colors compact Comms status labels, and falls back to the fixed Phase 1 state table only when optional fields are absent.
-- Keyboard navigation supports `j`/`k`/arrows, `r` refresh, `Enter` focus through ccbd RPC, `Tab` return-to-current-window focus through ccbd RPC, and `q`/`Esc` exit for development. Mouse navigation supports left-click focus on window and agent rows. `stale_view` focus failures refresh ProjectView and retry the original target once; `target_missing` does not retry until a later ProjectView can show recovery.
+- Keyboard navigation supports `j`/`k`/arrows, deliberate `r` pane restart,
+  `Ctrl-L` refresh, `Enter` focus through ccbd RPC, `Tab`
+  return-to-current-window focus through ccbd RPC, and `q`/`Esc` exit for
+  development. Mouse navigation supports left-click focus on window and agent
+  rows plus `⚙` settings and `×` project kill header actions. `stale_view`
+  focus failures refresh ProjectView and retry the original target once;
+  `target_missing` does not retry until a later ProjectView can show recovery.
 - The tree header and border are focus-aware: green when the sidebar's own window is focused, yellow with `focus:<window>` when another managed window has focus, and yellow degraded styling when ProjectView/RPC is stale.
 - In narrow sidebars, the tree header uses compact focus titles such as `review>main` instead of the full project name so cross-window focus remains visible.
 - Rust unit tests include fake Unix socket coverage for `project_view`, `project_focus_window`, `project_focus_agent`, window-row `Enter`, `Tab`, `stale_view` refresh/retry, and `target_missing` no-retry behavior over newline-delimited JSON RPC, plus `ratatui::TestBackend` coverage for the rendered tree, status symbol/color, focus-aware header/border, degraded header, last-good ProjectView retention, no-last-good fallback screen, half-height Comms panel, and mouse row hit testing.

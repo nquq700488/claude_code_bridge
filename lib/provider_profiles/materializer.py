@@ -51,6 +51,10 @@ _API_ENV_KEYS = {
         'MMX_POLL_INTERVAL',
         'MMX_SYNC_TIMEOUT',
     },
+    'deepseek': {
+        'DEEPCODE_API_KEY',
+        'DEEPCODE_BASE_URL',
+    },
 }
 
 

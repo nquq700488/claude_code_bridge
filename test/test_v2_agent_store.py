@@ -33,6 +33,7 @@ def test_agent_stores_roundtrip(tmp_path: Path) -> None:
         permission_default=PermissionMode.MANUAL,
         queue_policy=QueuePolicy.SERIAL_PER_AGENT,
         model='gpt-5',
+        thinking='high',
         api=AgentApiSpec(key='sk-store', url='https://api.store.example.test/v1'),
         branch_template='ccb/{agent_name}',
     )

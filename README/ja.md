@@ -2,19 +2,20 @@
 
 # CCB - モバイルアプリが登場しました！
 
-**分散型マルチエージェント協調を前提に設計**  
-**見える、制御できるマルチエージェント TUI ワークスペース**
+**軽快なマルチエージェント TUI と、安定したクロスプロバイダー協調レイヤー**<br>
+**Codex、Claude、Gemini などの CLI Agent を、見える・制御できる・直接引き継げるワークフローで連携**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.0.15-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.1.3-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
-  <img src="https://img.shields.io/badge/providers-15%20CLI%20families-0B7285.svg" alt="providers">
+  <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
 <p>
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
   <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
   <img src="https://img.shields.io/badge/Qwen-6A5CFF?style=flat-square" alt="Qwen">
@@ -29,12 +30,12 @@
   <img src="https://img.shields.io/badge/Droid-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Droid">
 </p>
 
-[中文](README.md) | [English](readme_en.md) | **日本語** | [Français](readme_fr.md) | [Deutsch](readme_de.md) | [العربية](readme_ar.md) | [Español](readme_es.md) | [Português](readme_pt.md) | [한국어](readme_ko.md) | [Русский](readme_ru.md)
+[中文](zh.md) | [English](../README.md) | **日本語** | [Français](fr.md) | [Deutsch](de.md) | [العربية](ar.md) | [Español](es.md) | [Português](pt.md) | [한국어](ko.md) | [Русский](ru.md)
 
-[クイックスタート](#quick-start) · [Mobile App](#mobile-app) · [Rich モード](#rich-mode) · [エージェント設定](#configure-agents) · [ユーザーガイド](docs/manuals/user-guide/) · [開発者ガイド](docs/manuals/developer-guide/)
+[クイックスタート](#quick-start) · [Mobile App](#mobile-app) · [Rich モード](#rich-mode) · [エージェント設定](#configure-agents) · [ユーザーガイド](../docs/manuals/user-guide/) · [開発者ガイド](../docs/manuals/developer-guide/)
 
 <p align="center">
-  <img src="assets/readme_v7/ccb-hero-en-light.png" alt="CCB の可視マルチエージェント CLI ワークスペース" width="960">
+  <img src="../assets/readme_v7/ccb-hero-en-light.png" alt="CCB の可視マルチエージェント CLI ワークスペース" width="960">
 </p>
 
 </div>
@@ -110,7 +111,17 @@ mkdir -p .ccb
 
 ### 2. プロジェクト設定を作成
 
-プロジェクトルートに `.ccb/ccb.config` を作成します。推奨される v2 `[windows]` トポロジーでは、window 内の agent 配置を `,` と `;` で制御します。たとえば `A,B;C,D` はほぼ 4 分割レイアウトです。
+空のプロジェクトは軽量に起動します。CCB は `main` window を 1 つだけ開き、マシン上で利用可能な最初の対応 CLI を使って `demo` という agent を 1 つ作成します。Multi-Agent チームはデフォルトではマウントされません。
+
+CCB sidebar 左上の **⚙ 設定** をクリックすると、ローカル設定コントロールパネルが開きます。`ccb config ui` でも起動できます。
+
+<p align="center">
+  <img src="../assets/readme_v7/config-control-panel.png" alt="デフォルト demo agent を編集する CCB 設定コントロールパネル" width="960">
+</p>
+
+パネルでは windows、pane 分割、provider、model、thinking レベル、API override、workspace、Rich モード、sidebar を設定できます。保存前の検証、reload dry-run、保護付き hot reload に対応します。
+
+高度な Multi-Agent トポロジーが必要な場合は、画面上で agent を追加するか `.ccb/ccb.config` を手動作成します。`,` と `;` で縦積みと横分割を制御でき、`A,B;C,D` はほぼ 4 pane の配置です。
 
 ```toml
 version = 2
@@ -160,20 +171,20 @@ ccb update mobile
 このコマンドがインストールと設定を案内します。
 
 <p align="center">
-  <img src="assets/readme_v7/mobile-control-chat.jpg" alt="CCB Mobile agent チャット" width="180">
-  <img src="assets/readme_v7/mobile-control-terminal.jpg" alt="CCB Mobile 端末操作" width="180">
-  <img src="assets/readme_v7/mobile-control-files.jpg" alt="CCB Mobile ファイル転送" width="180">
-  <img src="assets/readme_v7/mobile-control-pairing.jpg" alt="CCB Mobile ペアリングと接続" width="180">
+  <img src="../assets/readme_v7/mobile-control-chat.jpg" alt="CCB Mobile agent チャット" width="180">
+  <img src="../assets/readme_v7/mobile-control-terminal.jpg" alt="CCB Mobile 端末操作" width="180">
+  <img src="../assets/readme_v7/mobile-control-files.jpg" alt="CCB Mobile ファイル転送" width="180">
+  <img src="../assets/readme_v7/mobile-control-pairing.jpg" alt="CCB Mobile ペアリングと接続" width="180">
 </p>
 
 <details>
 <summary><b>Mobile App の詳細、安全境界、ソース</b></summary>
 
-CCB 8.0.15 では Flutter 版 CCB Mobile のソースが [`mobile/`](mobile/) に含まれ、Android APK は GitHub Releases で公開されています。
+CCB 8.1.3 では Flutter 版 CCB Mobile のソースが [`mobile/`](../mobile/) に含まれ、Android APK は GitHub Releases で公開されています。
 
-- [CCB Mobile v8.0.15 APK をダウンロード](https://github.com/bfly123/claude_code_bridge/releases/download/v8.0.15/ccb-mobile-v8.0.15.apk)
-- App ソース：[`mobile/app`](mobile/app)
-- サーバー gateway ソース：[`lib/mobile_gateway`](lib/mobile_gateway)
+- [CCB Mobile v8.1.3 APK をダウンロード](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.1.3/ccb-mobile-v8.1.3.apk)
+- App ソース：[`mobile/app`](../mobile/app)
+- サーバー gateway ソース：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
 スマートフォンアプリは、サーバー上で動く実際の CCB プロジェクトのリモートコントローラーです。server-wide mobile gateway からマウント済みプロジェクトを見つけ、window/agent を切り替え、agent の会話コンテキストを表示し、pane-native 入力でテキストを送り、terminal view を開き、認証済み gateway 経由で画像や文書をアップロード/ダウンロードできます。
 
@@ -193,7 +204,7 @@ CCB 8.0.15 では Flutter 版 CCB Mobile のソースが [`mobile/`](mobile/) �
 端末内でファイルツリーを閲覧し、ファイルを開き、文書を編集し、メディアをプレビューできます。
 
 <p align="center">
-  <img src="assets/readme_v7/rich-workbench.png" alt="WezTerm 内で Yazi preview を使う CCB rich メディアワークベンチ" width="860">
+  <img src="../assets/readme_v7/rich-workbench.png" alt="WezTerm 内で Yazi preview を使う CCB rich メディアワークベンチ" width="860">
 </p>
 
 ```bash
@@ -221,7 +232,7 @@ CCB は [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec) をサ�
 
 ## 設定と共有記憶
 
-window の分け方、必要な worker 数、worktree を使う agent、独立した model や API route が必要な agent が分からない場合は、現在のワークスペース内の `ccb_self` に聞いてください。これは CCB 組み込みの self-agent で、CCB コマンド、設定の権威、roles、windows、reload 境界、一般的な復旧経路を理解し、専用の `ccb-config` skill で一緒に設定案を作れます。空のプロジェクトには `ccb_self` が含まれます。既存のカスタム設定には `ccb roles add agentroles.ccb_self:codex` で追加できます。
+通常のプロジェクト設定には **⚙ 設定** パネルを使用します。Agent による設定支援や runtime 診断が必要な場合、`ccb_self` はオプションの Role Pack として引き続き利用でき、`ccb roles add agentroles.ccb_self:codex` で追加できます。
 
 `.ccb/ccb_memory.md` はプロジェクト全体の共有記憶文書です。チーム協調ルール、プロジェクト制約、長期コンテキスト、agent 引き継ぎの約束を書くのに適しています。複数 provider の private memory に同じ説明をコピーするより、安定した cross-agent 情報はここに置く方が確実です。
 
@@ -234,7 +245,7 @@ window の分け方、必要な worker 数、worktree を使う agent、独立�
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.jpg" alt="WeChat group" width="240">
+  <img src="../assets/weixin.jpg" alt="WeChat group" width="240">
 </p>
 
 <a id="community"></a>
@@ -250,11 +261,20 @@ sidebar のアイデアと示唆を提供してくれた [tmux-agent-sidebar](ht
 ## リリースノート
 
 <details open>
+<summary><b>v8.0.14</b> - README ディレクトリ整理とモバイル公開面の同期</summary>
+
+- ルートの `README.md` は English の GitHub ホームページに戻りました。
+- ローカライズ済み README は [`README/`](./) 配下にまとまり、中国語版は [`zh.md`](zh.md) です。
+- Mobile App links、package metadata、release notes は 8.0.14 APK を指します。
+
+</details>
+
+<details>
 <summary><b>v8.0.12</b> - Release CI の移植性と README 多言語化</summary>
 
 - mobile host registry tests は一時 Unix socket を短い `/tmp/ccb-sock-*` パスに置くようになり、macOS CI の `AF_UNIX path too long` 失敗を避けます。
 - `ccb update mobile`、README links、package metadata、mobile release manifest は 8.0.12 APK を指すようになりました。
-- 中国語 README が GitHub の main README になり、英語は `readme_en.md` へ移動しました。日本語、フランス語、ドイツ語、アラビア語、スペイン語、ポルトガル語、韓国語、ロシア語版も同じ section 構造で追加しました。
+- v8.0.12 で共通セクション構造の多言語 README を導入しました。現在のローカライズ済みファイルは `README/` ディレクトリにあります。
 
 </details>
 
@@ -285,4 +305,4 @@ sidebar のアイデアと示唆を提供してくれた [tmux-agent-sidebar](ht
 
 </details>
 
-完全な履歴は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+完全な履歴は [CHANGELOG.md](../CHANGELOG.md) を参照してください。

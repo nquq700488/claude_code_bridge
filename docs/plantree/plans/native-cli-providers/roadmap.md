@@ -257,23 +257,44 @@ Date: 2026-06-13
     CCB provider runtime.
   - Focused AGY/native provider verification passed with `34 passed`; isolated
     stub source-runtime smoke completed with `agy_transcript_response_done`.
+- Hardened Grok result collection to require provider-native turn completion:
+  - Streaming `type=end` plus `stopReason=EndTurn` and compatible native
+    turn-end events are the only successful completion authority.
+  - Exit zero without native terminal evidence closes as
+    `incomplete/grok_native_terminal_missing`, including partial-text cases.
+  - `Cancelled` native ends close immediately as incomplete, while internal
+    `TURN_BOUNDARY` remains derived evidence rather than authority.
+  - Focused tests passed with `25 passed`; the complete Grok/native execution
+    files passed with `54 passed`; wider provider/registry tests passed with
+    `31 passed`; a real authenticated Grok ask completed from native
+    `EndTurn` as `grok_run_stop`.
 
 ## In Progress
 
 - Provider-specific auth/doctor diagnostics decision for the next-wave CLIs.
 - Review and release readiness for the current dirty source changes.
+- Grok native ask-skill projection remains in progress; native completion
+  hardening and the authenticated routing baseline have landed in source.
 
 ## Next
 
-1. Decide whether any provider needs a follow-up doctor/auth diagnostic before
+1. Implement the Grok `ask` and `ccb-clear` package, projection, caller-env,
+   and narrow-permission contract defined in
+   [topics/grok-ccb-skills-design.md](topics/grok-ccb-skills-design.md), then run
+   the focused unit gate and isolated two-instance stub smoke in
+   [topics/grok-ask-skill-test-plan.md](topics/grok-ask-skill-test-plan.md).
+2. Run the real Grok single-instance discovery gate, then the two-instance
+   cross-window pressure gate; do not treat skill discovery alone as routing
+   acceptance.
+3. Decide whether any provider needs a follow-up doctor/auth diagnostic before
    release.
-2. Decide whether to keep
+4. Decide whether to keep
    `/home/bfly/yunwei/test_ccb2/next_wave_provider_smoke` as a reusable smoke
    fixture.
-3. Run a real source-runtime AGY smoke in `/home/bfly/yunwei/test_ccb2` when an
+5. Run a real source-runtime AGY smoke in `/home/bfly/yunwei/test_ccb2` when an
    authenticated AGY account is available; unit coverage currently validates
    the delivery and parsing mechanics without provider login.
-4. Review the full dirty source diff, excluding unrelated managed-tool/neovim
+6. Review the full dirty source diff, excluding unrelated managed-tool/neovim
    changes already present in the worktree.
 
 ## Deferred

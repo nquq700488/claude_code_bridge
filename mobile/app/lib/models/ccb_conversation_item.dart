@@ -309,6 +309,7 @@ class CcbConversationItem {
   }
 
   CcbConversationItem copyWith({
+    String? id,
     String? body,
     CcbConversationDeliveryState? state,
     List<CcbMessageAttachment>? attachments,
@@ -318,7 +319,7 @@ class CcbConversationItem {
     int? durationMs,
   }) {
     return CcbConversationItem(
-      id: id,
+      id: id ?? this.id,
       agentName: agentName,
       kind: kind,
       title: title,
@@ -386,6 +387,8 @@ class CcbMessageAttachment {
     this.kind,
     this.state = CcbMessageAttachmentState.available,
     this.localPath,
+    this.projectRelativePath,
+    this.projectPath,
     this.errorMessage,
   });
 
@@ -396,6 +399,8 @@ class CcbMessageAttachment {
   final CcbMessageAttachmentKind? kind;
   final CcbMessageAttachmentState state;
   final String? localPath;
+  final String? projectRelativePath;
+  final String? projectPath;
   final String? errorMessage;
 
   CcbMessageAttachmentKind get effectiveKind {
@@ -418,8 +423,12 @@ class CcbMessageAttachment {
     CcbMessageAttachmentKind? kind,
     CcbMessageAttachmentState? state,
     String? localPath,
+    String? projectRelativePath,
+    String? projectPath,
     String? errorMessage,
     bool clearLocalPath = false,
+    bool clearProjectRelativePath = false,
+    bool clearProjectPath = false,
     bool clearErrorMessage = false,
   }) {
     return CcbMessageAttachment(
@@ -430,6 +439,11 @@ class CcbMessageAttachment {
       kind: kind ?? this.kind,
       state: state ?? this.state,
       localPath: clearLocalPath ? null : localPath ?? this.localPath,
+      projectRelativePath:
+          clearProjectRelativePath
+              ? null
+              : projectRelativePath ?? this.projectRelativePath,
+      projectPath: clearProjectPath ? null : projectPath ?? this.projectPath,
       errorMessage:
           clearErrorMessage ? null : errorMessage ?? this.errorMessage,
     );
@@ -455,6 +469,8 @@ class CcbMessageAttachment {
               : null,
       state: ccbMessageAttachmentStateFromWireName(json['state']),
       localPath: _optionalText(json['local_path']),
+      projectRelativePath: _optionalText(json['project_relative_path']),
+      projectPath: _optionalText(json['project_path']),
       errorMessage: _optionalText(json['error']),
     );
   }
@@ -467,6 +483,9 @@ class CcbMessageAttachment {
       'size_bytes': sizeBytes,
       'kind': effectiveKind.wireName,
       'state': state.wireName,
+      if (projectRelativePath != null)
+        'project_relative_path': projectRelativePath,
+      if (projectPath != null) 'project_path': projectPath,
       if (errorMessage != null) 'error': errorMessage,
     };
   }
@@ -478,6 +497,9 @@ class CcbMessageAttachment {
       'mime_type': mimeType,
       'size_bytes': sizeBytes,
       'kind': effectiveKind.wireName,
+      if (projectRelativePath != null)
+        'project_relative_path': projectRelativePath,
+      if (projectPath != null) 'project_path': projectPath,
     };
   }
 }

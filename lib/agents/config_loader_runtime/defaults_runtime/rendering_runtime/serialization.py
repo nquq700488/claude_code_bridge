@@ -11,6 +11,7 @@ from agents.models import (
 from provider_model_shortcuts import strip_provider_model_startup_args
 from provider_profiles import provider_api_env_keys
 from provider_profiles.models import ProviderProfileSpec
+from provider_thinking_shortcuts import strip_provider_thinking_startup_args
 
 
 def agent_spec_to_config_dict(spec) -> dict[str, object]:
@@ -38,6 +39,8 @@ def update_optional_agent_fields(payload: dict[str, object], spec) -> None:
         payload['provider_command_template'] = spec.provider_command_template
     if spec.model is not None:
         payload['model'] = spec.model
+    if spec.thinking is not None:
+        payload['thinking'] = spec.thinking
     startup_args = _config_startup_args(spec)
     if startup_args:
         payload['startup_args'] = list(startup_args)
@@ -184,9 +187,20 @@ def _loop_provider_profile_config_dict(profile) -> dict[str, object] | None:
 
 
 def _config_startup_args(spec) -> tuple[str, ...]:
-    if spec.model is None:
-        return tuple(spec.startup_args)
-    return strip_provider_model_startup_args(spec.provider, spec.startup_args, model=spec.model)
+    startup_args = tuple(spec.startup_args)
+    if spec.model is not None:
+        startup_args = strip_provider_model_startup_args(
+            spec.provider,
+            startup_args,
+            model=spec.model,
+        )
+    if spec.thinking is not None:
+        startup_args = strip_provider_thinking_startup_args(
+            spec.provider,
+            startup_args,
+            thinking=spec.thinking,
+        )
+    return startup_args
 
 
 __all__ = [

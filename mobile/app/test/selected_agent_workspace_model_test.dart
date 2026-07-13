@@ -195,25 +195,28 @@ void main() {
     expect(model.executionStatus?.isRefreshing, isFalse);
   });
 
-  test('current pending activity is working even with interrupted reason', () {
-    final chatController = AgentChatController();
-    final agent = _agent(
-      activityState: 'pending',
-      activitySource: 'codex_runtime',
-      activityReason: 'conversation_interrupted',
-    );
+  test(
+    'current pending activity reports an interrupted error before working',
+    () {
+      final chatController = AgentChatController();
+      final agent = _agent(
+        activityState: 'pending',
+        activitySource: 'codex_runtime',
+        activityReason: 'conversation_interrupted',
+      );
 
-    final model = selectedAgentWorkspaceModel(
-      view: _view(agent: agent),
-      agent: agent,
-      chatController: chatController,
-      isAwaitingAgentResponse: false,
-    );
+      final model = selectedAgentWorkspaceModel(
+        view: _view(agent: agent),
+        agent: agent,
+        chatController: chatController,
+        isAwaitingAgentResponse: false,
+      );
 
-    expect(model.executionStatus?.label, 'Working');
-    expect(model.executionStatus?.state, 'working');
-    expect(model.executionStatus?.isRefreshing, isTrue);
-  });
+      expect(model.executionStatus?.label, 'Exception');
+      expect(model.executionStatus?.state, 'exception');
+      expect(model.executionStatus?.isRefreshing, isFalse);
+    },
+  );
 
   test(
     'project view failed activity overrides local awaiting response status',
@@ -238,7 +241,7 @@ void main() {
     },
   );
 
-  test('project view working activity overrides stale local exception', () {
+  test('local exception is not hidden by a retained working marker', () {
     final chatController = AgentChatController();
     final agent = _agent(
       activityState: 'active',
@@ -254,8 +257,8 @@ void main() {
       hasLocalExecutionException: true,
     );
 
-    expect(model.executionStatus?.label, 'Working');
-    expect(model.executionStatus?.state, 'working');
+    expect(model.executionStatus?.label, 'Exception');
+    expect(model.executionStatus?.state, 'exception');
     expect(model.executionStatus?.isRefreshing, isFalse);
   });
 
@@ -290,6 +293,34 @@ void main() {
     expect(model.executionStatus?.label, 'Idle');
     expect(model.executionStatus?.state, 'idle');
     expect(model.executionStatus?.isRefreshing, isFalse);
+  });
+
+  test('loading idle agent history does not create a working bubble', () {
+    final chatController = AgentChatController();
+    final agent = _agent(
+      activityState: 'idle',
+      activitySource: 'provider_pane',
+      activityReason: 'provider_prompt_idle',
+    );
+    chatController.beginLoadingConversation(agent.name);
+
+    final model = selectedAgentWorkspaceModel(
+      view: _view(agent: agent),
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+
+    expect(model.isLoadingConversation, isTrue);
+    expect(model.executionStatus?.state, 'idle');
+    expect(model.workingReplyItemId, isNull);
+    expect(
+      model.timelineItems.where(
+        (item) =>
+            item.id == syntheticAgentWorkingConversationItemId(agent.name),
+      ),
+      isEmpty,
+    );
   });
 
   test(
@@ -472,7 +503,7 @@ void main() {
   });
 
   test(
-    'marks visible current-turn native reply as working even if completion leaked',
+    'uses current native reply as working target despite early completion',
     () {
       final chatController = AgentChatController();
       final view = _view();
@@ -522,21 +553,99 @@ void main() {
       );
 
       expect(model.executionStatus?.state, 'working');
-      expect(model.workingReplyItemId, 'reply-current');
+      final presentationId = syntheticAgentWorkingConversationItemId(
+        agent.name,
+      );
+      expect(model.workingReplyItemId, presentationId);
       expect(model.timelineItems.map((item) => item.id), [
         'user-current',
-        'reply-current',
+        presentationId,
       ]);
-      expect(
-        model.timelineItems
-            .map((item) => item.id)
-            .contains(syntheticAgentWorkingConversationItemId(agent.name)),
-        isFalse,
-      );
+      expect(model.timelineItems.last.body, 'visible live reply text');
     },
   );
 
-  test('marks latest terminal output block as working fallback', () {
+  test(
+    'keeps working element identity from placeholder through completion',
+    () {
+      final chatController = AgentChatController();
+      final workingAgent = _agent(
+        activityState: 'active',
+        activitySource: 'codex_runtime',
+        activityReason: 'codex_working_status_line',
+      );
+      final view = _view(agent: workingAgent);
+      final presentationId = syntheticAgentWorkingConversationItemId(
+        workingAgent.name,
+      );
+
+      final placeholderModel = selectedAgentWorkspaceModel(
+        view: view,
+        agent: workingAgent,
+        chatController: chatController,
+        isAwaitingAgentResponse: false,
+      );
+      expect(placeholderModel.timelineItems.single.id, presentationId);
+      expect(placeholderModel.timelineItems.single.body, 'Working...');
+
+      chatController.applyRemoteConversation(
+        agentName: workingAgent.name,
+        shouldScroll: true,
+        conversation: CcbAgentConversation(
+          projectId: view.project.id,
+          agentName: workingAgent.name,
+          namespaceEpoch: view.namespaceEpoch!,
+          items: [
+            CcbConversationItem(
+              id: 'user-current',
+              agentName: workingAgent.name,
+              kind: CcbConversationItemKind.userMessage,
+              title: 'You',
+              body: 'new request',
+              sentAt: DateTime.utc(2026, 7, 2, 9),
+            ),
+            CcbConversationItem(
+              id: 'reply-current',
+              agentName: workingAgent.name,
+              kind: CcbConversationItemKind.agentReply,
+              title: 'Agent reply',
+              body: 'visible live reply text',
+              source: 'provider_native/codex',
+              startedAt: DateTime.utc(2026, 7, 2, 9, 0, 1),
+              completedAt: DateTime.utc(2026, 7, 2, 9, 0, 2),
+            ),
+          ],
+          generatedAt: DateTime.utc(2026, 7, 2),
+        ),
+      );
+
+      final liveReplyModel = selectedAgentWorkspaceModel(
+        view: view,
+        agent: workingAgent,
+        chatController: chatController,
+        isAwaitingAgentResponse: false,
+      );
+      expect(liveReplyModel.timelineItems.last.id, presentationId);
+      expect(liveReplyModel.timelineItems.last.body, 'visible live reply text');
+      expect(liveReplyModel.workingReplyItemId, presentationId);
+
+      final idleAgent = _agent(
+        activityState: 'idle',
+        activitySource: 'codex_runtime',
+        activityReason: 'codex_session_task_complete',
+      );
+      final completedModel = selectedAgentWorkspaceModel(
+        view: _view(agent: idleAgent),
+        agent: idleAgent,
+        chatController: chatController,
+        isAwaitingAgentResponse: false,
+      );
+      expect(completedModel.timelineItems.last.id, presentationId);
+      expect(completedModel.workingReplyItemId, isNull);
+    },
+  );
+
+  test('does not put terminal output in the default working timeline', () {
     final chatController = AgentChatController();
     final view = _view();
     final agent = _agent(
@@ -573,7 +682,10 @@ void main() {
     );
 
     expect(model.executionStatus?.state, 'working');
-    expect(model.workingReplyItemId, 'terminal-history-1');
+    expect(
+      model.workingReplyItemId,
+      syntheticAgentWorkingConversationItemId(agent.name),
+    );
   });
 
   test(
@@ -764,7 +876,10 @@ void main() {
     );
 
     expect(model.executionStatus?.state, 'working');
-    expect(model.workingReplyItemId, 'reply-running');
+    expect(
+      model.workingReplyItemId,
+      syntheticAgentWorkingConversationItemId(agent.name),
+    );
   });
 }
 

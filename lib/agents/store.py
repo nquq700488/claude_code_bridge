@@ -105,6 +105,7 @@ def _agent_spec_from_record(record: dict) -> AgentSpec:
         permission_default=PermissionMode(record['permission_default']),
         queue_policy=QueuePolicy(record['queue_policy']),
         model=record.get('model'),
+        thinking=record.get('thinking'),
         startup_args=tuple(record.get('startup_args', [])),
         env=dict(record.get('env', {})),
         api=AgentApiSpec(**dict(record.get('api') or {})),

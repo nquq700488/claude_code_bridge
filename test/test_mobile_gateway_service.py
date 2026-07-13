@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+from concurrent.futures import Future
 import json
 import os
 import socket
@@ -14,6 +15,7 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+import mobile_gateway.pairing as pairing_module
 import mobile_gateway.service as service_module
 from mobile_gateway import (
     MobileGatewayError,
@@ -293,6 +295,54 @@ class _SlowActivityCcbdClient(_FakeActivityCcbdClient):
         return payload
 
 
+class _ManualClock:
+    def __init__(self, now: float = 0.0) -> None:
+        self.now = now
+
+    def monotonic(self) -> float:
+        return self.now
+
+    def text(self) -> str:
+        return f'2026-06-18T00:00:{int(self.now):02d}Z'
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+class _ManualExecutor:
+    def __init__(self) -> None:
+        self.pending: list[tuple[Future[object], object]] = []
+
+    def submit(self, task) -> Future[object]:
+        future: Future[object] = Future()
+        self.pending.append((future, task))
+        return future
+
+    def run_next(self) -> None:
+        future, task = self.pending.pop(0)
+        if future.set_running_or_notify_cancel():
+            try:
+                future.set_result(task())
+            except BaseException as exc:
+                future.set_exception(exc)
+
+    def run_all(self) -> None:
+        while self.pending:
+            self.run_next()
+
+
+class _ToggleHealthCcbdClient(_FakeCcbdClient):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.available = True
+
+    def ping(self, target: str = 'ccbd') -> dict[str, object]:
+        if not self.available:
+            self.calls.append(('ping', target))
+            raise RuntimeError('ccbd unavailable at /tmp/private.sock')
+        return super().ping(target)
+
+
 def _service(
     fake: _FakeCcbdClient,
     *,
@@ -314,6 +364,38 @@ def _service(
         terminal_session_factory=terminal_session_factory,
         terminal_history_factory=terminal_history_factory,
         terminal_message_sender=terminal_message_sender,
+    )
+
+
+def _server_registry_service(
+    clients: list[_FakeCcbdClient],
+    *,
+    clock: _ManualClock | None = None,
+    executor: _ManualExecutor | None = None,
+    registry_provider=None,
+    mobile_dir: Path | None = None,
+) -> MobileGatewayService:
+    registry = MobileGatewayProjectRegistry([
+        MobileGatewayProject(
+            project_id=client.project_id,
+            project_root=Path(client.project_root),
+            display_name=client.display_name,
+            ccbd_client_factory=lambda client=client: client,
+        )
+        for client in clients
+    ])
+    controlled_clock = clock or _ManualClock()
+    return MobileGatewayService(
+        project_id='host-test',
+        project_root=Path('/tmp/mobile-host'),
+        ccbd_client_factory=registry.default_project.client,
+        mobile_dir=mobile_dir,
+        project_registry=registry,
+        project_registry_provider=registry_provider,
+        mode='loopback_server_registry',
+        clock=controlled_clock.text,
+        monotonic_clock=controlled_clock.monotonic,
+        background_executor=executor or _ManualExecutor(),
     )
 
 
@@ -622,74 +704,203 @@ def test_projects_payload_omits_unreachable_registry_projects() -> None:
     assert stale.calls == [('ping', 'ccbd')]
 
 
-def test_server_registry_health_ignores_stale_default_when_project_is_available() -> None:
-    stale = _FailingCcbdClient()
-    healthy = _FakeCcbdClient(
-        project_id='proj-one',
-        project_root='/srv/one',
-        display_name='one',
-    )
-    service = MobileGatewayService(
-        project_id='host-test',
-        project_root=Path('/tmp/mobile-host'),
-        ccbd_client_factory=lambda: stale,
-        project_registry=MobileGatewayProjectRegistry(
-            [
-                MobileGatewayProject(
-                    project_id='proj-stale',
-                    project_root=Path('/srv/stale'),
-                    display_name='stale',
-                    ccbd_client_factory=lambda: stale,
-                ),
-                MobileGatewayProject(
-                    project_id='proj-one',
-                    project_root=Path('/srv/one'),
-                    display_name='one',
-                    ccbd_client_factory=lambda: healthy,
-                ),
-            ]
-        ),
-        mode='loopback_server_registry',
-        clock=lambda: '2026-06-18T00:00:00Z',
-    )
+def test_server_registry_health_does_not_scan_projects_when_cache_is_unknown() -> None:
+    clients = [
+        _FakeCcbdClient(
+            project_id=f'proj-{index:02d}',
+            project_root=f'/srv/project-{index:02d}',
+            display_name=f'project-{index:02d}',
+        )
+        for index in range(12)
+    ]
+    service = _server_registry_service(clients, executor=_ManualExecutor())
 
     health = service.health_payload()
 
     assert health['status'] == 'ok'
-    assert health['ccbd']['reachable'] is True
-    assert health['ccbd']['project_count'] == 2
-    assert health['ccbd']['available_project_count'] == 1
-    assert health['ccbd']['available_project_ids'] == ['proj-one']
-    assert stale.calls == [('ping', 'ccbd')]
-    assert healthy.calls == [('ping', 'ccbd')]
+    assert health['ccbd']['reachable'] is None
+    assert health['ccbd']['project_count'] == 12
+    assert health['ccbd']['available_project_count'] is None
+    assert health['ccbd']['health_freshness'] == 'unknown'
+    assert all(client.calls == [] for client in clients)
 
 
-def test_server_registry_health_degrades_when_no_project_is_available() -> None:
-    stale = _FailingCcbdClient()
-    service = MobileGatewayService(
-        project_id='host-test',
-        project_root=Path('/tmp/mobile-host'),
-        ccbd_client_factory=lambda: stale,
-        project_registry=MobileGatewayProjectRegistry(
-            [
-                MobileGatewayProject(
-                    project_id='proj-stale',
-                    project_root=Path('/srv/stale'),
-                    display_name='stale',
-                    ccbd_client_factory=lambda: stale,
-                ),
-            ]
-        ),
-        mode='loopback_server_registry',
-        clock=lambda: '2026-06-18T00:00:00Z',
+def test_server_projects_warm_cache_does_not_repeat_ping() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    service = _server_registry_service([client], clock=clock, executor=executor)
+
+    assert service.projects_payload()['projects'] == []
+    assert len(executor.pending) == 1
+    executor.run_all()
+
+    warm = service.projects_payload()['projects']
+
+    assert [item['id'] for item in warm] == ['proj-one']
+    assert warm[0]['health'] == 'healthy'
+    assert warm[0]['health_freshness'] == 'fresh'
+    assert client.calls == [('ping', 'ccbd')]
+    assert executor.pending == []
+
+
+def test_server_health_reports_cached_then_stale_without_refreshing_projects() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    service = _server_registry_service([client], clock=clock, executor=executor)
+    service.projects_payload()
+    executor.run_all()
+
+    cached = service.health_payload()['ccbd']
+    clock.advance(service_module._PROJECT_HEALTH_CACHE_TTL_SECONDS + 0.1)
+    stale = service.health_payload()['ccbd']
+    clock.advance(service_module._PROJECT_HEALTH_CACHE_MAX_STALE_SECONDS)
+    unknown = service.health_payload()['ccbd']
+
+    assert cached['health_freshness'] == 'cached'
+    assert cached['available_project_count'] == 1
+    assert stale['health_freshness'] == 'stale'
+    assert stale['available_project_count'] == 1
+    assert unknown['health_freshness'] == 'unknown'
+    assert unknown['available_project_count'] is None
+    assert client.calls == [('ping', 'ccbd')]
+
+
+def test_server_projects_slow_refresh_does_not_block_list_response() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _FakeCcbdClient(project_id='proj-slow', project_root='/srv/slow', display_name='slow')
+    service = _server_registry_service([client], clock=clock, executor=executor)
+
+    started = time.monotonic()
+    payload = service.projects_payload()
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 0.1
+    assert payload['projects'] == []
+    assert len(executor.pending) == 1
+    assert client.calls == []
+
+
+def test_server_projects_activity_refresh_uses_the_same_background_executor(tmp_path: Path) -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _FakeActivityCcbdClient(
+        project_id='proj-one',
+        project_root='/srv/one',
+        display_name='one',
     )
+    service = _server_registry_service(
+        [client],
+        clock=clock,
+        executor=executor,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    service.projects_payload()
+    executor.run_all()
 
-    health = service.health_payload()
+    warm = service.projects_payload()['projects']
 
-    assert health['status'] == 'degraded'
-    assert health['ccbd']['reachable'] is False
-    assert health['ccbd']['project_count'] == 1
-    assert health['ccbd']['available_project_count'] == 0
+    assert 'has_working_agents' not in warm[0]
+    assert len(executor.pending) == 1
+    assert client.calls == [('ping', 'ccbd')]
+    executor.run_all()
+    assert service.projects_payload()['projects'][0]['has_working_agents'] is True
+
+
+def test_server_projects_concurrent_requests_dedupe_refresh() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    service = _server_registry_service([client], clock=clock, executor=executor)
+
+    service.projects_payload()
+    service.projects_payload()
+
+    assert len(executor.pending) == 1
+    executor.run_all()
+    assert client.calls == [('ping', 'ccbd')]
+
+
+def test_server_projects_marks_ttl_expiry_stale_and_refreshes_asynchronously() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    service = _server_registry_service([client], clock=clock, executor=executor)
+    service.projects_payload()
+    executor.run_all()
+    clock.advance(service_module._PROJECT_HEALTH_CACHE_TTL_SECONDS + 0.1)
+
+    stale = service.projects_payload()['projects']
+
+    assert stale[0]['health'] == 'healthy'
+    assert stale[0]['health_freshness'] == 'stale'
+    assert stale[0]['health_refreshing'] is True
+    assert client.calls == [('ping', 'ccbd')]
+    assert len(executor.pending) == 1
+    executor.run_all()
+    assert service.projects_payload()['projects'][0]['health_freshness'] == 'fresh'
+    assert client.calls == [('ping', 'ccbd'), ('ping', 'ccbd')]
+
+
+def test_server_projects_keeps_expired_health_visible_while_revalidating() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _ToggleHealthCcbdClient(
+        project_id='proj-one',
+        project_root='/srv/one',
+        display_name='one',
+    )
+    service = _server_registry_service([client], clock=clock, executor=executor)
+    cold = service.projects_payload()
+    assert cold['projects'] == []
+    assert cold['health_warming'] is True
+    assert cold['health_unknown_project_count'] == 1
+    executor.run_all()
+    clock.advance(service_module._PROJECT_HEALTH_CACHE_MAX_STALE_SECONDS + 0.1)
+
+    expired = service.projects_payload()
+
+    assert [item['id'] for item in expired['projects']] == ['proj-one']
+    assert expired['projects'][0]['health_freshness'] == 'expired'
+    assert expired['health_warming'] is False
+    assert expired['health_unknown_project_count'] == 0
+    assert len(executor.pending) == 1
+
+    client.available = False
+    executor.run_all()
+    assert service.projects_payload()['projects'] == []
+
+
+def test_server_projects_health_failure_and_recovery_converge() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    client = _ToggleHealthCcbdClient(
+        project_id='proj-one',
+        project_root='/srv/one',
+        display_name='one',
+    )
+    service = _server_registry_service([client], clock=clock, executor=executor)
+    service.projects_payload()
+    executor.run_all()
+    client.available = False
+    clock.advance(service_module._PROJECT_HEALTH_CACHE_TTL_SECONDS + 0.1)
+
+    stale = service.projects_payload()['projects']
+    assert stale[0]['health_freshness'] == 'stale'
+    executor.run_all()
+    assert service.projects_payload()['projects'] == []
+
+    client.available = True
+    clock.advance(service_module._PROJECT_HEALTH_FAILURE_BACKOFF_SECONDS + 0.1)
+    assert service.projects_payload()['projects'] == []
+    executor.run_all()
+    recovered = service.projects_payload()['projects']
+
+    assert recovered[0]['id'] == 'proj-one'
+    assert recovered[0]['health_freshness'] == 'fresh'
+    assert client.calls == [('ping', 'ccbd'), ('ping', 'ccbd'), ('ping', 'ccbd')]
 
 
 def test_projects_payload_omits_registered_projects_that_are_not_mounted_and_healthy() -> None:
@@ -741,52 +952,83 @@ def test_projects_payload_omits_registered_projects_that_are_not_mounted_and_hea
     assert degraded.calls == [('ping', 'ccbd')]
 
 
-def test_projects_payload_checks_many_project_health_states_concurrently() -> None:
-    lock = threading.Lock()
-    activity = {'active': 0, 'max_active': 0}
+def test_server_projects_reconciles_registry_additions_and_removals() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    first = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    second = _FakeCcbdClient(project_id='proj-two', project_root='/srv/two', display_name='two')
+    registry_clients = [first]
 
-    class _SlowCcbdClient(_FakeCcbdClient):
-        def ping(self, target: str = 'ccbd') -> dict[str, object]:
-            with lock:
-                activity['active'] += 1
-                activity['max_active'] = max(activity['max_active'], activity['active'])
-            try:
-                time.sleep(0.04)
-                return super().ping(target)
-            finally:
-                with lock:
-                    activity['active'] -= 1
+    def registry_provider() -> MobileGatewayProjectRegistry:
+        return MobileGatewayProjectRegistry([
+            MobileGatewayProject(
+                project_id=client.project_id,
+                project_root=Path(client.project_root),
+                display_name=client.display_name,
+                ccbd_client_factory=lambda client=client: client,
+            )
+            for client in registry_clients
+        ])
 
-    clients = [
-        _SlowCcbdClient(
-            project_id=f'proj-{index:02d}',
-            project_root=f'/srv/project-{index:02d}',
-            display_name=f'project-{index:02d}',
-        )
-        for index in range(12)
-    ]
-    service = _service(
-        clients[0],
-        project_registry=MobileGatewayProjectRegistry(
-            [
-                MobileGatewayProject(
-                    project_id=client.project_id,
-                    project_root=Path(client.project_root),
-                    ccbd_client_factory=lambda client=client: client,
-                )
-                for client in clients
-            ]
-        ),
+    service = _server_registry_service(
+        [first],
+        clock=clock,
+        executor=executor,
+        registry_provider=registry_provider,
     )
+    service.projects_payload()
+    executor.run_all()
+    registry_clients.append(second)
 
-    projects = service.projects_payload()
+    added = service.projects_payload()['projects']
+    assert [item['id'] for item in added] == ['proj-one']
+    executor.run_all()
+    assert [item['id'] for item in service.projects_payload()['projects']] == ['proj-one', 'proj-two']
 
-    assert [item['id'] for item in projects['projects']] == [
-        f'proj-{index:02d}' for index in range(12)
+    registry_clients[:] = [second]
+    assert [item['id'] for item in service.projects_payload()['projects']] == ['proj-two']
+    health = service.health_payload()
+    assert health['ccbd']['project_count'] == 1
+    assert 'proj-one' not in service._project_health_cache._entries  # type: ignore[union-attr]
+
+
+def test_server_projects_mix_fresh_and_stale_health_summaries() -> None:
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    first = _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one')
+    second = _FakeCcbdClient(project_id='proj-two', project_root='/srv/two', display_name='two')
+    service = _server_registry_service([first, second], clock=clock, executor=executor)
+    service.projects_payload()
+    executor.run_all()
+    clock.advance(service_module._PROJECT_HEALTH_CACHE_TTL_SECONDS + 0.1)
+
+    service.projects_payload()
+    executor.run_next()
+    mixed = service.projects_payload()['projects']
+    freshness = {item['id']: item['health_freshness'] for item in mixed}
+
+    assert freshness == {'proj-one': 'fresh', 'proj-two': 'stale'}
+    executor.run_all()
+
+
+def test_server_project_health_refresh_budget_and_cache_size_are_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(service_module, '_PROJECT_HEALTH_REFRESH_BUDGET', 1)
+    monkeypatch.setattr(service_module, '_PROJECT_HEALTH_CACHE_MAX_ENTRIES', 1)
+    clock = _ManualClock()
+    executor = _ManualExecutor()
+    clients = [
+        _FakeCcbdClient(project_id='proj-one', project_root='/srv/one', display_name='one'),
+        _FakeCcbdClient(project_id='proj-two', project_root='/srv/two', display_name='two'),
     ]
-    assert activity['max_active'] > 1
-    assert all(client.calls[0] == ('ping', 'ccbd') for client in clients)
-    assert sum(('project_view', 1) in client.calls for client in clients) <= 3
+    service = _server_registry_service(clients, clock=clock, executor=executor)
+
+    service.projects_payload()
+
+    assert len(executor.pending) == 1
+    executor.run_all()
+    assert len(service._project_health_cache._entries) == 1  # type: ignore[union-attr]
 
 
 def test_project_view_redacts_server_tmux_evidence() -> None:
@@ -955,11 +1197,7 @@ def test_agent_conversation_reads_project_view_without_terminal_scope(tmp_path: 
     assert conversation['project_id'] == 'proj-demo'
     assert conversation['agent'] == 'mobile'
     assert conversation['namespace_epoch'] == 4
-    assert [item['kind'] for item in conversation['items']] == [
-        'status_event',
-        'agent_reply',
-    ]
-    assert conversation['items'][1]['body'] == 'Ready for the next task.'
+    assert conversation['items'] == []
     public_json = json.dumps(payload)
     assert 'terminal_input' not in public_json
     assert 'tmux.sock' not in public_json
@@ -1013,28 +1251,51 @@ def test_agent_conversation_includes_completed_comms_reply_preview(tmp_path: Pat
 
     assert status == 200
     items = payload['conversation']['items']
-    assert [item['id'] for item in items] == [
-        'status-mobile',
-        'reply-content-1',
-        'user-job_mobile_old_reply',
-        'reply-job_mobile_old_reply',
-        'user-job_mobile_reply',
-        'reply-job_mobile_reply',
-    ]
-    assert items[2]['kind'] == 'user_message'
-    assert items[2]['body'] == 'older question from phone'
-    assert items[3]['kind'] == 'agent_reply'
-    assert items[3]['body'] == 'older answer from mobile_probe'
-    assert items[4]['kind'] == 'user_message'
-    assert items[4]['body'] == 'question from phone'
-    assert items[4]['sent_at'] == '2026-06-18T00:00:02Z'
-    assert items[4]['attachments'][0]['file_id'] == 'mobile-file-1'
-    assert items[4]['attachments'][0]['file_name'] == 'probe.txt'
-    assert items[5]['kind'] == 'agent_reply'
-    assert items[5]['body'] == 'answer from mobile_probe'
-    assert items[5]['sent_at'] == '2026-06-18T00:00:02Z'
-    assert items[5]['completed_at'] == '2026-06-18T00:00:02Z'
+    assert items == []
     assert 'wrong target' not in json.dumps(payload)
+
+
+@pytest.mark.parametrize('provider', ['kimi', 'opencode', 'unknown-provider'])
+def test_non_native_provider_keeps_safe_structured_conversation_fallback(
+    tmp_path: Path,
+    provider: str,
+) -> None:
+    project_root = tmp_path / 'repo'
+    snapshot_dir = project_root / '.ccb' / 'ccbd' / 'snapshots'
+    snapshot_dir.mkdir(parents=True)
+    (snapshot_dir / 'job_mobile_reply.json').write_text(
+        json.dumps({'latest_decision': {'reply': 'structured completion'}}),
+        encoding='utf-8',
+    )
+    (snapshot_dir / 'job_mobile_old_reply.json').write_text(
+        json.dumps({'latest_decision': {'reply': 'older structured completion'}}),
+        encoding='utf-8',
+    )
+
+    class _ProviderClient(_FakeCcbdClientWithConversationComms):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['agents'][0]['provider'] = provider
+            return payload
+
+    service = _service(_ProviderClient(), project_root=project_root, mobile_dir=tmp_path / 'mobile')
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787', scopes=('view',))
+    _, claim = service.dispatch_post('/v1/pairing/claim', {'pairing_code': str(pairing['pairing_code'])})
+    _, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    items = payload['conversation']['items']
+    assert [item['kind'] for item in items] == [
+        'user_message', 'agent_reply', 'user_message', 'agent_reply',
+    ]
+    assert [item['body'] for item in items] == [
+        'older question from phone', 'older structured completion',
+        'question from phone', 'structured completion',
+    ]
+    assert all('terminal' not in str(item.get('source') or '') for item in items)
+    assert all(item.get('kind') not in {'log', 'diff'} for item in items)
 
 
 def test_agent_conversation_prefers_terminal_scrollback_over_comms(tmp_path: Path) -> None:
@@ -1091,16 +1352,7 @@ def test_agent_conversation_prefers_terminal_scrollback_over_comms(tmp_path: Pat
 
     assert status == 200
     items = payload['conversation']['items']
-    assert [item['id'] for item in items] == [
-        'terminal-history-pane-1',
-        'terminal-history-pane-2',
-    ]
-    assert items[0]['kind'] == 'agent_reply'
-    assert items[0]['body'] == 'real pane assistant response'
-    assert items[0]['source'] == 'tmux output / tmux_scrollback / %2'
-    assert items[1]['kind'] == 'user_message'
-    assert items[1]['body'] == '$ › real pane input'
-    assert items[1]['source'] == 'terminal input / tmux_scrollback / %2'
+    assert items == []
     public_json = json.dumps(payload)
     assert 'stale CCB_REPLY answer' not in public_json
     assert 'question from phone' not in public_json
@@ -1249,6 +1501,106 @@ def test_agent_conversation_prefers_codex_native_transcript(tmp_path: Path) -> N
     assert 'stale ask snapshot' not in public_json
     assert 'stale pane prompt' not in public_json
     assert 'stale pane answer' not in public_json
+
+
+def test_agent_conversation_skips_codex_local_controls_and_backfills_real_thread(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo'
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='real-thread',
+        created_at=1782350000,
+        updated_at=1782350001,
+        records=[
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': 'real question before local controls',
+                },
+            },
+            {
+                'timestamp': '2026-06-25T12:00:01.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'agent_message',
+                    'message': 'real answer before local controls',
+                },
+            },
+        ],
+    )
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='clear-thread',
+        created_at=1782350010,
+        updated_at=1782350011,
+        records=[
+            {
+                'timestamp': '2026-06-25T12:01:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': (
+                        '<command-name>/clear</command-name>\n'
+                        '<command-message>clear</command-message> '
+                        '<command-args></command-args>'
+                    ),
+                },
+            },
+        ],
+    )
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='caveat-thread',
+        created_at=1782350020,
+        updated_at=1782350021,
+        records=[
+            {
+                'timestamp': '2026-06-25T12:02:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': (
+                        '<local-command-caveat>Caveat: local command metadata. '
+                        'Do not respond.</local-command-caveat>'
+                    ),
+                },
+            },
+        ],
+    )
+
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    status, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    assert status == 200
+    items = payload['conversation']['items']
+    assert [(item['kind'], item['body']) for item in items] == [
+        ('user_message', 'real question before local controls'),
+        ('agent_reply', 'real answer before local controls'),
+    ]
+    assert '<command-name>' not in json.dumps(payload)
+    assert '<local-command-caveat>' not in json.dumps(payload)
 
 
 def test_agent_conversation_keeps_codex_response_assistant_with_event_user(
@@ -1635,8 +1987,7 @@ def test_agent_conversation_does_not_use_terminal_history_for_claude_without_nat
     assert status == 200
     items = payload['conversation']['items']
     assert all('tmux_scrollback' not in str(item.get('source')) for item in items)
-    assert [item.get('kind') for item in items[:2]] == ['status_event', 'agent_reply']
-    assert items[1]['body'] == 'Ready for the next task.'
+    assert items == []
     assert 'stale tmux fallback output' not in json.dumps(payload)
 
 
@@ -1832,35 +2183,8 @@ def test_agent_conversation_pages_latest_then_older_items(tmp_path: Path) -> Non
     )
     latest_conversation = latest['conversation']
 
-    assert [item['id'] for item in latest_conversation['items']] == [
-        'user-job_mobile_reply',
-        'reply-job_mobile_reply',
-    ]
-    assert latest_conversation['next_cursor'] == '4'
-
-    _, older = service.dispatch_get(
-        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2&cursor=4',
-        headers,
-    )
-    older_conversation = older['conversation']
-
-    assert [item['id'] for item in older_conversation['items']] == [
-        'user-job_mobile_old_reply',
-        'reply-job_mobile_old_reply',
-    ]
-    assert older_conversation['next_cursor'] == '2'
-
-    _, oldest = service.dispatch_get(
-        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=2&cursor=2',
-        headers,
-    )
-    oldest_conversation = oldest['conversation']
-
-    assert [item['id'] for item in oldest_conversation['items']] == [
-        'status-mobile',
-        'reply-content-1',
-    ]
-    assert 'next_cursor' not in oldest_conversation
+    assert latest_conversation['items'] == []
+    assert 'next_cursor' not in latest_conversation
 
 
 def test_agent_conversation_pages_codex_native_by_record_timestamp_across_threads(
@@ -2440,33 +2764,8 @@ def test_agent_conversation_pages_completed_job_history_beyond_project_view_limi
     )
     latest_conversation = latest['conversation']
 
-    assert latest_conversation['next_cursor']
-    latest_items = latest_conversation['items']
-    assert latest_items[-2]['sent_at'] == '2026-06-18T00:55:00Z'
-    assert latest_items[-1]['started_at'] == '2026-06-18T00:55:00Z'
-    assert latest_items[-1]['completed_at'] == '2026-06-18T00:55:01Z'
-    assert latest_items[-1]['duration_ms'] == 1000
-    assert any(
-        item['id'] == 'reply-job_history_55'
-        and item['body'] == 'history answer 55'
-        for item in latest_conversation['items']
-    )
-    assert all(item['id'] != 'reply-job_history_00' for item in latest_conversation['items'])
-
-    _, older = service.dispatch_get(
-        (
-            '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4'
-            f'&limit=200&cursor={latest_conversation["next_cursor"]}'
-        ),
-        headers,
-    )
-    older_items = older['conversation']['items']
-
-    assert any(
-        item['id'] == 'reply-job_history_00'
-        and item['body'] == 'history answer 00'
-        for item in older_items
-    )
+    assert latest_conversation['items'] == []
+    assert 'next_cursor' not in latest_conversation
 
 
 def test_agent_conversation_maps_artifact_links_to_download_attachments(tmp_path: Path) -> None:
@@ -2529,20 +2828,7 @@ def test_agent_conversation_maps_artifact_links_to_download_attachments(tmp_path
     )
 
     assert status == 200
-    reply = next(
-        item
-        for item in payload['conversation']['items']
-        if item['id'] == 'reply-job_mobile_reply'
-    )
-    assert reply['attachments'] == [
-        {
-            'file_id': file_id,
-            'file_name': 'artifact.txt',
-            'mime_type': 'text/plain',
-            'size_bytes': 12,
-            'kind': 'document',
-        }
-    ]
+    assert payload['conversation']['items'] == []
 
 
 def test_agent_conversation_maps_artifact_links_from_gateway_file_store(tmp_path: Path) -> None:
@@ -2613,13 +2899,83 @@ def test_agent_conversation_maps_artifact_links_from_gateway_file_store(tmp_path
     )
 
     assert status == 200
+    assert payload['conversation']['items'] == []
+
+
+def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    snapshot_dir = project_root / '.ccb' / 'ccbd' / 'snapshots'
+    jobs_dir = project_root / '.ccb' / 'agents' / 'mobile'
+    docs_dir = project_root / 'docs'
+    snapshot_dir.mkdir(parents=True)
+    jobs_dir.mkdir(parents=True)
+    docs_dir.mkdir(parents=True)
+    report_path = docs_dir / 'report.txt'
+    hidden_path = project_root / '.ccb' / 'secret.txt'
+    report_path.write_text('report body\n', encoding='utf-8')
+    hidden_path.write_text('hidden\n', encoding='utf-8')
+    (jobs_dir / 'jobs.jsonl').write_text(
+        json.dumps(
+            {
+                'job_id': 'job_mobile_reply',
+                'status': 'completed',
+                'agent_name': 'mobile',
+                'request': {'body': 'create report'},
+            }
+        )
+        + '\n',
+        encoding='utf-8',
+    )
+    (snapshot_dir / 'job_mobile_reply.json').write_text(
+        json.dumps(
+            {
+                'latest_decision': {
+                    'reply': (
+                        'Generated files:\n'
+                        '- [report](docs/report.txt)\n'
+                        '- [hidden](.ccb/secret.txt)\n'
+                        '- [outside](/etc/hosts)\n'
+                    ),
+                },
+            }
+        ),
+        encoding='utf-8',
+    )
+
+    class _KimiClient(_FakeCcbdClientWithConversationComms):
+        def project_view(self, *, schema_version: int = 1) -> dict[str, object]:
+            payload = super().project_view(schema_version=schema_version)
+            payload['view']['agents'][0]['provider'] = 'kimi'
+            return payload
+
+    service = _service(
+        _KimiClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    _, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
     reply = next(
         item
         for item in payload['conversation']['items']
         if item['id'] == 'reply-job_mobile_reply'
     )
-    assert reply['attachments'][0]['file_id'] == file_id
-    assert reply['attachments'][0]['file_name'] == 'artifact.txt'
+    assert 'ccb-artifact://' in reply['body']
+    assert '[hidden](.ccb/secret.txt)' in reply['body']
+    assert '[outside](/etc/hosts)' in reply['body']
+    assert [item['file_name'] for item in reply['attachments']] == ['report.txt']
 
 
 def test_agent_conversation_requires_view_auth_and_fresh_epoch(tmp_path: Path) -> None:
@@ -2812,8 +3168,30 @@ def test_agent_message_submit_accepts_attachment_only_message(tmp_path: Path) ->
     message = payload['message_submit']['message']
     assert message['body'] == ''
     assert message['attachments'][0]['file_id'] == 'mobile-file-1'
-    assert sent[0][1] == 'Uploaded attachment: probe.txt'
+    assert sent[0][1] == (
+        'Attached files:\n'
+        '- probe.txt (text/plain, 11 bytes, file id: mobile-file-1)'
+    )
     assert not any(call[0] == 'submit' for call in fake.calls)
+
+
+def test_message_submit_body_keeps_text_and_project_attachment_link() -> None:
+    assert service_module._message_submit_body(
+        'review this',
+        [
+            {
+                'file_id': 'mobile-file-1',
+                'file_name': 'probe.txt',
+                'mime_type': 'text/plain',
+                'size_bytes': 11,
+                'project_relative_path': '.ccb/mobile/uploads/mobile/mobile-file-1-probe.txt',
+            }
+        ],
+    ) == (
+        'review this\n\nAttached files:\n'
+        '- [probe.txt](.ccb/mobile/uploads/mobile/mobile-file-1-probe.txt) '
+        '(text/plain, 11 bytes, file id: mobile-file-1)'
+    )
 
 
 def test_agent_message_submit_requires_agent_pane_evidence(tmp_path: Path) -> None:
@@ -2904,7 +3282,12 @@ def test_agent_message_submit_requires_message_submit_scope(tmp_path: Path) -> N
 
 
 def test_agent_file_upload_download_round_trips_bytes_over_http(tmp_path: Path) -> None:
-    service = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+    project_root = tmp_path / 'repo'
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
     pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
     _, claim = service.dispatch_post(
         '/v1/pairing/claim',
@@ -2936,6 +3319,10 @@ def test_agent_file_upload_download_round_trips_bytes_over_http(tmp_path: Path) 
         assert upload['file_name'] == 'probe file.txt'
         assert upload['mime_type'] == 'text/plain'
         assert upload['size_bytes'] == len(data)
+        assert upload['project_relative_path'].startswith(
+            '.ccb/mobile/uploads/mobile/'
+        )
+        assert (project_root / upload['project_relative_path']).read_bytes() == data
 
         download_request = Request(
             f'{base}/v1/projects/proj-demo/agents/mobile/files/{file_id}',
@@ -2956,14 +3343,18 @@ def test_agent_file_upload_download_round_trips_bytes_over_http(tmp_path: Path) 
 
 
 def test_agent_file_routes_use_registry_project_id(tmp_path: Path) -> None:
+    first_root = tmp_path / 'one'
+    second_root = tmp_path / 'two'
+    first_root.mkdir()
+    second_root.mkdir()
     first = _FakeCcbdClient(
         project_id='proj-one',
-        project_root='/srv/one',
+        project_root=str(first_root),
         display_name='one',
     )
     second = _FakeCcbdClient(
         project_id='proj-two',
-        project_root='/srv/two',
+        project_root=str(second_root),
         display_name='two',
     )
     service = _service(
@@ -2973,12 +3364,12 @@ def test_agent_file_routes_use_registry_project_id(tmp_path: Path) -> None:
             [
                 MobileGatewayProject(
                     project_id='proj-one',
-                    project_root=Path('/srv/one'),
+                    project_root=first_root,
                     ccbd_client_factory=lambda: first,
                 ),
                 MobileGatewayProject(
                     project_id='proj-two',
-                    project_root=Path('/srv/two'),
+                    project_root=second_root,
                     ccbd_client_factory=lambda: second,
                 ),
             ]
@@ -3015,6 +3406,7 @@ def test_agent_file_routes_use_registry_project_id(tmp_path: Path) -> None:
     )
     metadata = json.loads(metadata_path.read_text(encoding='utf-8'))
     assert metadata['project_id'] == 'proj-two'
+    assert (second_root / metadata['project_relative_path']).read_bytes() == data
     assert not (tmp_path / 'mobile' / 'files' / 'proj-demo' / 'mobile' / file_id).exists()
 
     download_status, downloaded, headers = service.dispatch_file_download(
@@ -3227,6 +3619,114 @@ def test_terminal_replacement_handle_rejects_previous_handle_resume_cursor(tmp_p
     assert denied.value.reason == 'stale_resume_cursor'
 
 
+def test_terminal_state_index_reads_only_appended_jsonl_tail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reads: list[int] = []
+    original = pairing_module._read_jsonl_from_offset
+
+    def recording_read(path: Path, offset: int):
+        reads.append(offset)
+        return original(path, offset)
+
+    monkeypatch.setattr(pairing_module, '_read_jsonl_from_offset', recording_read)
+    store = MobileGatewayPairingStore(tmp_path / 'mobile')
+    handle = store.create_terminal_handle(
+        project_id='proj-demo',
+        device_id='dev-demo',
+        target_epoch=4,
+        target_summary={'project_id': 'proj-demo', 'agent': 'mobile'},
+        geometry={'columns': 80, 'rows': 24},
+    )
+
+    store.record_terminal_input_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=1,
+    )
+    store.record_terminal_output_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=1,
+    )
+    store.record_terminal_input_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=2,
+    )
+
+    assert reads[0] == 0
+    assert reads[1] > 0
+    assert reads[2] > reads[1]
+    assert reads[2] - reads[1] < 2048
+
+
+def test_terminal_state_index_observes_external_appends(tmp_path: Path) -> None:
+    mobile_dir = tmp_path / 'mobile'
+    first_store = MobileGatewayPairingStore(mobile_dir)
+    handle = first_store.create_terminal_handle(
+        project_id='proj-demo',
+        device_id='dev-demo',
+        target_epoch=4,
+        target_summary={'project_id': 'proj-demo', 'agent': 'mobile'},
+        geometry={'columns': 80, 'rows': 24},
+    )
+    first_store.record_terminal_input_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=1,
+    )
+
+    second_store = MobileGatewayPairingStore(mobile_dir)
+    second_store.record_terminal_input_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=2,
+    )
+
+    record = first_store.authenticate_terminal_token(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+    )
+    assert record['last_input_seq'] == 2
+
+
+def test_terminal_state_log_compacts_to_latest_handle_records(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(pairing_module, '_TERMINAL_LOG_COMPACT_BYTES', 1)
+    store = MobileGatewayPairingStore(tmp_path / 'mobile')
+    handle = store.create_terminal_handle(
+        project_id='proj-demo',
+        device_id='dev-demo',
+        target_epoch=4,
+        target_summary={'project_id': 'proj-demo', 'agent': 'mobile'},
+        geometry={'columns': 80, 'rows': 24},
+    )
+    store.record_terminal_input_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=3,
+    )
+    store.record_terminal_output_sequence(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+        sequence=4,
+    )
+
+    record = store.authenticate_terminal_token(
+        terminal_id=str(handle['terminal_id']),
+        terminal_token=str(handle['terminal_token']),
+    )
+    lines = store.terminal_tokens_path.read_text(encoding='utf-8').splitlines()
+
+    assert len(lines) == 1
+    assert record['last_input_seq'] == 3
+    assert record['last_output_seq'] == 4
+
+
 def test_terminal_open_requires_terminal_scope_and_mints_hashed_token(tmp_path: Path) -> None:
     service = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
     pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
@@ -3420,7 +3920,7 @@ def test_terminal_websocket_streams_frames_and_rejects_replayed_input(tmp_path: 
             '-t',
             '%2',
             '-S',
-            '-30',
+            '-1000',
         ]
         assert 'attach-session' not in sessions[0].target.command
         assert sessions[0].target.geometry.columns == 100

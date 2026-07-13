@@ -228,6 +228,10 @@ def test_prepare_tmux_start_layout_uses_root_pane_for_first_agent_when_cmd_disab
 def test_prepare_tmux_start_layout_creates_split_panes_with_placeholder(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-layout-placeholder'
     ctx = _context(project_root)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        'agent1:codex; agent2:codex, agent3:claude\n',
+        encoding='utf-8',
+    )
     config = load_project_config(project_root).config
     created: list[tuple[str, str | None]] = []
     live_panes = {'%0'}
@@ -277,7 +281,7 @@ def test_prepare_tmux_start_layout_creates_split_panes_with_placeholder(monkeypa
         targets=('agent1', 'agent2', 'agent3'),
     )
 
-    assert layout.agent_panes == {'agent1': '%0', 'agent2': '%2', 'agent3': '%1'}
+    assert layout.agent_panes == {'agent1': '%0', 'agent2': '%1', 'agent3': '%2'}
     assert created
     assert all(cmd == pane_placeholder_cmd() for cmd, _parent in created)
 
@@ -288,6 +292,10 @@ def test_prepare_tmux_start_layout_survives_exiting_default_command(tmp_path: Pa
 
     project_root = tmp_path / 'repo-layout-stress'
     ctx = _context(project_root)
+    (project_root / '.ccb' / 'ccb.config').write_text(
+        'agent1:codex; agent2:codex, agent3:claude\n',
+        encoding='utf-8',
+    )
     config = load_project_config(project_root).config
     socket_path = Path('/tmp') / f'ccb-{uuid.uuid4().hex[:12]}.sock'
     backend = TmuxBackend(socket_path=str(socket_path))

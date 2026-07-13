@@ -9,8 +9,9 @@ Plan a focused CCB configuration experience that starts with a cleaner
 `.ccb/ccb.config`, and finally exposes that editor from the native sidebar.
 
 The plan keeps configuration authority in `.ccb/ccb.config`. It does not turn
-the skill or UI into workflow-memory authoring, runtime control, or a second
-source of truth.
+the skill or UI into workflow-memory authoring or a second source of truth.
+Hot reload is an explicit delegation to the existing mounted-daemon control
+plane, not an independent runtime authority.
 
 ## File Map
 
@@ -22,7 +23,7 @@ source of truth.
 - [topics/config-ui-design.md](topics/config-ui-design.md): local browser UI
   shape, API, safety model, and validation flow.
 - [topics/sidebar-config-entry.md](topics/sidebar-config-entry.md): sidebar
-  icon entry point after the standalone config UI exists.
+  icon entry point and the decision to replace the prominent restart icon.
 - [decisions/001-config-ui-is-local-config-editor.md](decisions/001-config-ui-is-local-config-editor.md):
   decision record for keeping the UI local, optional, and config-only.
 - [decisions/002-config-single-authority.md](decisions/002-config-single-authority.md):
@@ -43,8 +44,8 @@ In scope:
 - Clean `ccb-config` skill guidance so it edits config only.
 - Present configurable fields as a clear menu/list grouped by user level.
 - Generate and validate `version = 2` windows topology by default.
-- Include the managed Neovim tool window by default in generated windows
-  topology, with opt-out by removing `[tool_windows.neovim]`.
+- Expose Rich as the only built-in non-agent pane choice. Do not generate or
+  advertise removed editor-tool fields.
 - Add a local browser config editor launched by a CLI command.
 - Add a sidebar icon that launches the same config editor.
 

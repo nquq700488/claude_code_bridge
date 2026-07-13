@@ -2,6 +2,7 @@ import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:xterm/xterm.dart';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
 
@@ -10,7 +11,26 @@ import 'support/project_home_test_fakes.dart';
 void main() {
   final binding = TestWidgetsFlutterBinding.ensureInitialized();
 
-  testWidgets('terminal toolbar exposes direct pane controls on phone width', (
+  test(
+    'gateway pane snapshot replacement does not accumulate screen copies',
+    () {
+      final terminal = Terminal(maxLines: 100);
+      terminal.resize(24, 3);
+
+      terminal.write(
+        '\x1b[?25l\x1b[3J\x1b[H\x1b[2J'
+        'real history\r\nolder output\r\npane only\r\nprompt\$ ',
+      );
+      terminal.write('\x1b[?25l\x1b[H\x1b[2Jpane changed\r\nprompt\$ ');
+
+      final text = terminal.buffer.getText();
+      expect('real history'.allMatches(text), hasLength(1));
+      expect('pane changed'.allMatches(text), hasLength(1));
+      expect('pane only'.allMatches(text), isEmpty);
+    },
+  );
+
+  testWidgets('terminal shortcuts stay collapsed under a floating plus', (
     tester,
   ) async {
     final calls = <String>[];
@@ -22,57 +42,63 @@ void main() {
             width: 390,
             child: TerminalControlToolbar(
               enabled: true,
-              status: 'Connected',
+              keyboardActive: false,
+              onKeyboard: () => calls.add('keyboard'),
+              onLatestOutput: () => calls.add('latest'),
               onEscape: () => calls.add('esc'),
               onTab: () => calls.add('tab'),
               onCtrlC: () => calls.add('ctrl-c'),
-              onCtrlD: () => calls.add('ctrl-d'),
-              onCtrlU: () => calls.add('ctrl-u'),
               onArrowUp: () => calls.add('up'),
               onArrowDown: () => calls.add('down'),
-              onArrowRight: () => calls.add('right'),
-              onArrowLeft: () => calls.add('left'),
-              onPaste: () => calls.add('paste'),
-              onResize: () => calls.add('resize'),
-              onReconnect: () => calls.add('reconnect'),
             ),
           ),
         ),
       ),
     );
 
-    expect(
-      find.byKey(const ValueKey('terminal-control-status')),
-      findsOneWidget,
-    );
+    expect(find.byKey(const ValueKey('terminal-shortcut-surface')), findsOne);
+    expect(find.byIcon(Icons.add), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-escape')), findsNothing);
+
+    await _expandTerminalShortcuts(tester);
+
     expect(find.byKey(const ValueKey('terminal-key-escape')), findsOneWidget);
+    expect(find.byKey(const ValueKey('terminal-key-keyboard')), findsOneWidget);
     expect(find.byKey(const ValueKey('terminal-key-tab')), findsOneWidget);
     expect(find.byKey(const ValueKey('terminal-key-ctrl-c')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('terminal-key-latest-output')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('terminal-key-arrow-up')), findsOneWidget);
+    expect(
+      find.byKey(const ValueKey('terminal-key-arrow-down')),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('terminal-key-arrow-left')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('terminal-key-arrow-right')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('terminal-paste-button')), findsNothing);
+    expect(find.byKey(const ValueKey('terminal-resize-button')), findsNothing);
+    expect(
+      find.byKey(const ValueKey('terminal-reconnect-button')),
+      findsNothing,
+    );
+    expect(find.byKey(const ValueKey('terminal-ctrl-menu')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('terminal-key-escape')));
     await tester.tap(find.byKey(const ValueKey('terminal-key-tab')));
     await tester.tap(find.byKey(const ValueKey('terminal-key-ctrl-c')));
-    await tester.tap(find.byKey(const ValueKey('terminal-key-arrow-up')));
-    await tester.tap(find.byKey(const ValueKey('terminal-key-arrow-down')));
-    await tester.tap(find.byKey(const ValueKey('terminal-key-arrow-left')));
-    await tester.tap(find.byKey(const ValueKey('terminal-key-arrow-right')));
-    await tester.tap(find.byKey(const ValueKey('terminal-paste-button')));
-    await tester.tap(find.byKey(const ValueKey('terminal-resize-button')));
-    await tester.tap(find.byKey(const ValueKey('terminal-reconnect-button')));
+    await tester.tap(find.byKey(const ValueKey('terminal-key-latest-output')));
     await tester.pump();
 
-    expect(calls, [
-      'esc',
-      'tab',
-      'ctrl-c',
-      'up',
-      'down',
-      'left',
-      'right',
-      'paste',
-      'resize',
-      'reconnect',
-    ]);
+    expect(calls, ['esc', 'tab', 'ctrl-c', 'latest']);
+
+    await tester.tap(find.byKey(const ValueKey('terminal-shortcuts-toggle')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('terminal-key-escape')), findsNothing);
   });
 
   testWidgets('terminal toolbar disables controls while disconnected', (
@@ -85,23 +111,19 @@ void main() {
         home: Scaffold(
           body: TerminalControlToolbar(
             enabled: false,
-            status: 'Connecting',
+            keyboardActive: false,
+            onKeyboard: () => called = true,
+            onLatestOutput: () => called = true,
             onEscape: () => called = true,
             onTab: () => called = true,
             onCtrlC: () => called = true,
-            onCtrlD: () => called = true,
-            onCtrlU: () => called = true,
             onArrowUp: () => called = true,
             onArrowDown: () => called = true,
-            onArrowRight: () => called = true,
-            onArrowLeft: () => called = true,
-            onPaste: () => called = true,
-            onResize: () => called = true,
-            onReconnect: () => called = true,
           ),
         ),
       ),
     );
+    await _expandTerminalShortcuts(tester);
 
     final escape = tester.widget<TextButton>(
       find.descendant(
@@ -109,13 +131,64 @@ void main() {
         matching: find.byType(TextButton),
       ),
     );
-    final paste = tester.widget<IconButton>(
-      find.byKey(const ValueKey('terminal-paste-button')),
+    final up = tester.widget<IconButton>(
+      find.descendant(
+        of: find.byKey(const ValueKey('terminal-key-arrow-up')),
+        matching: find.byType(IconButton),
+      ),
     );
 
     expect(escape.onPressed, isNull);
-    expect(paste.onPressed, isNull);
+    expect(up.onPressed, isNull);
+    final latest = tester.widget<IconButton>(
+      find.descendant(
+        of: find.byKey(const ValueKey('terminal-key-latest-output')),
+        matching: find.byType(IconButton),
+      ),
+    );
+    expect(latest.onPressed, isNotNull);
     expect(called, isFalse);
+  });
+
+  testWidgets('terminal keyboard opens only from the explicit shortcut', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentTerminalPane(
+            view: view,
+            target: view.terminalTargetForAgent('mobile'),
+            terminalTransport: transport,
+            gatewayTerminal: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final terminal = find.byKey(const ValueKey('ccb-live-terminal-view'));
+    expect(binding.testTextInput.isVisible, isFalse);
+
+    await tester.tap(terminal);
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(binding.testTextInput.isVisible, isFalse);
+
+    await _expandTerminalShortcuts(tester);
+    await tester.tap(find.byKey(const ValueKey('terminal-key-keyboard')));
+    await tester.pump();
+    expect(binding.testTextInput.isVisible, isTrue);
+
+    await tester.tap(find.byKey(const ValueKey('terminal-key-keyboard')));
+    await tester.pump();
+    expect(binding.testTextInput.isVisible, isFalse);
+
+    await tester.tap(terminal);
+    await tester.pump(const Duration(milliseconds: 350));
+    expect(binding.testTextInput.isVisible, isFalse);
   });
 
   testWidgets('live terminal pane does not echo terminal report replies', (
@@ -169,6 +242,7 @@ void main() {
     await tester.pumpAndSettle();
 
     final session = transport.sessions.single;
+    await _expandTerminalShortcuts(tester);
     await tester.tap(find.byKey(const ValueKey('terminal-key-tab')));
     await tester.tap(find.byKey(const ValueKey('terminal-key-escape')));
     await tester.pump();
@@ -179,7 +253,7 @@ void main() {
     ]);
   });
 
-  testWidgets('live terminal pane still sends typed terminal text', (
+  testWidgets('live terminal pane sends alphabetic and Chinese text', (
     tester,
   ) async {
     final transport = RecordingTerminalTransport();
@@ -200,12 +274,73 @@ void main() {
     await tester.pumpAndSettle();
 
     final session = transport.sessions.single;
-    await tester.tap(find.byKey(const ValueKey('ccb-live-terminal-view')));
-    await tester.pump(const Duration(seconds: 1));
-    binding.testTextInput.enterText('plain input');
+    await _expandTerminalShortcuts(tester);
+    await tester.tap(find.byKey(const ValueKey('terminal-key-keyboard')));
+    await tester.pump();
+    binding.testTextInput.enterText('Alpha中文123');
     await binding.idle();
 
-    expect(session.written.map(utf8.decode), contains('plain input'));
+    expect(session.written.map(utf8.decode), contains('Alpha中文123'));
+  });
+
+  testWidgets('terminal input does not leave history-reading position', (
+    tester,
+  ) async {
+    final transport = RecordingTerminalTransport();
+    final view = _view(namespaceEpoch: 4);
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: AgentTerminalPane(
+            view: view,
+            target: view.terminalTargetForAgent('mobile'),
+            terminalTransport: transport,
+            gatewayTerminal: true,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final terminal = find.byKey(const ValueKey('ccb-live-terminal-view'));
+    transport.sessions.single.addOutput(
+      List.generate(240, (index) => 'history line $index\r\n').join(),
+    );
+    await tester.pumpAndSettle();
+
+    final scrollable = find.descendant(
+      of: terminal,
+      matching: find.byType(Scrollable),
+    );
+    final position = tester.state<ScrollableState>(scrollable).position;
+    expect(position.pixels, closeTo(position.maxScrollExtent, 0.1));
+
+    await tester.drag(terminal, const Offset(0, 260));
+    await tester.pumpAndSettle();
+    final historyOffset = position.pixels;
+    expect(historyOffset, lessThan(position.maxScrollExtent - 40));
+
+    await _expandTerminalShortcuts(tester);
+    await tester.tap(find.byKey(const ValueKey('terminal-key-keyboard')));
+    tester.view.viewInsets = const FakeViewPadding(bottom: 280);
+    addTearDown(tester.view.resetViewInsets);
+    await tester.pump();
+    await tester.pump();
+
+    expect(position.pixels, closeTo(historyOffset, 0.1));
+
+    binding.testTextInput.enterText('stay-here');
+    await binding.idle();
+    await tester.pump();
+
+    expect(position.pixels, closeTo(historyOffset, 0.1));
+
+    await _expandTerminalShortcuts(tester);
+    await tester.tap(find.byKey(const ValueKey('terminal-key-latest-output')));
+    await tester.pump(const Duration(milliseconds: 350));
+
+    expect(position.pixels, closeTo(position.maxScrollExtent, 0.1));
   });
 
   testWidgets('live terminal pane reopens when target epoch changes', (
@@ -284,6 +419,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await _expandTerminalShortcuts(tester);
 
     final session = transport.sessions.single;
     session.addOutput('before');
@@ -303,8 +439,8 @@ void main() {
         matching: find.byType(TextButton),
       ),
     );
-    final reconnect = tester.widget<IconButton>(
-      find.byKey(const ValueKey('terminal-reconnect-button')),
+    final reconnect = tester.widget<TextButton>(
+      find.byKey(const ValueKey('terminal-header-reconnect')),
     );
     expect(ctrlC.onPressed, isNull);
     expect(reconnect.onPressed, isNotNull);
@@ -391,14 +527,16 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await _expandTerminalShortcuts(tester);
 
     final session = transport.sessions.single;
     session.addOutputError(
       const TerminalTransportException('terminal stream disconnected'),
     );
     await tester.pump();
+    await tester.pump();
 
-    await tester.tap(find.byKey(const ValueKey('terminal-reconnect-button')));
+    await tester.tap(find.byKey(const ValueKey('terminal-header-reconnect')));
     await tester.pump();
 
     expect(session.reconnectCount, 1);
@@ -427,6 +565,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await _expandTerminalShortcuts(tester);
 
     await transport.sessions.single.endOutput();
     await tester.pump();
@@ -438,8 +577,8 @@ void main() {
         matching: find.byType(TextButton),
       ),
     );
-    final reconnect = tester.widget<IconButton>(
-      find.byKey(const ValueKey('terminal-reconnect-button')),
+    final reconnect = tester.widget<TextButton>(
+      find.byKey(const ValueKey('terminal-header-reconnect')),
     );
     expect(ctrlC.onPressed, isNull);
     expect(reconnect.onPressed, isNotNull);
@@ -473,6 +612,7 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
+    await _expandTerminalShortcuts(tester);
 
     final session = transport.sessions.single;
     session.addOutputError(
@@ -488,16 +628,28 @@ void main() {
         matching: find.byType(TextButton),
       ),
     );
-    final reconnect = tester.widget<IconButton>(
-      find.byKey(const ValueKey('terminal-reconnect-button')),
-    );
     expect(ctrlC.onPressed, isNull);
-    expect(reconnect.onPressed, isNull);
+    expect(
+      find.byKey(const ValueKey('terminal-header-reconnect')),
+      findsNothing,
+    );
 
     await tester.pump(const Duration(seconds: 9));
     expect(session.reconnectCount, 0);
     expect(transport.sessions, hasLength(1));
   });
+}
+
+Future<void> _expandTerminalShortcuts(WidgetTester tester) async {
+  if (find
+      .byKey(const ValueKey('terminal-shortcuts-panel'))
+      .evaluate()
+      .isNotEmpty) {
+    return;
+  }
+  await tester.tap(find.byKey(const ValueKey('terminal-shortcuts-toggle')));
+  await tester.pump();
+  await tester.pump(const Duration(milliseconds: 220));
 }
 
 CcbProjectView _view({required int namespaceEpoch}) {

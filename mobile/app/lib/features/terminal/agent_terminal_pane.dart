@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:xterm/xterm.dart';
 
 import '../../models/ccb_project_view.dart';
@@ -10,6 +9,7 @@ import '../../models/ccb_terminal_target.dart';
 import '../../tmux/tmux_command_builder.dart';
 import '../../transport/gateway_terminal_transport.dart';
 import '../../transport/terminal_transport.dart';
+import 'terminal_history_scroll_controller.dart';
 
 class AgentTerminalPane extends StatefulWidget {
   const AgentTerminalPane({
@@ -132,7 +132,7 @@ class _FakeTerminalPaneState extends State<_FakeTerminalPane> {
           child: TerminalView(
             _terminal,
             key: const ValueKey('ccb-terminal-view'),
-            autofocus: true,
+            autofocus: false,
             readOnly: true,
           ),
         ),
@@ -168,6 +168,8 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   ];
 
   late final Terminal _terminal;
+  late final TerminalHistoryScrollController _terminalScrollController;
+  final _terminalViewKey = GlobalKey<TerminalViewState>();
   Future<TerminalSession>? _sessionFuture;
   TerminalSession? _session;
   StreamSubscription<String>? _outputSubscription;
@@ -182,11 +184,16 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     pixelHeight: 640,
   );
   String _controlStatus = 'Connecting';
+  bool _terminalInputActive = false;
+  bool _terminalKeyboardWasVisible = false;
 
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _terminalScrollController = TerminalHistoryScrollController(
+      debugLabel: 'agent-terminal-history',
+    );
     _terminal = Terminal(
       maxLines: 4000,
       onOutput: (data) {
@@ -302,10 +309,29 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state != AppLifecycleState.resumed && _terminalInputActive) {
+      _deactivateTerminalInput();
+    }
     if (state == AppLifecycleState.resumed &&
         _isReconnectableStatus(_controlStatus) &&
         !_autoReconnectBlocked) {
       unawaited(_reconnect());
+    }
+  }
+
+  @override
+  void didChangeMetrics() {
+    super.didChangeMetrics();
+    if (!mounted || !_terminalInputActive) {
+      return;
+    }
+    final keyboardVisible = View.of(context).viewInsets.bottom > 0;
+    if (keyboardVisible) {
+      _terminalKeyboardWasVisible = true;
+      return;
+    }
+    if (_terminalKeyboardWasVisible) {
+      _deactivateTerminalInput(closeKeyboard: false);
     }
   }
 
@@ -315,6 +341,7 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     _openGeneration += 1;
     _cancelAutoReconnectTimer();
     unawaited(_closeCurrentSession());
+    _terminalScrollController.dispose();
     super.dispose();
   }
 
@@ -340,6 +367,36 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     });
   }
 
+  void _toggleTerminalKeyboard() {
+    if (_terminalInputActive) {
+      _deactivateTerminalInput();
+      return;
+    }
+    setState(() {
+      _terminalInputActive = true;
+      _terminalKeyboardWasVisible = false;
+    });
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_terminalInputActive) {
+        return;
+      }
+      _terminalViewKey.currentState?.requestKeyboard();
+    });
+  }
+
+  void _deactivateTerminalInput({bool closeKeyboard = true}) {
+    if (closeKeyboard) {
+      _terminalViewKey.currentState?.closeKeyboard();
+    }
+    _terminalKeyboardWasVisible = false;
+    if (!mounted || !_terminalInputActive) {
+      return;
+    }
+    setState(() {
+      _terminalInputActive = false;
+    });
+  }
+
   static bool _isTerminalAutoReportReply(String data) {
     if (data == '\x1b[?1;2c' ||
         data == '\x1b[0n' ||
@@ -354,12 +411,8 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   static final _secondaryDeviceAttributesPattern = RegExp(
     r'^\x1B\[>\d+;\d+;\d+c$',
   );
-  static final _cursorPositionReportPattern = RegExp(
-    r'^\x1B\[\d+;\d+R$',
-  );
-  static final _windowSizeReportPattern = RegExp(
-    r'^\x1B\[8;\d+;\d+t$',
-  );
+  static final _cursorPositionReportPattern = RegExp(r'^\x1B\[\d+;\d+R$');
+  static final _windowSizeReportPattern = RegExp(r'^\x1B\[8;\d+;\d+t$');
 
   Future<void> _sendKey(List<int> bytes, String status) async {
     final session = _session;
@@ -372,42 +425,6 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
       _setControlStatus(status);
     } catch (error) {
       _setControlStatus('Key failed');
-      _terminal.write('\r\n\x1b[31m$error\x1b[0m\r\n');
-    }
-  }
-
-  Future<void> _pasteClipboard() async {
-    final data = await Clipboard.getData(Clipboard.kTextPlain);
-    final text = data?.text ?? '';
-    if (text.isEmpty) {
-      _setControlStatus('Clipboard empty');
-      return;
-    }
-    final session = _session;
-    if (session == null) {
-      _setControlStatus('Connecting');
-      return;
-    }
-    try {
-      await session.paste(text);
-      _setControlStatus('Pasted');
-    } catch (error) {
-      _setControlStatus('Paste failed');
-      _terminal.write('\r\n\x1b[31m$error\x1b[0m\r\n');
-    }
-  }
-
-  Future<void> _syncSize() async {
-    final session = _session;
-    if (session == null) {
-      _setControlStatus('Connecting');
-      return;
-    }
-    try {
-      await session.resize(_lastGeometry);
-      _setControlStatus('Size synced');
-    } catch (error) {
-      _setControlStatus('Resize failed');
       _terminal.write('\r\n\x1b[31m$error\x1b[0m\r\n');
     }
   }
@@ -542,8 +559,16 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
     if (!mounted) {
       return;
     }
+    final disableInput = _isTerminalControlsDisabled(status);
+    if (disableInput) {
+      _terminalViewKey.currentState?.closeKeyboard();
+      _terminalKeyboardWasVisible = false;
+    }
     setState(() {
       _controlStatus = status;
+      if (disableInput) {
+        _terminalInputActive = false;
+      }
     });
   }
 
@@ -572,29 +597,59 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
                 title: widget.model.title,
                 subtitle: widget.model.attachCommand,
                 trailing: status,
+                onReconnect: disconnected && canReconnect ? _reconnect : null,
               ),
-            TerminalControlToolbar(
-              enabled: connected,
-              reconnectEnabled: canReconnect,
-              status: status,
-              onEscape: () => _sendKey(const [27], 'Esc'),
-              onTab: () => _sendKey(const [9], 'Tab'),
-              onCtrlC: () => _sendKey(const [3], 'Ctrl-C'),
-              onCtrlD: () => _sendKey(const [4], 'Ctrl-D'),
-              onCtrlU: () => _sendKey(const [21], 'Ctrl-U'),
-              onArrowUp: () => _sendKey(const [27, 91, 65], 'Up'),
-              onArrowDown: () => _sendKey(const [27, 91, 66], 'Down'),
-              onArrowRight: () => _sendKey(const [27, 91, 67], 'Right'),
-              onArrowLeft: () => _sendKey(const [27, 91, 68], 'Left'),
-              onPaste: _pasteClipboard,
-              onResize: _syncSize,
-              onReconnect: _reconnect,
-            ),
             Expanded(
-              child: TerminalView(
-                _terminal,
-                key: const ValueKey('ccb-live-terminal-view'),
-                autofocus: true,
+              child: LayoutBuilder(
+                builder: (context, constraints) {
+                  return Stack(
+                    fit: StackFit.expand,
+                    children: [
+                      KeyedSubtree(
+                        key: const ValueKey('ccb-live-terminal-view'),
+                        child: TerminalView(
+                          _terminal,
+                          key: _terminalViewKey,
+                          autofocus: false,
+                          readOnly: !connected || !_terminalInputActive,
+                          scrollController: _terminalScrollController,
+                        ),
+                      ),
+                      if (!widget.showHeader && disconnected)
+                        Positioned(
+                          top: 8,
+                          left: 12,
+                          right: 12,
+                          child: _CompactTerminalConnectionStatus(
+                            status: status,
+                            onReconnect: canReconnect ? _reconnect : null,
+                          ),
+                        ),
+                      Positioned(
+                        left: 12,
+                        bottom: 12,
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(
+                            maxWidth: constraints.maxWidth - 24,
+                          ),
+                          child: TerminalControlToolbar(
+                            enabled: connected,
+                            keyboardActive: _terminalInputActive,
+                            onKeyboard: _toggleTerminalKeyboard,
+                            onLatestOutput:
+                                _terminalScrollController.jumpToLatestOutput,
+                            onEscape: () => _sendKey(const [27], 'Esc'),
+                            onTab: () => _sendKey(const [9], 'Tab'),
+                            onCtrlC: () => _sendKey(const [3], 'Ctrl-C'),
+                            onArrowUp: () => _sendKey(const [27, 91, 65], 'Up'),
+                            onArrowDown:
+                                () => _sendKey(const [27, 91, 66], 'Down'),
+                          ),
+                        ),
+                      ),
+                    ],
+                  );
+                },
               ),
             ),
           ],
@@ -604,17 +659,64 @@ class _LiveTerminalPaneState extends State<_LiveTerminalPane>
   }
 }
 
+class _CompactTerminalConnectionStatus extends StatelessWidget {
+  const _CompactTerminalConnectionStatus({
+    required this.status,
+    required this.onReconnect,
+  });
+
+  final String status;
+  final VoidCallback? onReconnect;
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Align(
+      alignment: Alignment.topRight,
+      child: Material(
+        key: const ValueKey('terminal-compact-connection-status'),
+        color: colorScheme.surfaceContainerHighest.withValues(alpha: 0.94),
+        borderRadius: BorderRadius.circular(6),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(status),
+              if (onReconnect != null) ...[
+                const SizedBox(width: 8),
+                TextButton(
+                  key: const ValueKey('terminal-compact-reconnect'),
+                  onPressed: onReconnect,
+                  style: TextButton.styleFrom(
+                    visualDensity: VisualDensity.compact,
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    minimumSize: const Size(0, 32),
+                  ),
+                  child: const Text('Reconnect'),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class AgentTerminalHeader extends StatelessWidget {
   const AgentTerminalHeader({
     required this.title,
     required this.subtitle,
     required this.trailing,
+    this.onReconnect,
     super.key,
   });
 
   final String title;
   final String subtitle;
   final String trailing;
+  final VoidCallback? onReconnect;
 
   @override
   Widget build(BuildContext context) {
@@ -626,178 +728,198 @@ class AgentTerminalHeader extends StatelessWidget {
         leading: const Icon(Icons.terminal),
         title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: Text(subtitle, maxLines: 1, overflow: TextOverflow.ellipsis),
-        trailing: Text(
-          trailing,
-          key: const ValueKey('terminal-connection-status'),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-        ),
+        trailing:
+            onReconnect == null
+                ? Text(
+                  trailing,
+                  key: const ValueKey('terminal-connection-status'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                )
+                : TextButton(
+                  key: const ValueKey('terminal-header-reconnect'),
+                  onPressed: onReconnect,
+                  child: Text(trailing),
+                ),
       ),
     );
   }
 }
 
-class TerminalControlToolbar extends StatelessWidget {
+class TerminalControlToolbar extends StatefulWidget {
   const TerminalControlToolbar({
     required this.enabled,
-    bool? reconnectEnabled,
-    required this.status,
+    required this.keyboardActive,
+    required this.onKeyboard,
+    required this.onLatestOutput,
     required this.onEscape,
     required this.onTab,
     required this.onCtrlC,
-    required this.onCtrlD,
-    required this.onCtrlU,
     required this.onArrowUp,
     required this.onArrowDown,
-    required this.onArrowRight,
-    required this.onArrowLeft,
-    required this.onPaste,
-    required this.onResize,
-    required this.onReconnect,
     super.key,
-  }) : reconnectEnabled = reconnectEnabled ?? enabled;
+  });
 
   final bool enabled;
-  final bool reconnectEnabled;
-  final String status;
+  final bool keyboardActive;
+  final VoidCallback onKeyboard;
+  final VoidCallback onLatestOutput;
   final VoidCallback onEscape;
   final VoidCallback onTab;
   final VoidCallback onCtrlC;
-  final VoidCallback onCtrlD;
-  final VoidCallback onCtrlU;
   final VoidCallback onArrowUp;
   final VoidCallback onArrowDown;
-  final VoidCallback onArrowRight;
-  final VoidCallback onArrowLeft;
-  final VoidCallback onPaste;
-  final VoidCallback onResize;
-  final VoidCallback onReconnect;
+
+  @override
+  State<TerminalControlToolbar> createState() => _TerminalControlToolbarState();
+}
+
+class _TerminalControlToolbarState extends State<TerminalControlToolbar> {
+  bool _expanded = false;
 
   @override
   Widget build(BuildContext context) {
     final colorScheme = Theme.of(context).colorScheme;
-    return Material(
-      color: colorScheme.surface,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    status,
-                    key: const ValueKey('terminal-control-status'),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                      color: colorScheme.onSurfaceVariant,
-                    ),
-                  ),
-                ),
-                _ToolbarTextButton(
-                  key: const ValueKey('terminal-key-escape'),
-                  label: 'Esc',
-                  enabled: enabled,
-                  onPressed: onEscape,
-                ),
-                _ToolbarTextButton(
-                  key: const ValueKey('terminal-key-tab'),
-                  label: 'Tab',
-                  enabled: enabled,
-                  onPressed: onTab,
-                ),
-                _ToolbarTextButton(
-                  key: const ValueKey('terminal-key-ctrl-c'),
-                  label: 'C-c',
-                  enabled: enabled,
-                  onPressed: onCtrlC,
-                ),
-                PopupMenuButton<VoidCallback>(
-                  key: const ValueKey('terminal-ctrl-menu'),
-                  tooltip: 'More terminal keys',
-                  enabled: enabled,
-                  icon: const Icon(Icons.keyboard_command_key),
-                  onSelected: (callback) => callback(),
-                  itemBuilder:
-                      (context) => [
-                        PopupMenuItem<VoidCallback>(
-                          key: const ValueKey('terminal-key-ctrl-d'),
-                          value: onCtrlD,
-                          child: const Text('Ctrl-D'),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final width =
+            _expanded && constraints.hasBoundedWidth
+                ? constraints.maxWidth
+                : 48.0;
+        return AnimatedSize(
+          duration: const Duration(milliseconds: 180),
+          curve: Curves.easeOutCubic,
+          alignment: Alignment.bottomLeft,
+          child: SizedBox(
+            width: width,
+            child: Material(
+              key: const ValueKey('terminal-shortcut-surface'),
+              color:
+                  _expanded
+                      ? colorScheme.surface.withValues(alpha: 0.92)
+                      : Colors.transparent,
+              elevation: _expanded ? 4 : 0,
+              borderRadius: BorderRadius.circular(24),
+              clipBehavior: Clip.antiAlias,
+              child: SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Padding(
+                  padding:
+                      _expanded
+                          ? const EdgeInsets.symmetric(
+                            horizontal: 4,
+                            vertical: 3,
+                          )
+                          : EdgeInsets.zero,
+                  child: Row(
+                    key:
+                        _expanded
+                            ? const ValueKey('terminal-shortcuts-panel')
+                            : null,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Opacity(
+                        opacity: _expanded ? 0.9 : 0.62,
+                        child: IconButton.filledTonal(
+                          key: const ValueKey('terminal-shortcuts-toggle'),
+                          tooltip:
+                              _expanded
+                                  ? 'Hide terminal shortcuts'
+                                  : 'Show terminal shortcuts',
+                          onPressed:
+                              () => setState(() => _expanded = !_expanded),
+                          icon: Icon(_expanded ? Icons.close : Icons.add),
                         ),
-                        PopupMenuItem<VoidCallback>(
-                          key: const ValueKey('terminal-key-ctrl-u'),
-                          value: onCtrlU,
-                          child: const Text('Ctrl-U'),
+                      ),
+                      if (_expanded) ...[
+                        const SizedBox(width: 2),
+                        _TerminalShortcutIconButton(
+                          key: const ValueKey('terminal-key-latest-output'),
+                          tooltip: 'Latest output',
+                          enabled: true,
+                          onPressed: widget.onLatestOutput,
+                          icon: Icons.vertical_align_bottom,
+                        ),
+                        _TerminalShortcutIconButton(
+                          key: const ValueKey('terminal-key-keyboard'),
+                          tooltip:
+                              widget.keyboardActive
+                                  ? 'Hide keyboard'
+                                  : 'Show keyboard',
+                          enabled: widget.enabled,
+                          onPressed: widget.onKeyboard,
+                          icon:
+                              widget.keyboardActive
+                                  ? Icons.keyboard_hide
+                                  : Icons.keyboard,
+                        ),
+                        _ToolbarTextButton(
+                          key: const ValueKey('terminal-key-escape'),
+                          label: 'Esc',
+                          enabled: widget.enabled,
+                          onPressed: widget.onEscape,
+                        ),
+                        _ToolbarTextButton(
+                          key: const ValueKey('terminal-key-tab'),
+                          label: 'Tab',
+                          enabled: widget.enabled,
+                          onPressed: widget.onTab,
+                        ),
+                        _ToolbarTextButton(
+                          key: const ValueKey('terminal-key-ctrl-c'),
+                          label: 'C-c',
+                          enabled: widget.enabled,
+                          onPressed: widget.onCtrlC,
+                        ),
+                        _TerminalShortcutIconButton(
+                          key: const ValueKey('terminal-key-arrow-up'),
+                          tooltip: 'Up',
+                          enabled: widget.enabled,
+                          onPressed: widget.onArrowUp,
+                          icon: Icons.keyboard_arrow_up,
+                        ),
+                        _TerminalShortcutIconButton(
+                          key: const ValueKey('terminal-key-arrow-down'),
+                          tooltip: 'Down',
+                          enabled: widget.enabled,
+                          onPressed: widget.onArrowDown,
+                          icon: Icons.keyboard_arrow_down,
                         ),
                       ],
+                    ],
+                  ),
                 ),
-              ],
+              ),
             ),
-            Row(
-              children: [
-                IconButton(
-                  key: const ValueKey('terminal-key-arrow-left'),
-                  tooltip: 'Left',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: enabled ? onArrowLeft : null,
-                  icon: const Icon(Icons.keyboard_arrow_left),
-                ),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    IconButton(
-                      key: const ValueKey('terminal-key-arrow-up'),
-                      tooltip: 'Up',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: enabled ? onArrowUp : null,
-                      icon: const Icon(Icons.keyboard_arrow_up),
-                    ),
-                    IconButton(
-                      key: const ValueKey('terminal-key-arrow-down'),
-                      tooltip: 'Down',
-                      visualDensity: VisualDensity.compact,
-                      onPressed: enabled ? onArrowDown : null,
-                      icon: const Icon(Icons.keyboard_arrow_down),
-                    ),
-                  ],
-                ),
-                IconButton(
-                  key: const ValueKey('terminal-key-arrow-right'),
-                  tooltip: 'Right',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: enabled ? onArrowRight : null,
-                  icon: const Icon(Icons.keyboard_arrow_right),
-                ),
-                const Spacer(),
-                IconButton(
-                  key: const ValueKey('terminal-paste-button'),
-                  tooltip: 'Paste clipboard',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: enabled ? onPaste : null,
-                  icon: const Icon(Icons.content_paste_go),
-                ),
-                IconButton(
-                  key: const ValueKey('terminal-resize-button'),
-                  tooltip: 'Sync terminal size',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: enabled ? onResize : null,
-                  icon: const Icon(Icons.fit_screen),
-                ),
-                IconButton(
-                  key: const ValueKey('terminal-reconnect-button'),
-                  tooltip: 'Reconnect terminal',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: reconnectEnabled ? onReconnect : null,
-                  icon: const Icon(Icons.refresh),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _TerminalShortcutIconButton extends StatelessWidget {
+  const _TerminalShortcutIconButton({
+    required this.tooltip,
+    required this.enabled,
+    required this.onPressed,
+    required this.icon,
+    super.key,
+  });
+
+  final String tooltip;
+  final bool enabled;
+  final VoidCallback onPressed;
+  final IconData icon;
+
+  @override
+  Widget build(BuildContext context) {
+    return IconButton(
+      tooltip: tooltip,
+      visualDensity: VisualDensity.compact,
+      constraints: const BoxConstraints.tightFor(width: 40, height: 40),
+      onPressed: enabled ? onPressed : null,
+      icon: Icon(icon),
     );
   }
 }

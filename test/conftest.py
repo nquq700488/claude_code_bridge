@@ -74,6 +74,16 @@ def _install_provider_stubs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     bin_dir.mkdir(parents=True, exist_ok=True)
     _write_provider_stub_launchers(bin_dir)
 
+    for name in (
+        "CCB_CALLER_ACTOR",
+        "CCB_CALLER_PROJECT_ID",
+        "CCB_CALLER_PROJECT_ROOT",
+        "CCB_CALLER_RUNTIME_DIR",
+        "CCB_SESSION_ID",
+        "CODEX_RUNTIME_DIR",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
     path_entries = [str(bin_dir)]
     existing_path = os.environ.get("PATH")
     if existing_path:
