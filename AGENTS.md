@@ -15,12 +15,12 @@
 分屏布局（tmux）：
 ```
 ┌───────────────┬───────────────┐
-│    planner    │  inspiration  │
-│    (codex)    │  (opencode)   │
-├───────────────┼───────────────┼───────────────┐
-│   executor    │   reviewer    │    tester     │
-│   (codex)     │   (claude)    │   (kimi)      │
-└───────────────┴───────────────┴───────────────┘
+│    planner    │  executor     │
+│    (codex)    │  (claude)     │
+├───────────────┼───────────────┼
+│   reviewer    │   tester      │
+│   (codex)     │   (kimi)      │
+└───────────────┴───────────────┘
 ```
 
 - 通过 `/ask` skill 或 `ccb ask <agent> <message>` 向指定 agent 发送任务。默认**同步等待回复**（`ask` → 解析 job_id → `pend --watch <job_id>`），`--silence` 跳过等待。
