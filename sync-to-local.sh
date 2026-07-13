@@ -67,6 +67,14 @@ rsync -a --delete \
     --exclude='sync-to-local.sh' \
     "${SCRIPT_DIR}/" "${TARGET_DIR}/"
 
+# 补同步 config UI 前端原型(excluded by --exclude='docs/')
+_CONFIG_UI_SRC="${SCRIPT_DIR}/docs/plantree/plans/agentic-loop-workflow/prototypes/v2-static-config-panel-demo"
+_CONFIG_UI_DST="${TARGET_DIR}/docs/plantree/plans/agentic-loop-workflow/prototypes/v2-static-config-panel-demo"
+if [[ -f "${_CONFIG_UI_SRC}/index.html" ]]; then
+    mkdir -p "${_CONFIG_UI_DST}"
+    rsync -a "${_CONFIG_UI_SRC}/" "${_CONFIG_UI_DST}/"
+fi
+
 echo ""
 echo "=== 同步完成 ==="
 if [ -f "${TARGET_DIR}/lib/ccbd/services/lifecycle.py" ] && [ -f "${TARGET_DIR}/lib/agents/models_runtime/layout_runtime/parser.py" ]; then

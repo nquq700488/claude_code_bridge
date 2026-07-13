@@ -26,6 +26,7 @@ from agents.config_loader import (
 )
 from agents.config_loader_runtime.defaults_runtime.rendering_runtime.service import render_config_document_text
 from agents.config_loader_runtime.io_runtime import parse_config_document_text
+from agents.config_loader_runtime.paths import resolve_config_profile_path
 from agents.models import parse_layout_spec
 from cli.context import CliContext
 from cli.models import ParsedConfigUiCommand, ParsedReloadCommand
@@ -76,7 +77,8 @@ def prepare_config_ui(
         raise RuntimeError(f'config UI asset is missing: {page_path}')
     page = page_path.read_bytes()
     project_root = context.project.project_root.resolve()
-    config_path = project_root / '.ccb' / 'ccb.config'
+    resolved = resolve_config_profile_path(project_root)
+    config_path = resolved if resolved is not None else (project_root / '.ccb' / 'ccb.config')
     session_payload = json.dumps(
         {
             'schema_version': 2,
@@ -84,6 +86,7 @@ def prepare_config_ui(
             'project_root': str(project_root),
             'config_path': str(config_path),
             'config_exists': config_path.is_file(),
+            'config_profile': resolved is not None,
         },
         ensure_ascii=False,
     ).encode('utf-8')
@@ -122,6 +125,7 @@ def prepare_config_ui(
             'url': url,
             'project_root': str(project_root),
             'config_path': str(config_path),
+            'config_profile': resolved is not None,
             'mode': 'editor',
         },
         _server=server,
