@@ -14,7 +14,9 @@ def safe_write_session(session_file: Path, content: str) -> tuple[bool, str | No
     tmp_file = session_file.with_suffix('.tmp')
     try:
         tmp_file.write_text(content, encoding='utf-8')
+        tmp_file.chmod(0o600)
         __import__('os').replace(tmp_file, session_file)
+        session_file.chmod(0o600)
         return True, None
     except PermissionError as exc:
         _cleanup_tmp_file(tmp_file)

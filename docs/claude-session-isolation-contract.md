@@ -46,6 +46,9 @@ Operational constraint:
 - setting only `CLAUDE_PROJECTS_ROOT` is not sufficient, because Claude also
   reads other state under `HOME`
 
+Claude plugin seed and writable-root environment semantics follow the official
+[Claude Code environment variable reference](https://code.claude.com/docs/en/env-vars).
+
 ## 3. Storage Contract
 
 For a managed Claude agent named `<agent>`:
@@ -80,6 +83,13 @@ Inside that home, the managed Claude state is:
     cache layouts
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/skills/` when skill inheritance is enabled
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/commands/` when command inheritance is enabled
+- `.ccb/agents/<agent>/provider-state/claude/home/.claude/plugins/`
+  - the agent-local writable plugin root when a usable source plugin seed is
+    inherited
+  - passed through `CLAUDE_CODE_PLUGIN_CACHE_DIR`; despite the environment
+    variable name, Claude Code treats its value as the plugins root and manages
+    `marketplaces/` and `cache/` below it
+  - must not be a symlink to the source home or another managed agent
 - `.ccb/agents/<agent>/provider-state/claude/home/.claude/CLAUDE.md`
   - a CCB-generated memory projection when `inherit_memory = true`
   - not a user-editable source file
@@ -161,6 +171,17 @@ When `ccb` starts a managed Claude agent:
 - managed `settings.json` projection must treat Claude auth env keys such as
   `ANTHROPIC_AUTH_TOKEN` and `ANTHROPIC_API_KEY` as auth authority, not generic
   config
+- managed settings and launcher environment projection must preserve the
+  selected credential kind: `ANTHROPIC_AUTH_TOKEN` remains bearer-token
+  authority and `ANTHROPIC_API_KEY` remains API-key authority; CCB must not
+  synthesize one from the other or export both merely because one is present
+- custom API-key acceptance metadata may be generated only for an actual
+  `ANTHROPIC_API_KEY`; an inherited `ANTHROPIC_AUTH_TOKEN` must not be relabeled
+  as an API key to bypass provider prompts
+- compatibility cleanup may remove an equal-valued `ANTHROPIC_API_KEY` from
+  existing managed settings when the same managed record already contains
+  `ANTHROPIC_AUTH_TOKEN`; this is the legacy CCB-generated token-to-key alias,
+  while distinct or API-key-only authority must remain intact
 - managed login-auth projection must synchronize Claude Code credential cache
   artifacts required for non-interactive reuse, such as
   `.claude/.credentials.json`, when official login auth inheritance is enabled
@@ -221,6 +242,24 @@ When `ccb` starts a managed Claude agent:
 - when command inheritance is enabled, startup must route inherited Claude
   `commands/` into the managed home as a CCB projected asset on each managed
   launch
+- when config inheritance and inherited assets are enabled and the source
+  `<source-home>/.claude/plugins/` contains `known_marketplaces.json`, a
+  `marketplaces/` directory, or a `cache/` directory, startup must set
+  `CLAUDE_CODE_PLUGIN_SEED_DIR` to that source plugins root before launching
+  Claude
+- the source plugin seed is shared read-only authority; startup must set
+  `CLAUDE_CODE_PLUGIN_CACHE_DIR` to the current agent's managed
+  `<claude-home>/.claude/plugins/` root so marketplace clones, installed plugin
+  cache, and provider writes remain agent-local
+- a source plugins directory containing only unrelated metadata such as
+  `blocklist.json` is not a usable seed and must not cause plugin environment
+  variables or an empty managed plugin root to be created
+- `inherit_config=false` and a hard role command policy disable plugin seed
+  inheritance; startup must not expose the source plugin seed in those modes
+- two managed Claude agents may reference the same read-only source seed but
+  must receive different writable plugin roots
+- when invoking a Windows Claude executable through WSL, both plugin path
+  variables must be forwarded through `WSLENV` with `/p` path translation
 - when memory inheritance is enabled, startup must refresh the managed
   `.claude/CLAUDE.md` projection on each managed launch so source-home and
   project-memory updates become visible after restart
@@ -259,8 +298,17 @@ When `ccb` starts a managed Claude agent:
   `claude_session_env_root` into the agent session file
 - it must not rely on global `~/.claude/projects` as the default managed Claude
   namespace
-- it must not create, delete, or rewrite project-level `.claude/settings.json`
-  or `.claude/settings.local.json` during startup
+- it must not create or delete project-level `.claude/settings.json` or
+  `.claude/settings.local.json` during startup, and must not rewrite unrelated
+  project settings or hooks
+- one compatibility migration may rewrite an existing project settings file:
+  it may remove only command hooks whose executable is Python and whose script
+  argument is an extensionless `ccb-provider-finish-hook` or
+  `ccb-provider-activity-hook`; these are legacy CCB-owned launcher commands
+  that execute Bash as Python
+- that migration must parse settings structurally, preserve every unrelated
+  hook and setting, skip malformed files without mutation, write atomically,
+  and be idempotent
 
 Absent an explicit validated provider-profile runtime home, the managed
 agent-scoped private `HOME` is the default authority.

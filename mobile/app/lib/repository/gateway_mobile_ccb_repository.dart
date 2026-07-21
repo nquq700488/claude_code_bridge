@@ -6,6 +6,8 @@ import '../models/ccb_project_lifecycle.dart';
 import '../models/ccb_project_view.dart';
 import '../models/readable_terminal_history.dart';
 import '../transport/gateway_transport.dart';
+import '../transport/gateway_connection_outcome.dart';
+import '../transport/http_gateway_transport.dart';
 import 'mobile_ccb_repository.dart';
 
 abstract interface class MobileGatewayProfileHealthProbe {
@@ -14,34 +16,120 @@ abstract interface class MobileGatewayProfileHealthProbe {
   Future<GatewayDevice> device();
 }
 
+/// Performs the complete core-route verification as one connection outcome.
+abstract interface class MobileGatewayCoreRouteVerifier {
+  /// Verifies both core routes as one supervisor-authoritative operation.
+  /// Implementations must not report a successful ordinary read until the
+  /// entire verification has completed.
+  Future<void> verifyCoreRoutes();
+}
+
+abstract interface class MobileGatewayPresenceReporter {
+  Future<void> reportPresence({
+    required bool visible,
+    String? focusedProjectId,
+    String? focusedAgent,
+    bool userActivity = false,
+  });
+}
+
 class GatewayMobileCcbRepository
     implements
         MobileCcbRepository,
         MobileCcbRepositoryFileUploader,
-        MobileGatewayProfileHealthProbe {
-  const GatewayMobileCcbRepository({required GatewayTransport transport})
+        MobileGatewayProfileHealthProbe,
+        MobileGatewayCoreRouteVerifier,
+        MobileGatewayPresenceReporter,
+        GatewayConnectionOutcomeReportable {
+  GatewayMobileCcbRepository({required GatewayTransport transport})
     : _transport = transport;
 
   final GatewayTransport _transport;
+  GatewayConnectionOutcomeReporter? _outcomeReporter;
+
+  @override
+  set outcomeReporter(GatewayConnectionOutcomeReporter? reporter) {
+    _outcomeReporter = reporter;
+  }
+
+  Future<T> _report<T>(
+    GatewayConnectionOperation operation,
+    Future<T> Function() action,
+  ) async {
+    try {
+      final result = await action();
+      _outcomeReporter?.succeeded(operation);
+      return result;
+    } catch (error) {
+      _outcomeReporter?.failed(operation, error);
+      rethrow;
+    }
+  }
+
+  @override
+  Future<void> verifyCoreRoutes() async {
+    try {
+      final health = await _transport.health();
+      if (health.status.toLowerCase() != 'ok') {
+        throw GatewayHttpException(Uri(), 503, 'gateway health is degraded');
+      }
+      final device = await _transport.device();
+      if (device.revoked) {
+        throw GatewayHttpException(Uri(), 401, 'device revoked');
+      }
+      _outcomeReporter?.succeeded(GatewayConnectionOperation.coreRead);
+    } catch (error) {
+      _outcomeReporter?.failed(GatewayConnectionOperation.coreRead, error);
+      rethrow;
+    }
+  }
 
   @override
   Future<List<CcbProject>> listProjects() {
-    return _transport.listProjects();
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      _transport.listProjects,
+    );
   }
 
   @override
   Future<GatewayHealth> health() {
-    return _transport.health();
+    return _report(GatewayConnectionOperation.dataRead, _transport.health);
   }
 
   @override
   Future<GatewayDevice> device() {
-    return _transport.device();
+    return _report(GatewayConnectionOperation.dataRead, _transport.device);
+  }
+
+  @override
+  Future<void> reportPresence({
+    required bool visible,
+    String? focusedProjectId,
+    String? focusedAgent,
+    bool userActivity = false,
+  }) {
+    final transport = _transport;
+    if (transport is! GatewayPresenceTransport) {
+      return Future<void>.value();
+    }
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => (transport as GatewayPresenceTransport).reportPresence(
+        visible: visible,
+        focusedProjectId: focusedProjectId,
+        focusedAgent: focusedAgent,
+        userActivity: userActivity,
+      ),
+    );
   }
 
   @override
   Future<CcbProjectView> getProjectView(String projectId) {
-    return _transport.getProjectView(projectId);
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      () => _transport.getProjectView(projectId),
+    );
   }
 
   @override
@@ -50,10 +138,13 @@ class GatewayMobileCcbRepository
     required String agent,
     required int namespaceEpoch,
   }) {
-    return _transport.focusAgent(
-      projectId: projectId,
-      agent: agent,
-      namespaceEpoch: namespaceEpoch,
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => _transport.focusAgent(
+        projectId: projectId,
+        agent: agent,
+        namespaceEpoch: namespaceEpoch,
+      ),
     );
   }
 
@@ -63,10 +154,13 @@ class GatewayMobileCcbRepository
     required String window,
     required int namespaceEpoch,
   }) {
-    return _transport.focusWindow(
-      projectId: projectId,
-      window: window,
-      namespaceEpoch: namespaceEpoch,
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => _transport.focusWindow(
+        projectId: projectId,
+        window: window,
+        namespaceEpoch: namespaceEpoch,
+      ),
     );
   }
 
@@ -77,11 +171,14 @@ class GatewayMobileCcbRepository
     required int namespaceEpoch,
     int maxLines = 200,
   }) {
-    return _transport.getReadableTerminalHistory(
-      projectId: projectId,
-      agent: agent,
-      namespaceEpoch: namespaceEpoch,
-      maxLines: maxLines,
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      () => _transport.getReadableTerminalHistory(
+        projectId: projectId,
+        agent: agent,
+        namespaceEpoch: namespaceEpoch,
+        maxLines: maxLines,
+      ),
     );
   }
 
@@ -93,12 +190,15 @@ class GatewayMobileCcbRepository
     int limit = 50,
     String? cursor,
   }) {
-    return _transport.getAgentConversation(
-      projectId: projectId,
-      agent: agent,
-      namespaceEpoch: namespaceEpoch,
-      limit: limit,
-      cursor: cursor,
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      () => _transport.getAgentConversation(
+        projectId: projectId,
+        agent: agent,
+        namespaceEpoch: namespaceEpoch,
+        limit: limit,
+        cursor: cursor,
+      ),
     );
   }
 
@@ -106,7 +206,10 @@ class GatewayMobileCcbRepository
   Future<CcbAgentMessageSubmitResult> submitAgentMessage(
     CcbAgentMessageSubmitRequest request,
   ) {
-    return _transport.submitAgentMessage(request);
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => _transport.submitAgentMessage(request),
+    );
   }
 
   @override
@@ -114,7 +217,10 @@ class GatewayMobileCcbRepository
     required String projectId,
     required CcbLifecycleAction action,
   }) {
-    return _transport.requestLifecycle(projectId: projectId, action: action);
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => _transport.requestLifecycle(projectId: projectId, action: action),
+    );
   }
 
   @override
@@ -125,12 +231,15 @@ class GatewayMobileCcbRepository
     required String mimeType,
     required List<int> bytes,
   }) {
-    return _transport.uploadFile(
-      projectId: projectId,
-      agentName: agentName,
-      fileName: fileName,
-      mimeType: mimeType,
-      bytes: bytes,
+    return _report(
+      GatewayConnectionOperation.mutation,
+      () => _transport.uploadFile(
+        projectId: projectId,
+        agentName: agentName,
+        fileName: fileName,
+        mimeType: mimeType,
+        bytes: bytes,
+      ),
     );
   }
 
@@ -144,12 +253,15 @@ class GatewayMobileCcbRepository
   }) {
     final transport = _transport;
     if (transport is GatewayFilePathUploader) {
-      return (transport as GatewayFilePathUploader).uploadFileFromPath(
-        projectId: projectId,
-        agentName: agentName,
-        fileName: fileName,
-        mimeType: mimeType,
-        path: path,
+      return _report(
+        GatewayConnectionOperation.mutation,
+        () => (transport as GatewayFilePathUploader).uploadFileFromPath(
+          projectId: projectId,
+          agentName: agentName,
+          fileName: fileName,
+          mimeType: mimeType,
+          path: path,
+        ),
       );
     }
     return File(path).readAsBytes().then(
@@ -169,10 +281,13 @@ class GatewayMobileCcbRepository
     required String agentName,
     required String fileId,
   }) {
-    return _transport.downloadFile(
-      projectId: projectId,
-      agentName: agentName,
-      fileId: fileId,
+    return _report(
+      GatewayConnectionOperation.dataRead,
+      () => _transport.downloadFile(
+        projectId: projectId,
+        agentName: agentName,
+        fileId: fileId,
+      ),
     );
   }
 }

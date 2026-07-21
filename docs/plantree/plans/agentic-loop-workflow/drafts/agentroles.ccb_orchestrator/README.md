@@ -1,20 +1,18 @@
 # CCB Loop Orchestrator Draft
 
-This draft materializes the first `agentroles.ccb_orchestrator` RolePack for
-the agentic loop plan. It is intentionally narrow: the role can request dynamic
-loop capacity through CCB commands, but it cannot mutate config, runtime files,
-tmux, provider sessions, or daemon state directly.
+This draft materializes the `agentroles.ccb_orchestrator` RolePack for adaptive
+single-lane one-to-four-workgroup execution. The role is immaculate and
+reply-only: it returns one semantic route, compact notes, and when required one
+complete orchestration bundle candidate.
 
-Primary skills:
+Primary references:
 
-- `orchestrator-capacity`: calls `ccb loop capacity ensure/status/release`
-  and turns returned dynamic agent names into bounded worker/checker ask
-  targets. Returned node/window placement is CCB-owned evidence only; the role
-  does not choose windows, panes, or tmux layout.
-- `dynamic-agent-lifecycle`: inspects and manages non-loop dynamic agents
-  through read-only `ccb layout resolve ... --json`, `ccb agent ... --json`,
-  and `ccb layout status --json`. Loop execution capacity remains under
-  `orchestrator-capacity`.
+- Config V3 execution routes always include an explicit candidate;
+- Config V2 may omit it only for deterministic one-node compatibility;
+- adaptive selection uses task complexity, cutability, independent scopes,
+  dependencies, and effective capacity without targeting a preset count;
+- the controller alone owns validation, binding, asks, integration, imports,
+  topology, and lifecycle.
 
 This draft is installable by path for source tests, but it is not a published
 Agent Roles catalog entry.

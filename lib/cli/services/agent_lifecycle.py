@@ -62,11 +62,20 @@ def add_lifecycle_agents(context, commands: Iterable[object], *, action: str = '
             _update_apply_evidence(context, payload)
             _write_state(context, name, payload)
             results.append(dict(payload, action='add'))
-        return results
     except Exception:
         for name, previous in previous_by_name.items():
             _restore_state(context, name, previous)
         raise
+    for name, payload in staged:
+        _append_event(
+            context,
+            {
+                'event': 'add',
+                'agent': name,
+                'lifecycle_state': payload['lifecycle_state'],
+            },
+        )
+    return results
 
 
 def _status(context, command) -> dict[str, object]:
@@ -172,6 +181,10 @@ def _add(context, command) -> dict[str, object]:
         _restore_state(context, name, previous)
         raise
     _write_state(context, name, payload)
+    _append_event(
+        context,
+        {'event': 'add', 'agent': name, 'lifecycle_state': payload['lifecycle_state']},
+    )
     return dict(payload, action='add')
 
 
@@ -226,7 +239,6 @@ def _stage_add(context, command) -> tuple[str, dict[str, object] | None, dict[st
     _write_state(context, name, payload)
     _update_resolved_placement(context, payload)
     _write_state(context, name, payload)
-    _append_event(context, {'event': 'add', 'agent': name, 'lifecycle_state': visibility})
     return name, previous, payload
 
 
@@ -776,17 +788,17 @@ def _resolve_dynamic_spec(name: str, command, *, profile: LoopRoleProfileSpec | 
     model = _optional_text(getattr(command, 'model', None))
     thinking = _optional_text(getattr(command, 'thinking', None))
     workspace_mode = _optional_text(getattr(command, 'workspace_mode', None))
+    workspace_group = _optional_text(getattr(command, 'workspace_group', None))
     if profile is not None:
         role = _merge_value('role', role, profile.role)
         provider = _merge_value('provider', provider, profile.provider)
         model = _merge_value('model', model, profile.model)
         thinking = _merge_value('thinking', thinking, profile.thinking)
         workspace_mode = _merge_value('workspace_mode', workspace_mode, profile.workspace_mode.value)
-        workspace_group = profile.workspace_group
+        workspace_group = _merge_value('workspace_group', workspace_group, profile.workspace_group)
         startup_args = tuple(profile.startup_args)
         provider_profile = profile.provider_profile.to_record()
     else:
-        workspace_group = None
         startup_args = ()
         provider_profile = {}
     if role is None:
@@ -971,17 +983,10 @@ def _optional_int(value: object) -> int | None:
 
 def _infer_role_class(role: object) -> str:
     text = str(role or '').lower()
-    if any(
-        token in text
-        for token in (
-            'ccb_frontdesk',
-            'ccb_planner',
-            'ccb_orchestrator',
-            'ccb_task_detailer',
-            'ccb_round_reviewer',
-        )
-    ):
+    if any(token in text for token in ('ccb_frontdesk', 'ccb_planner')):
         return 'long_lived_interactive'
+    if any(token in text for token in ('ccb_orchestrator', 'ccb_task_detailer', 'ccb_round_reviewer')):
+        return 'short_lived_execution'
     if any(token in text for token in ('coder', 'worker', 'checker', 'reviewer')):
         return 'short_lived_execution'
     if any(token in text for token in ('frontdesk', 'frontend', 'planner', 'orchestrator', 'round_checker', 'broker')):

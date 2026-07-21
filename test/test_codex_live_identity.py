@@ -4,6 +4,7 @@ import subprocess
 import json
 from types import SimpleNamespace
 
+import provider_backends.codex.session_runtime.live_identity as live_identity_runtime
 from provider_backends.codex.session_runtime.live_identity import live_runtime_identity
 
 
@@ -132,3 +133,26 @@ def test_codex_live_identity_is_unset_for_unbound_session() -> None:
     )
 
     assert live_runtime_identity(session) is None
+
+
+def test_process_parent_snapshot_scans_proc_once_within_scope(monkeypatch) -> None:
+    scans: list[dict[int, int]] = []
+
+    def scan() -> dict[int, int]:
+        result = {len(scans) + 10: 1}
+        scans.append(result)
+        return result
+
+    monkeypatch.setattr(live_identity_runtime, '_scan_linux_process_parent_map', scan)
+
+    with live_identity_runtime.process_parent_snapshot():
+        pass
+    assert scans == []
+
+    with live_identity_runtime.process_parent_snapshot():
+        assert live_identity_runtime._linux_process_parent_map() == {10: 1}
+        assert live_identity_runtime._linux_process_parent_map() == {10: 1}
+
+    assert len(scans) == 1
+    assert live_identity_runtime._linux_process_parent_map() == {11: 1}
+    assert len(scans) == 2

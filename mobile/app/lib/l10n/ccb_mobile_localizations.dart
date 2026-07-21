@@ -113,6 +113,47 @@ class CcbMobileLocalizations {
 
   String get themeDark => isChinese ? '深色' : 'Dark';
 
+  String get backgroundConnection =>
+      isChinese ? '保持后台连接' : 'Keep connected in background';
+
+  String get backgroundConnectionDescription =>
+      isChinese
+          ? '配对后使用系统常驻通知保持实时事件连接。会增加耗电，可随时关闭。'
+          : 'After pairing, keep the live event connection active with a persistent system notification. This uses more battery and can be disabled anytime.';
+
+  String get backgroundConnectionCouldNotStart =>
+      isChinese
+          ? '无法启动后台连接，设置已关闭。'
+          : 'Could not start the background connection. The setting was disabled.';
+
+  String get backgroundConnectionSystemSettings =>
+      isChinese ? '系统后台权限' : 'System background access';
+
+  String get backgroundConnectionSystemRestricted =>
+      isChinese
+          ? 'Android 已限制此 App 的后台活动。点击打开系统设置。'
+          : 'Android is restricting background activity for this app. Tap to open system settings.';
+
+  String get backgroundConnectionSystemOptimized =>
+      isChinese
+          ? '系统仍在进行电池优化，部分设备可能中断连接。点击检查系统设置。'
+          : 'Battery optimization is active and may interrupt the connection on some devices. Tap to review system settings.';
+
+  String get backgroundConnectionSystemUnrestricted =>
+      isChinese
+          ? '系统未限制后台活动。点击可查看系统设置。'
+          : 'System background activity is unrestricted. Tap to review system settings.';
+
+  String get backgroundConnectionSystemUnknown =>
+      isChinese
+          ? '无法读取系统后台限制状态。点击打开系统设置。'
+          : 'Could not read the system background restriction state. Tap to open system settings.';
+
+  String get backgroundConnectionSystemSettingsCouldNotOpen =>
+      isChinese
+          ? '无法打开 Android 系统设置。'
+          : 'Could not open Android system settings.';
+
   String get mobileUpdates =>
       isChinese ? 'CCB Mobile 更新' : 'CCB Mobile updates';
 

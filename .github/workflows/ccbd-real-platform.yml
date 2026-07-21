@@ -25,12 +25,15 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install dependencies
         shell: bash
         run: |
           set -euo pipefail
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli
+          python -m pip install pytest tomli jsonschema
           brew install tmux
 
       - name: Syntax check
@@ -39,6 +42,35 @@ jobs:
           set -euo pipefail
           python -m compileall -q lib bin ccb.py
           bash -n test/system_comm_matrix.sh test/system_linux_soak.sh test/system_fastpath_stress.sh
+
+      - name: Build runtime accelerator
+        run: bin/build-ccb-runtime-accelerator
+
+      - name: Verify runtime accelerator ownership
+        shell: bash
+        run: |
+          set -euo pipefail
+          PYTHONPATH=lib python - <<'PY'
+          import tempfile
+          from pathlib import Path
+
+          from runtime_accelerator.lifecycle import maybe_start_runtime_accelerator, stop_runtime_accelerator
+          from runtime_accelerator.ownership import load_runtime_accelerator_owner
+
+          with tempfile.TemporaryDirectory(prefix="ccb-accelerator-preflight-") as value:
+              root = Path(value)
+              handle = None
+              try:
+                  handle = maybe_start_runtime_accelerator(root)
+                  if not handle.started:
+                      raise AssertionError(f"runtime accelerator did not start: {handle.error}")
+                  owner = load_runtime_accelerator_owner(root)
+                  if owner is None:
+                      raise AssertionError("runtime accelerator owner was not recorded")
+                  print(f"runtime accelerator owner verified: pid={owner.pid}")
+              finally:
+                  stop_runtime_accelerator(handle)
+          PY
 
       - name: Lifecycle smoke
         shell: bash
@@ -185,7 +217,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y software-properties-common python3 python3-venv python3-pip tmux git
+          sudo apt-get install -y software-properties-common python3 python3-venv python3-pip tmux git curl build-essential
           if ! apt-cache show python3.11 >/dev/null 2>&1; then
             sudo add-apt-repository -y ppa:deadsnakes/ppa
             sudo apt-get update
@@ -193,7 +225,44 @@ jobs:
           sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
           python3.11 -m venv /tmp/ccb-ci-py311
           /tmp/ccb-ci-py311/bin/python -m pip install --upgrade pip
-          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli
+          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli jsonschema
+          if [ ! -f "$HOME/.cargo/env" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+
+      - name: Build runtime accelerator in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          source "$HOME/.cargo/env"
+          bin/build-ccb-runtime-accelerator
+
+      - name: Verify runtime accelerator ownership in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          PYTHONPATH=lib /tmp/ccb-ci-py311/bin/python - <<'PY'
+          import tempfile
+          from pathlib import Path
+
+          from runtime_accelerator.lifecycle import maybe_start_runtime_accelerator, stop_runtime_accelerator
+          from runtime_accelerator.ownership import load_runtime_accelerator_owner
+
+          with tempfile.TemporaryDirectory(prefix="ccb-accelerator-preflight-") as value:
+              root = Path(value)
+              handle = None
+              try:
+                  handle = maybe_start_runtime_accelerator(root)
+                  if not handle.started:
+                      raise AssertionError(f"runtime accelerator did not start: {handle.error}")
+                  owner = load_runtime_accelerator_owner(root)
+                  if owner is None:
+                      raise AssertionError("runtime accelerator owner was not recorded")
+                  print(f"runtime accelerator owner verified: pid={owner.pid}")
+              finally:
+                  stop_runtime_accelerator(handle)
+          PY
 
       - name: Syntax check in WSL
         shell: wsl-bash {0}

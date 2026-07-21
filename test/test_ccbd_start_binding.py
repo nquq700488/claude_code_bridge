@@ -9,6 +9,8 @@ from ccbd.start_runtime.binding import (
     usable_agent_only_project_binding,
     usable_project_namespace_binding,
 )
+from ccbd.services.project_namespace_pane import ProjectNamespacePaneRecord
+from provider_core.session_binding_evidence import AgentBinding
 
 
 def _binding(**overrides):
@@ -127,6 +129,131 @@ def test_usable_project_namespace_binding_rejects_old_workspace_window() -> None
         project_id='proj-1',
         tmux_backend_factory=lambda socket_path=None: SimpleNamespace(socket_path=socket_path),
         inspect_project_namespace_pane_fn=lambda backend, pane_id: record,
+        same_tmux_socket_path_fn=lambda left, right: str(left or '') == str(right or ''),
+    )
+
+    assert usable is None
+
+
+def test_usable_project_namespace_binding_accepts_declared_secondary_window() -> None:
+    binding = AgentBinding(
+        runtime_ref='tmux:%41',
+        session_ref='session-41',
+        pane_id='%41',
+        active_pane_id='%41',
+        pane_state='alive',
+        tmux_socket_path='/tmp/ccb.sock',
+        terminal='tmux',
+    )
+    record = ProjectNamespacePaneRecord(
+        pane_id='%41',
+        session_name='ccb-demo',
+        window_id='@1',
+        window_name='review',
+        role='agent',
+        slot_key='agent1',
+        ccb_window='review',
+        project_id='proj-1',
+        managed_by='ccbd',
+        namespace_epoch=7,
+        alive=True,
+    )
+
+    usable = usable_project_namespace_binding(
+        binding,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        workspace_window_id='@0',
+        agent_name='agent1',
+        project_id='proj-1',
+        window_name='review',
+        namespace_epoch=7,
+        namespace_pane_records={'%41': record},
+        tmux_backend_factory=lambda socket_path=None: (_ for _ in ()).throw(
+            AssertionError('snapshot should avoid tmux inspection')
+        ),
+        inspect_project_namespace_pane_fn=lambda backend, pane_id: None,
+        same_tmux_socket_path_fn=lambda left, right: str(left or '') == str(right or ''),
+    )
+
+    assert usable is not None
+    assert usable.tmux_window_id == '@1'
+    assert usable.tmux_window_name == 'review'
+
+
+def test_usable_project_namespace_binding_rejects_wrong_declared_window_or_epoch() -> None:
+    binding = AgentBinding(
+        runtime_ref='tmux:%41',
+        session_ref='session-41',
+        pane_id='%41',
+        active_pane_id='%41',
+        pane_state='alive',
+        tmux_socket_path='/tmp/ccb.sock',
+        terminal='tmux',
+    )
+    record = ProjectNamespacePaneRecord(
+        pane_id='%41',
+        session_name='ccb-demo',
+        window_id='@1',
+        window_name='review',
+        role='agent',
+        slot_key='agent1',
+        ccb_window='review',
+        project_id='proj-1',
+        managed_by='ccbd',
+        namespace_epoch=6,
+        alive=True,
+    )
+
+    common = {
+        'tmux_socket_path': '/tmp/ccb.sock',
+        'tmux_session_name': 'ccb-demo',
+        'workspace_window_id': '@0',
+        'agent_name': 'agent1',
+        'project_id': 'proj-1',
+        'namespace_pane_records': {'%41': record},
+        'tmux_backend_factory': lambda socket_path=None: object(),
+        'inspect_project_namespace_pane_fn': lambda backend, pane_id: None,
+        'same_tmux_socket_path_fn': lambda left, right: str(left or '') == str(right or ''),
+    }
+
+    assert usable_project_namespace_binding(
+        binding,
+        window_name='other',
+        namespace_epoch=6,
+        **common,
+    ) is None
+    assert usable_project_namespace_binding(
+        binding,
+        window_name='review',
+        namespace_epoch=7,
+        **common,
+    ) is None
+    assert usable_project_namespace_binding(
+        binding,
+        window_name='review',
+        namespace_epoch=None,
+        **common,
+    ) is None
+
+
+def test_usable_project_namespace_binding_trusts_snapshot_pane_absence() -> None:
+    binding = _binding()
+
+    usable = usable_project_namespace_binding(
+        binding,
+        tmux_socket_path='/tmp/ccb.sock',
+        tmux_session_name='ccb-demo',
+        workspace_window_id='@2',
+        agent_name='agent1',
+        project_id='proj-1',
+        namespace_pane_records={},
+        tmux_backend_factory=lambda socket_path=None: (_ for _ in ()).throw(
+            AssertionError('an authoritative snapshot must not be rescanned')
+        ),
+        inspect_project_namespace_pane_fn=lambda backend, pane_id: (_ for _ in ()).throw(
+            AssertionError('an authoritative snapshot must not be rescanned')
+        ),
         same_tmux_socket_path_fn=lambda left, right: str(left or '') == str(right or ''),
     )
 

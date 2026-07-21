@@ -15,8 +15,10 @@ and panes are presentation and process containers, not workflow truth.
 
 Agent lifecycle policy is specified separately in
 [dynamic-agent-lifecycle-and-skills.md](dynamic-agent-lifecycle-and-skills.md).
-This document describes where panes go; it does not decide whether an agent
-should be hidden, parked, retained, or unloaded.
+This document describes where panes go; it does not decide durable authority.
+For the current V1 workflow surface, the default presentation policy is visible
+window placement rather than hidden background agents. Lifecycle still decides
+when an agent is released, retained busy, or unloaded after evidence import.
 
 ## Design Principle
 
@@ -43,8 +45,8 @@ for usability only.
 
 | Logical Order | Window Class | Default Name | Contents | Max Panes |
 | :--- | :--- | :--- | :--- | :--- |
-| 1 | user interaction | `ccb-user` | V1 resident `ccb_frontdesk`, V1 resident `ccb_task_detailer`, future user-summoned dialog experts | 6 |
-| 2 | planning and orchestration | `ccb-plan` | V1 resident `ccb_planner`, V1 resident `ccb_orchestrator`, on-demand `ccb_round_reviewer` | 6 |
+| 1 | user interaction | `ccb-user` | resident `ccb_frontdesk`, on-demand immaculate `ccb_task_detailer`, future user-summoned dialog experts | 6 |
+| 2 | planning and orchestration | `ccb-plan` | resident `ccb_planner`, per-task immaculate `ccb_orchestrator`, per-round immaculate `ccb_round_reviewer` | 6 |
 | 3+ | execution workgroups | `ccb-exec`, `ccb-exec-2`, ... | `coder + code_reviewer` work units, packed three pairs per window | 6 |
 | later | runtime diagnostics | `runtime` | loop runner, ccbd logs, capacity, ask/job queue, monitor, recovery | 6 |
 | later | archived evidence | `archive-<loop-id>` | frozen panes or summaries retained for inspection | 6 |
@@ -60,23 +62,18 @@ When a class exceeds its pane limit:
 
 Purpose: visible user discussion space.
 
-V1 default panes:
+Resident pane:
 
 ```text
 ccb_frontdesk
-ccb_task_detailer
 ```
 
 Rules:
 
 - `ccb_frontdesk` is the default user-facing boundary.
-- V1 keeps `ccb_task_detailer` resident and visible in Window 1 so task-local
-  refinement and clarification can be dispatched without a hidden-agent
-  readiness problem.
-- `ccb_task_detailer` being resident is a process/topology simplification, not
-  a semantic authority change. It only handles a task after orchestrator
-  triage asks for detail, and it should reset or rehydrate task-scoped context
-  between tasks instead of becoming a long-lived planner.
+- `ccb_task_detailer` is created visibly in Window 1 only after a task route
+  requests detail work. Its reply is imported, then its task-scoped provider
+  session and pane are unloaded after the idle/evidence gate.
 - Dialog-facing roles do not own task status, loop status, runtime lifecycle,
   or execution authority.
 - Any task-affecting conversation should return through explicit artifacts or
@@ -87,7 +84,7 @@ Example:
 ```text
 ccb-user
   ccb_frontdesk
-  ccb_task_detailer
+  ccb_task_detailer  # only while a detail route is active
 ```
 
 ## Window 2: `ccb-plan`
@@ -95,25 +92,24 @@ ccb-user
 Purpose: planning, review, clarification, orchestration, and round-level
 verification workspace.
 
-V1 default panes:
+Resident pane:
 
 ```text
 ccb_planner
-ccb_orchestrator
 ```
 
 Rules:
 
-- V1 keeps `ccb_planner` and `ccb_orchestrator` resident and visible in Window
-  2. This gives the first production candidate a stable two-pane planning and
-  orchestration surface.
+- V1 keeps only `ccb_planner` resident in Window 2. `ccb_orchestrator` is
+  mounted visibly for one task/round and then unloaded.
 - `ccb_planner` owns macro plan/task state recommendations and plan-tree
   artifacts through script authority.
-- `ccb_orchestrator` lives here because it semantically decomposes work and
-  proposes desired topology; it does not directly create tmux windows or panes.
-- `ccb_round_reviewer` is still placed in `ccb-plan`, but it is on demand for
-  round-end verification rather than part of the V1 always-open four-agent
-  baseline.
+- `ccb_orchestrator` lives here while active because it semantically decomposes
+  work and proposes desired topology; it does not directly create tmux windows
+  or panes.
+- `ccb_round_reviewer` is mounted in `ccb-plan` only for round-end verification.
+  It is part of the same round topology and release transaction as the
+  execution agents.
 - Scripts and loop runner remain authority; these panes produce artifacts and
   recommendations.
 
@@ -121,9 +117,9 @@ Phase examples:
 
 | Phase | Expected Panes |
 | :--- | :--- |
-| planning | `ccb_planner`, `ccb_orchestrator` |
-| ready/execution start | `ccb_planner`, `ccb_orchestrator` |
-| round end | `ccb_round_reviewer`, optionally `ccb_planner` in stewardship mode |
+| planning | `ccb_planner`; add `ccb_orchestrator` when task orchestration starts |
+| ready/execution start | `ccb_planner`, active `ccb_orchestrator` |
+| round end | `ccb_planner`, active `ccb_orchestrator`, active `ccb_round_reviewer` |
 
 ## Window 3+: `ccb-exec` Execution Windows
 
@@ -215,6 +211,12 @@ Profiles outside that built-in set must provide explicit `window_name` or
 roles as old worker/checker compatibility.
 
 The pane limit is a readability constraint, not a workflow authority rule.
+
+Current V1 default: do not hide workflow roles merely to reduce pane count.
+Instead, keep active roles visible in the correct logical window and page
+execution workgroups across `ccb-exec`, `ccb-exec-2`, and later windows. Hidden
+or parked placement remains a lower-level lifecycle capability for explicit
+operator action or later product modes, not the default agentic-loop layout.
 
 ## Read-Only Placement Resolution
 
@@ -508,9 +510,9 @@ Suggested command examples:
 
 ```bash
 ccb agent add ccb_task_detailer:codex --role agentroles.ccb_task_detailer --window ccb-user --json
-ccb agent add ccb_round_reviewer:codex --role agentroles.ccb_round_reviewer --window ccb-plan --hidden --json
-ccb agent add coder1:codex --profile coder --window ccb-exec --hidden --json
-ccb agent add code_reviewer1:codex --profile code_reviewer --window ccb-exec --hidden --json
+ccb agent add ccb_round_reviewer:codex --role agentroles.ccb_round_reviewer --window ccb-plan --json
+ccb agent add coder1:codex --profile coder --window ccb-exec --json
+ccb agent add code_reviewer1:codex --profile code_reviewer --window ccb-exec --json
 ```
 
 ### Append-Only First, Reflow Later
@@ -925,7 +927,7 @@ profiles = ["coder", "code_reviewer"]
 
 [ui.windows.runtime]
 class = "runtime"
-hidden_by_default = true
+focus_by_default = false
 max_panes = 6
 ```
 
@@ -948,6 +950,19 @@ layout a second workflow system:
 6. Retain busy agents and release idle agents through runtime state, not raw
    tmux kills.
 7. Provide a read-only `ccb layout status --json` or equivalent diagnostic.
+
+V1 acceptance for this layout requires source tests that prove:
+
+- `ccb_frontdesk` and any active `ccb_task_detailer` land in `ccb-user`.
+- `ccb_planner`, `ccb_orchestrator`, and active `ccb_round_reviewer` land in
+  `ccb-plan`.
+- `coder` and `code_reviewer` land in `ccb-exec` pages in desired order, with
+  at most six panes per window.
+- The seventh active execution agent creates `ccb-exec-2`.
+- Releasing or parking enough execution agents compacts survivors back into
+  the earliest `ccb-exec` page and removes empty overflow pages.
+- Automatically assigned workflow roles remain `present`/visible by default;
+  hidden/parked states must be explicit.
 
 ## Fixed Pane Growth Order
 
@@ -1211,6 +1226,24 @@ Current evidence:
   Ubuntu py3.11 CI gate, asserting workflow closure, auto release, zero
   retained loop agents, and empty namespace/pane reflow errors;
 - live provider release remains gated on busy/idle checks.
+
+## 2026-07-10 Real Project Evidence
+
+The opened real-provider project recorded in
+[visible-three-round-dynamic-window-e2e-20260710.md](../history/visible-three-round-dynamic-window-e2e-20260710.md)
+validated the intended foreground layout across three sequential task loops.
+Idle state retained only frontdesk and planner. Each direct-execution round
+created `ccb-exec`, appended immaculate orchestration/round-review panes to
+`ccb-plan`, then released all four dynamic agents and removed the empty
+execution window. The final state returned to two windows and two resident
+agent panes with zero retained loop agents.
+
+The same run proved that provider context purity is a runtime requirement, not
+only a RolePack prompt convention: every activation performed provider-native
+clear, generated fresh pane/session evidence, and was unloaded after evidence
+import. Claude session selection now permits same-agent, same-project rotation
+after clear while preserving the initial exact binding and rejecting foreign
+project sessions.
 
 Deferred:
 

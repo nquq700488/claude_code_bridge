@@ -123,7 +123,7 @@ def parse_claude_pane_status(
     if matches:
         return ClaudePaneStatus("api_error", "provider_api_error", matches)
 
-    matches = _matched(ERROR_MARKERS, recent)
+    matches = _matched(ERROR_MARKERS, _without_nonfatal_ui_errors(recent))
     if matches:
         return ClaudePaneStatus("failed", "provider_error_text", matches)
 
@@ -162,6 +162,12 @@ def _last_terminal_summary_index(lines: list[str]) -> int:
 
 def _matched(markers: tuple[str, ...], text: str) -> tuple[str, ...]:
     return tuple(marker for marker in markers if marker in text)
+
+
+def _without_nonfatal_ui_errors(text: str) -> str:
+    # Claude's footer can permanently show an updater failure while the model
+    # runtime is healthy and idle. It is not provider execution authority.
+    return text.replace("auto-update failed", "auto-update unavailable")
 
 
 __all__ = [

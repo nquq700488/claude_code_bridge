@@ -98,6 +98,7 @@ class ProjectHomeRuntimeSessionCoordinator {
 
 enum ProjectHomeGatewayActivationFailureKind {
   tokenInvalid,
+  scopeDenied,
   gatewayUnreachable,
   serverUnhealthy,
 }
@@ -131,6 +132,10 @@ Future<void> verifyProjectHomeGatewayProfile(
     return;
   }
   try {
+    if (probe case final MobileGatewayCoreRouteVerifier verifier) {
+      await verifier.verifyCoreRoutes().timeout(timeout);
+      return;
+    }
     final health = await probe.health().timeout(timeout);
     if (health.status.trim().toLowerCase() != 'ok') {
       throw ProjectHomeGatewayActivationException(
@@ -157,11 +162,18 @@ Future<void> verifyProjectHomeGatewayProfile(
 ProjectHomeGatewayActivationException projectHomeGatewayActivationExceptionFor(
   Object error,
 ) {
-  if (error is GatewayHttpException &&
-      (error.statusCode == 401 || error.statusCode == 403)) {
+  if (error is GatewayHttpException && error.statusCode == 401) {
     return ProjectHomeGatewayActivationException(
       kind: ProjectHomeGatewayActivationFailureKind.tokenInvalid,
       message: 'Gateway profile token is invalid. Re-pair this phone.',
+      cause: error,
+    );
+  }
+  if (error is GatewayHttpException && error.statusCode == 403) {
+    return ProjectHomeGatewayActivationException(
+      kind: ProjectHomeGatewayActivationFailureKind.scopeDenied,
+      message:
+          'Gateway profile is paired but lacks permission for this action.',
       cause: error,
     );
   }

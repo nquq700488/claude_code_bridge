@@ -20,17 +20,31 @@ def build_claude_env_prefix(
     extra_env: dict[str, str] | None = None,
     env: dict[str, str] | None = None,
     should_drop_base_url_fn,
+    claude_user_api_env_fn=None,
     claude_user_base_url_fn,
 ) -> str:
     allowed_env_keys = provider_api_env_keys("claude") | _CLAUDE_RUNTIME_ENV_KEYS
     api_keys = provider_api_env_keys("claude")
+    inherited_env = env or {}
     explicit_env = collect_explicit_allowed_env(profile=profile, extra_env=extra_env, allowed_env_keys=allowed_env_keys)
+    explicit_env = inherit_api_env(
+        explicit_env,
+        profile=profile,
+        inherited_env=inherited_env,
+        api_keys=api_keys,
+    )
+    explicit_env = inherit_user_settings_api_env(
+        explicit_env,
+        profile=profile,
+        api_keys=api_keys,
+        claude_user_api_env_fn=claude_user_api_env_fn,
+    )
     parts = unset_api_env_parts(profile=profile, api_keys=api_keys)
 
     explicit_env = reconcile_base_url(
         explicit_env,
         profile=profile,
-        env=env or {},
+        env=inherited_env,
         parts=parts,
         should_drop_base_url_fn=should_drop_base_url_fn,
         claude_user_base_url_fn=claude_user_base_url_fn,
@@ -66,14 +80,61 @@ def collect_explicit_allowed_env(
 ) -> dict[str, str]:
     explicit_env: dict[str, str] = {}
     if profile is not None:
-        explicit_env.update(filtered_api_env(profile.env, allowed_env_keys=allowed_env_keys))
+        explicit_env.update(filtered_api_env(profile.env, api_keys=allowed_env_keys))
     if extra_env:
-        explicit_env.update(filtered_api_env(extra_env, allowed_env_keys=allowed_env_keys))
+        explicit_env.update(filtered_api_env(extra_env, api_keys=allowed_env_keys))
     return explicit_env
 
 
-def filtered_api_env(env_map: dict[str, str], *, allowed_env_keys: set[str]) -> dict[str, str]:
-    return {key: value for key, value in env_map.items() if key in allowed_env_keys}
+def filtered_api_env(env_map: dict[str, str], *, api_keys: set[str]) -> dict[str, str]:
+    return {key: value for key, value in env_map.items() if key in api_keys}
+
+
+def inherit_api_env(
+    explicit_env: dict[str, str],
+    *,
+    profile=None,
+    inherited_env: dict[str, str],
+    api_keys: set[str],
+) -> dict[str, str]:
+    if profile is not None and not profile.inherit_api:
+        return explicit_env
+    inherited = filtered_api_env(dict(inherited_env or {}), api_keys=api_keys)
+    # Base URL precedence is resolved separately so user settings can override
+    # ambient shell state without overriding an explicit profile value.
+    inherited.pop("ANTHROPIC_BASE_URL", None)
+    if profile is not None and not getattr(profile, "inherit_auth", True):
+        inherited.pop("ANTHROPIC_AUTH_TOKEN", None)
+        inherited.pop("ANTHROPIC_API_KEY", None)
+    return merge_missing_api_env(explicit_env, inherited)
+
+
+def inherit_user_settings_api_env(
+    explicit_env: dict[str, str],
+    *,
+    profile=None,
+    api_keys: set[str],
+    claude_user_api_env_fn,
+) -> dict[str, str]:
+    if claude_user_api_env_fn is None:
+        return explicit_env
+    if profile is not None and not profile.inherit_api:
+        return explicit_env
+    inherited = filtered_api_env(dict(claude_user_api_env_fn() or {}), api_keys=api_keys)
+    if profile is not None and not getattr(profile, "inherit_auth", True):
+        inherited.pop("ANTHROPIC_AUTH_TOKEN", None)
+        inherited.pop("ANTHROPIC_API_KEY", None)
+    return merge_missing_api_env(explicit_env, inherited)
+
+
+def merge_missing_api_env(explicit_env: dict[str, str], inherited_env: dict[str, str]) -> dict[str, str]:
+    merged = dict(explicit_env)
+    for key, value in inherited_env.items():
+        if str(merged.get(key) or "").strip():
+            continue
+        if str(value or "").strip():
+            merged[key] = value
+    return merged
 
 
 def unset_api_env_parts(*, profile=None, api_keys: set[str]) -> list[str]:

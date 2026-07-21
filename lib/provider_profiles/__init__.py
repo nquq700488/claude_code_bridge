@@ -13,10 +13,21 @@ def load_resolved_provider_profile(runtime_dir: Path):
     return _impl(runtime_dir)
 
 
-def materialize_provider_profile(*, layout: Any, spec: Any, workspace_path: Path):
+def materialize_provider_profile(
+    *,
+    layout: Any,
+    spec: Any,
+    workspace_path: Path,
+    materialize_home: bool = True,
+):
     from .materializer import materialize_provider_profile as _impl
 
-    return _impl(layout=layout, spec=spec, workspace_path=workspace_path)
+    return _impl(
+        layout=layout,
+        spec=spec,
+        workspace_path=workspace_path,
+        materialize_home=materialize_home,
+    )
 
 
 def provider_api_env_keys(provider: str) -> set[str]:

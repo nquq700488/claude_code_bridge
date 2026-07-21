@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 from pathlib import Path
+import subprocess
 import tarfile
 from types import SimpleNamespace
 
@@ -26,6 +28,83 @@ def test_normalize_arch_maps_common_aliases() -> None:
     assert module.normalize_arch("aarch64") == "aarch64"
 
 
+def test_release_identity_requires_matching_package_version_and_unique_manifest(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "package.json").write_text(json.dumps({"version": "8.1.5"}), encoding="utf-8")
+    manifest = tmp_path / "releases.json"
+    manifest.write_text(json.dumps({"releases": [{"version": "8.1.4", "commit": "oldbuild"}]}), encoding="utf-8")
+
+    module.validate_release_identity(
+        repo_root,
+        version="8.1.5",
+        commit="newbuild",
+        release_manifest=manifest,
+    )
+
+    manifest.write_text(json.dumps({"releases": [{"version": "8.1.5", "commit": "oldbuild"}]}), encoding="utf-8")
+    try:
+        module.validate_release_identity(
+            repo_root,
+            version="8.1.5",
+            commit="newbuild",
+            release_manifest=manifest,
+        )
+    except RuntimeError as exc:
+        assert "collision" in str(exc)
+    else:
+        raise AssertionError("expected a release manifest collision")
+
+
+def test_release_identity_allows_exact_checked_out_release_tag(monkeypatch, tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init")
+    _git(repo_root, "config", "user.email", "test@example.com")
+    _git(repo_root, "config", "user.name", "Test")
+    (repo_root / "VERSION").write_text("8.1.5\n", encoding="utf-8")
+    (repo_root / "package.json").write_text(json.dumps({"version": "8.1.5"}), encoding="utf-8")
+    _git(repo_root, "add", "VERSION", "package.json")
+    _git(repo_root, "commit", "-m", "release")
+    _git(repo_root, "tag", "v8.1.5")
+
+    commit, _date = module.resolve_git_metadata(repo_root, git_ref="HEAD")
+
+    module.validate_release_identity(repo_root, version="8.1.5", commit=commit, git_ref="HEAD")
+
+
+def test_release_identity_rejects_same_version_tag_on_different_commit(tmp_path: Path) -> None:
+    module = _load_module()
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    _git(repo_root, "init")
+    _git(repo_root, "config", "user.email", "test@example.com")
+    _git(repo_root, "config", "user.name", "Test")
+    (repo_root / "VERSION").write_text("8.1.5\n", encoding="utf-8")
+    (repo_root / "package.json").write_text(json.dumps({"version": "8.1.5"}), encoding="utf-8")
+    _git(repo_root, "add", "VERSION", "package.json")
+    _git(repo_root, "commit", "-m", "tagged release")
+    _git(repo_root, "tag", "v8.1.5")
+    (repo_root / "note.txt").write_text("next commit\n", encoding="utf-8")
+    _git(repo_root, "add", "note.txt")
+    _git(repo_root, "commit", "-m", "different build")
+
+    commit, _date = module.resolve_git_metadata(repo_root, git_ref="HEAD")
+
+    try:
+        module.validate_release_identity(repo_root, version="8.1.5", commit=commit, git_ref="HEAD")
+    except RuntimeError as exc:
+        assert "different commit" in str(exc)
+    else:
+        raise AssertionError("expected a release tag collision")
+
+
+def _git(repo_root: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo_root), *args], check=True, capture_output=True, text=True)
+
+
 def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     module = _load_module()
     repo_root = tmp_path / "repo"
@@ -40,8 +119,15 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     (repo_root / "dev_tools" / "skills").mkdir(parents=True)
     (repo_root / "tools" / "ccb-agent-sidebar" / "target" / "debug").mkdir(parents=True)
     (repo_root / "tools" / "ccb-rs-helper" / "target" / "debug").mkdir(parents=True)
+    (repo_root / "mobile" / "app" / ".dart_tool" / "flutter_build").mkdir(parents=True)
+    (repo_root / "mobile" / "app" / ".gradle" / "caches").mkdir(parents=True)
+    (repo_root / "mobile" / "app" / ".idea" / "libraries").mkdir(parents=True)
+    (repo_root / "mobile" / "app" / "build" / "app" / "outputs").mkdir(parents=True)
+    (repo_root / "mobile" / "app" / "node_modules" / "pkg").mkdir(parents=True)
+    (repo_root / "dist-mobile").mkdir(parents=True)
     (repo_root / "inherit_skills" / "codex_skills" / "ask").mkdir(parents=True)
     (repo_root / "inherit_skills" / "claude_skills" / "ask").mkdir(parents=True)
+    (repo_root / "inherit_skills" / "grok_skills" / "ask").mkdir(parents=True)
     (repo_root / "useful_tools" / "codex_skills" / "plan-tree").mkdir(parents=True)
     (repo_root / "useful_tools" / "claude_skills" / "plan-tree").mkdir(parents=True)
     (repo_root / "roles" / "ccb.archi").mkdir(parents=True)
@@ -64,8 +150,30 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
         "build output\n",
         encoding="utf-8",
     )
+    (repo_root / "mobile" / "app" / ".dart_tool" / "flutter_build" / "app.dill").write_text(
+        "flutter build cache\n",
+        encoding="utf-8",
+    )
+    (repo_root / "mobile" / "app" / ".gradle" / "caches" / "state.bin").write_text(
+        "gradle cache\n",
+        encoding="utf-8",
+    )
+    (repo_root / "mobile" / "app" / ".idea" / "libraries" / "workspace.xml").write_text(
+        "ide metadata\n",
+        encoding="utf-8",
+    )
+    (repo_root / "mobile" / "app" / "build" / "app" / "outputs" / "app-debug.apk").write_text(
+        "mobile build output\n",
+        encoding="utf-8",
+    )
+    (repo_root / "mobile" / "app" / "node_modules" / "pkg" / "index.js").write_text(
+        "dependency cache\n",
+        encoding="utf-8",
+    )
+    (repo_root / "dist-mobile" / "ccb-mobile.apk").write_text("mobile artifact\n", encoding="utf-8")
     (repo_root / "inherit_skills" / "codex_skills" / "ask" / "SKILL.md").write_text("ask\n", encoding="utf-8")
     (repo_root / "inherit_skills" / "claude_skills" / "ask" / "SKILL.md").write_text("ask\n", encoding="utf-8")
+    (repo_root / "inherit_skills" / "grok_skills" / "ask" / "SKILL.md").write_text("ask\n", encoding="utf-8")
     (repo_root / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
     (repo_root / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").write_text("skill\n", encoding="utf-8")
     (repo_root / "roles" / "ccb.archi" / "role.toml").write_text('schema = "rolepack/v1"\n', encoding="utf-8")
@@ -75,6 +183,7 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert (destination / "lib" / "app.py").exists()
     assert (destination / "inherit_skills" / "codex_skills" / "ask" / "SKILL.md").exists()
     assert (destination / "inherit_skills" / "claude_skills" / "ask" / "SKILL.md").exists()
+    assert (destination / "inherit_skills" / "grok_skills" / "ask" / "SKILL.md").exists()
     assert (destination / "useful_tools" / "codex_skills" / "plan-tree" / "SKILL.md").exists()
     assert (destination / "useful_tools" / "claude_skills" / "plan-tree" / "SKILL.md").exists()
     assert not (destination / "roles").exists()
@@ -88,6 +197,12 @@ def test_copy_repo_tree_excludes_runtime_state(tmp_path: Path) -> None:
     assert not (destination / "dev_tools").exists()
     assert not (destination / "tools" / "ccb-agent-sidebar" / "target").exists()
     assert not (destination / "tools" / "ccb-rs-helper" / "target").exists()
+    assert not (destination / "mobile" / "app" / ".dart_tool").exists()
+    assert not (destination / "mobile" / "app" / ".gradle").exists()
+    assert not (destination / "mobile" / "app" / ".idea").exists()
+    assert not (destination / "mobile" / "app" / "build").exists()
+    assert not (destination / "mobile" / "app" / "node_modules").exists()
+    assert not (destination / "dist-mobile").exists()
 
 
 def test_copy_repo_tree_excludes_generated_output_subtree_inside_repo(tmp_path: Path) -> None:

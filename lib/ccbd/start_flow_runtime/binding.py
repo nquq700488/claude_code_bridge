@@ -14,6 +14,8 @@ def usable_project_binding(
     agent_name: str,
     project_id: str,
     window_name: str | None = None,
+    namespace_epoch: int | None = None,
+    namespace_pane_records: dict[str, object] | None = None,
 ):
     return deps.usable_project_binding_impl(
         binding,
@@ -24,6 +26,8 @@ def usable_project_binding(
         agent_name=agent_name,
         project_id=project_id,
         window_name=window_name,
+        namespace_epoch=namespace_epoch,
+        namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=deps.tmux_backend_cls,
         inspect_project_namespace_pane_fn=deps.inspect_project_namespace_pane_fn,
         same_tmux_socket_path_fn=deps.same_tmux_socket_path_fn,

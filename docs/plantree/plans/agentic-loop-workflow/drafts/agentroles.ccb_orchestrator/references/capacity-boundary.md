@@ -1,15 +1,14 @@
 # Capacity Boundary
 
-`orchestrator-capacity` is the only V1 path from semantic orchestration into
-dynamic CCB nodes. The skill calls `ccb loop capacity ensure/status/release`
-and consumes returned JSON. It never edits project configuration or runtime
-authority files directly.
+This file is a historical design reference, not an active provider command
+surface. It is not projected as an active provider skill. Do not run CCB commands
+from this reference.
 
-The loop runner, CCB CLI, and ccbd own whether requested capacity becomes a
-runtime overlay, guarded reload, or a rejected blocker.
+The orchestrator is reply-only. It may describe capacity intent, route choice,
+blocking reason, and evidence. The runner owns command execution, capacity
+changes, task status, artifact imports, runtime files, and cleanup.
 
-Placement is also CCB-owned. `loop capacity` may return `node_id`,
-`window_name`, `resolved_window_name`, or `placement` as evidence for reporting
-and diagnostics, but the orchestrator must not choose those values, call raw
-`ccb agent add --window`, or run tmux commands. Use `ccb layout status --json`
-only as a read-only diagnostic view when capacity placement is unclear.
+Any capacity facts shown to the orchestrator are evidence only. The
+orchestrator must not treat evidence as permission to mutate project authority,
+invoke CCB wrappers, invoke provider commands, choose placement, call tmux, or
+create/release agents directly.

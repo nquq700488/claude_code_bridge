@@ -8,7 +8,7 @@ description = "Short-lived bounded execution worker for one CCB work item."
 license = "Apache-2.0"
 
 [catalog]
-level = "draft"
+level = "experimental"
 
 [identity]
 default_name = "worker"

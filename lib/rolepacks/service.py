@@ -24,6 +24,7 @@ from .runtime_lookup import (
     role_store_roots,
 )
 from .sources import (
+    SOURCE_CHECKOUT_DRAFT_ROLE_SOURCE_NAME,
     default_agent_roles_source,
     discover_source_roles,
     find_source_role,
@@ -121,6 +122,8 @@ def _install_role_via_agent_roles_manager(
     source_path: Path | None,
     with_tools: bool,
 ) -> dict[str, object]:
+    if source_path is None:
+        source_path = _source_checkout_role_path(role_id)
     try:
         payload = agent_roles_manager.install(role_id, source_path=source_path)
     except agent_roles_manager.AgentRolesManagerError as exc:
@@ -135,6 +138,15 @@ def _install_role_via_agent_roles_manager(
         payload['tools_status'] = 'skipped'
         payload['tools_reason'] = 'tool dependency install skipped by caller'
     return payload
+
+
+def _source_checkout_role_path(role_id: str | None) -> Path | None:
+    if not role_id:
+        return None
+    source_role = find_source_role(role_id)
+    if source_role is None or source_role.source != SOURCE_CHECKOUT_DRAFT_ROLE_SOURCE_NAME:
+        return None
+    return source_role.path
 
 
 def _update_role_via_agent_roles_manager(

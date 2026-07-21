@@ -77,11 +77,12 @@ class MobileNotificationEvent:
 class MobileNotificationStore:
     """Bounded event store with durable completion priority.
 
-    Completion events and fast invalidations intentionally never share a
-    journal. Invalidation records are a compact latest-state map keyed by
-    project/agent/kind/epoch, while completions retain a larger independent
-    bounded history. A trimmed/missing cursor yields an explicit resync event
-    rather than pretending the client is current.
+    Completion and invalidation records use separately bounded persistence,
+    but share one durable monotonic sequence and one cursor surface. This
+    keeps completion retention independent from compact latest-state
+    invalidations while allowing a client to resume one logical journal. A
+    trimmed/missing cursor yields an explicit resync event rather than
+    pretending the client is current.
     """
 
     def __init__(
@@ -162,7 +163,8 @@ class MobileNotificationStore:
                 prior = agents.get(key)
                 if prior:
                     activity_changed = (
-                        str(prior.get('activity_state') or '') != snapshot.activity_state
+                        snapshot.activity_state not in {'', 'unknown'}
+                        and str(prior.get('activity_state') or '') != snapshot.activity_state
                         or prior.get('namespace_epoch') != snapshot.namespace_epoch
                     )
                     conversation_changed = (
@@ -182,7 +184,12 @@ class MobileNotificationStore:
                         )
                         records[_invalidation_record_key(event)] = event
                         emitted.append(event)
-                agents[key] = _invalidation_snapshot_state(snapshot)
+                next_state = _invalidation_snapshot_state(snapshot)
+                if prior and snapshot.activity_state in {'', 'unknown'}:
+                    next_state['activity_state'] = str(
+                        prior.get('activity_state') or 'unknown'
+                    )
+                agents[key] = next_state
             for snapshot in summary_changed.values():
                 event = self._next_invalidation_event(
                     state, snapshot, INVALIDATION_KIND_PROJECT_SUMMARY, 'project', agent=''
@@ -212,7 +219,10 @@ class MobileNotificationStore:
             # overwritten, a legacy journal was retired, or completion history
             # was bounded. Make recovery explicit and advance the cursor so the
             # client does not receive a resync loop.
-            newest = max(_int(self._load_state().get('next_event_sequence'), 1) - 1, sequence)
+            newest = max(
+                (_event_sequence(event) for event in events),
+                default=max(_int(self._load_state().get('next_event_sequence'), 1) - 1, sequence),
+            )
             return [
                 *[event for event in events if _event_sequence(event) > sequence],
                 MobileNotificationEvent(
@@ -265,7 +275,7 @@ class MobileNotificationStore:
         return [
             event for event in _events_from_records(_read_jsonl(self.events_path))
             if event.kind == NOTIFICATION_KIND_TASK_COMPLETED
-        ]
+        ][-self._completion_limit :]
 
     def _invalidation_events(self) -> list[MobileNotificationEvent]:
         current = _events_from_records(_read_jsonl(self.invalidation_events_path))
@@ -274,7 +284,7 @@ class MobileNotificationStore:
         return [
             event for event in _events_from_records(_read_jsonl(self.events_path))
             if event.kind != NOTIFICATION_KIND_TASK_COMPLETED
-        ]
+        ][-self._recent_limit :]
 
     def _write_completion_events(self, events: list[MobileNotificationEvent]) -> None:
         _write_jsonl(self.completion_events_path, events[-self._completion_limit :])

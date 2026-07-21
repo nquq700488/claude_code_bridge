@@ -16,8 +16,11 @@ class ParsedAskCommand:
     silence: bool = False
     callback: bool = False
     artifact_request: bool = False
+    inline_request: bool = False
     artifact_reply: bool = False
     notify_sender: bool = False
+    allowed_chain_targets: tuple[str, ...] = ()
+    bind_chain_workspace_tree: bool = False
     kind: str = 'ask'
 
 

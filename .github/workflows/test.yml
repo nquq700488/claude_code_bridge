@@ -23,10 +23,13 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli
+          python -m pip install pytest tomli jsonschema
 
       - name: Install tmux
         if: runner.os != 'Windows'
@@ -42,6 +45,9 @@ jobs:
 
       - name: Syntax check
         run: python -m compileall -q lib bin ccb.py
+
+      - name: Build runtime accelerator
+        run: bin/build-ccb-runtime-accelerator
 
       - name: Run tests
         run: pytest test/ -v --tb=short -m "not provider_blackbox"
@@ -219,16 +225,14 @@ jobs:
         run: |
           set -euo pipefail
           export TERM=xterm-256color
-          smoke_root="${RUNNER_TEMP}/ccb-workflow-closure-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          export CCB_TEST_ROOTS="$smoke_root"
-          python scripts/workflow_closure_smoke.py \
-            --test-root "$smoke_root" \
-            --project-name ci-workflow-closure \
+          smoke_root="${RUNNER_TEMP}/ccb-workflow-closure-smoke-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}/project"
+          python scripts/single_lane_multi_workgroup_smoke.py \
+            --root "$smoke_root" \
+            --count 1 \
+            --shape parallel \
+            --scenario pass \
             --ccb-test "$GITHUB_WORKSPACE/ccb_test" \
-            --provider fake \
-            --timeout 120 \
-            --reset \
-            --run \
+            --command-timeout 240 \
             --json > "$RUNNER_TEMP/workflow-closure-smoke.json"
           python - "$RUNNER_TEMP/workflow-closure-smoke.json" <<'PY'
           import json
@@ -236,24 +240,27 @@ jobs:
           from pathlib import Path
 
           payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
-          run = payload["run"]
-          summary = run["summary"]
-          release = summary["release"]
-          apply = release["apply"]
-          assert run["workflow_smoke_status"] == "ok"
-          assert summary["ok"] is True
-          assert release["loop_capacity_status"] == "released"
-          assert release["retained_count"] == 0
-          assert not apply["namespace_reflow_errors"]
-          assert not apply["pane_identity_report"]["reflow_errors"]
+          checks = payload["checks"]
+          assert payload["status"] == "pass"
+          for key in (
+              "release_clean",
+              "raw_observed_no_live_agents",
+              "dynamic_residue_absent",
+              "child_worktree_residue_absent",
+              "external_cleanup_succeeded",
+              "process_residue_absent",
+              "socket_residue_absent",
+              "socket_filesystem_entries_absent",
+          ):
+              assert checks[key] is True, key
           print(
               json.dumps(
                   {
-                      "workflow_smoke_status": run["workflow_smoke_status"],
-                      "loop_id": summary["loop_id"],
-                      "final_status": summary["final_status"],
-                      "released_count": release["released_count"],
-                      "reflowed_windows": apply["namespace_reflowed_windows"],
+                      "workflow_smoke_status": payload["status"],
+                      "loop_id": payload["loop_id"],
+                      "task_status": payload["task"]["status"],
+                      "round_result": payload["round"]["result"],
+                      "released_count": payload["release"]["released_count"],
                   },
                   sort_keys=True,
               )
@@ -342,7 +349,7 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli
+          python -m pip install pytest tomli jsonschema
 
       - name: Install tmux
         shell: bash
@@ -412,7 +419,7 @@ jobs:
       - name: Install pytest
         run: |
           python -m pip install --upgrade pip
-          python -m pip install pytest tomli
+          python -m pip install pytest tomli jsonschema
 
       - name: Install tmux
         shell: bash
@@ -539,7 +546,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y software-properties-common python3 python3-venv python3-pip tmux
+          sudo apt-get install -y software-properties-common python3 python3-venv python3-pip tmux curl build-essential
           if ! apt-cache show python3.11 >/dev/null 2>&1; then
             sudo add-apt-repository -y ppa:deadsnakes/ppa
             sudo apt-get update
@@ -547,7 +554,18 @@ jobs:
           sudo apt-get install -y python3.11 python3.11-venv python3.11-dev
           python3.11 -m venv /tmp/ccb-ci-py311
           /tmp/ccb-ci-py311/bin/python -m pip install --upgrade pip
-          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli
+          /tmp/ccb-ci-py311/bin/python -m pip install pytest tomli jsonschema
+          if [ ! -f "$HOME/.cargo/env" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain stable
+          fi
+
+      - name: Build runtime accelerator in WSL
+        shell: wsl-bash {0}
+        run: |
+          set -euo pipefail
+          source "$HOME/.cargo/env"
+          bin/build-ccb-runtime-accelerator
 
       - name: Syntax check in WSL
         shell: wsl-bash {0}
@@ -636,4 +654,5 @@ jobs:
         shell: wsl-bash {0}
         run: |
           export TERM=xterm-256color
-          /tmp/ccb-ci-py311/bin/python -m pytest test/ -v --tb=short -m "not provider_blackbox"
+          export PATH="/tmp/ccb-ci-py311/bin:$PATH"
+          python -m pytest test/ -v --tb=short -m "not provider_blackbox"

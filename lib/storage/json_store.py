@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
-from storage.atomic import atomic_write_text
+from storage.atomic import atomic_write_text, atomic_write_text_if_changed
 
 T = TypeVar('T')
 
@@ -24,10 +24,29 @@ class JsonStore:
         value: T | dict[str, Any],
         serializer: Callable[[T], dict[str, Any]] | None = None,
     ) -> None:
+        atomic_write_text(Path(path), self._serialize(value, serializer=serializer))
+
+    def save_if_changed(
+        self,
+        path: Path,
+        value: T | dict[str, Any],
+        serializer: Callable[[T], dict[str, Any]] | None = None,
+    ) -> bool:
+        return atomic_write_text_if_changed(
+            Path(path),
+            self._serialize(value, serializer=serializer),
+        )
+
+    @staticmethod
+    def _serialize(
+        value: T | dict[str, Any],
+        *,
+        serializer: Callable[[T], dict[str, Any]] | None,
+    ) -> str:
         if serializer is None:
             if not isinstance(value, dict):
                 raise ValueError('serializer is required for non-dict values')
             payload = value
         else:
             payload = serializer(value)
-        atomic_write_text(Path(path), json.dumps(payload, ensure_ascii=False, indent=2) + '\n')
+        return json.dumps(payload, ensure_ascii=False, indent=2) + '\n'

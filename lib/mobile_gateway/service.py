@@ -12,8 +12,11 @@ import mimetypes
 from pathlib import Path
 from queue import Empty, Full, Queue
 import re
+import select
 import shutil
+import socket
 import sqlite3
+import stat
 import threading
 import time
 from typing import Callable, Mapping
@@ -29,6 +32,7 @@ from .notifications import (
     encode_sse_event,
 )
 from .pairing import MobileGatewayPairingError, MobileGatewayPairingStore
+from .push import MobilePushDispatcher, PushSender
 from .project_activity import MobileGatewayProjectActivityStore
 from .project_registry import MobileGatewayProject, MobileGatewayProjectRegistry
 from .terminal import (
@@ -58,6 +62,9 @@ _PAIRING_CAPABILITIES = (
     'file_download',
     'notifications',
     'invalidation_stream',
+    'event_cursor_resume',
+    'device_presence',
+    'push_notifications',
 )
 _REDACTED_NAMESPACE_KEYS = ('socket_path', 'session_name')
 _DEFAULT_ROUTE_PROVIDER = 'lan'
@@ -81,7 +88,8 @@ _DEFAULT_PAIRING_SCOPES = (
     'terminal_input',
     'lifecycle',
 )
-_MAX_MOBILE_FILE_BYTES = 25 * 1024 * 1024
+_MAX_MOBILE_UPLOAD_FILE_BYTES = 25 * 1024 * 1024
+_MAX_MOBILE_DOWNLOAD_FILE_BYTES = 128 * 1024 * 1024
 _NOTIFICATION_STREAM_POLL_SECONDS = 1.0
 _INVALIDATION_WATCH_MIN_INTERVAL_SECONDS = 0.75
 _INVALIDATION_WATCH_TARGET_LIMIT = 32
@@ -96,6 +104,17 @@ _PROJECT_ACTIVITY_REFRESH_LIMIT = 3
 _PROJECT_ACTIVITY_REFRESH_TTL_SECONDS = 10
 _PROJECT_ACTIVITY_REFRESH_BUDGET_SECONDS = 0.75
 _PROJECT_ACTIVITY_REFRESH_PER_PROJECT_SECONDS = 0.25
+
+
+def _socket_peer_is_closed(connection: socket.socket) -> bool:
+    """Return true when a streaming HTTP peer has closed its read side."""
+    try:
+        readable, _, _ = select.select((connection,), (), (), 0)
+        if not readable:
+            return False
+        return connection.recv(1, socket.MSG_PEEK) == b''
+    except (OSError, ValueError):
+        return True
 _CONVERSATION_PAGE_CACHE_MAX_ENTRIES = 64
 _CONVERSATION_PAGE_CACHE_MAX_BYTES = 8 * 1024 * 1024
 _MOBILE_PROJECT_UPLOAD_DIR = ('.ccb', 'mobile', 'uploads')
@@ -430,6 +449,10 @@ class MobileGatewayService:
         terminal_session_factory: Callable[[TerminalAttachTarget], object] | None = None,
         terminal_history_factory: Callable[[TerminalHistoryTarget], dict[str, object]] | None = None,
         terminal_message_sender: Callable[[PaneMessageTarget, str], dict[str, object]] | None = None,
+        push_sender: PushSender | None = None,
+        push_sender_timeout_seconds: float = 2.0,
+        push_sender_max_workers: int = 4,
+        push_diagnostic: Mapping[str, object] | None = None,
     ) -> None:
         self._project_id = str(project_id)
         self._project_root = Path(project_root)
@@ -449,10 +472,21 @@ class MobileGatewayService:
         self._terminal_session_factory = terminal_session_factory or create_tmux_terminal_session
         self._terminal_history_factory = terminal_history_factory or create_tmux_terminal_history
         self._terminal_message_sender = terminal_message_sender or send_tmux_pane_message
+        self._push_diagnostic = dict(push_diagnostic or {})
         self._mobile_dir = Path(mobile_dir) if mobile_dir is not None else None
         self._pairing_store = pairing_store
         if self._pairing_store is None and mobile_dir is not None:
             self._pairing_store = MobileGatewayPairingStore(self._mobile_dir)
+        self._push_dispatcher = (
+            MobilePushDispatcher(
+                pairing_store=self._pairing_store,
+                host_id=self._project_id,
+                sender=push_sender,
+                timeout_seconds=push_sender_timeout_seconds,
+                max_workers=push_sender_max_workers,
+            )
+            if self._pairing_store is not None else None
+        )
         self._notification_store = MobileNotificationStore(self._mobile_dir) if mobile_dir is not None else None
         self._project_activity_store = (
             MobileGatewayProjectActivityStore(self._mobile_dir) if mobile_dir is not None else None
@@ -613,6 +647,13 @@ class MobileGatewayService:
         with self._invalidation_watch_lock:
             return {key: int(value) for key, value in self._invalidation_audit.items()}
 
+    def push_audit_payload(self) -> dict[str, object]:
+        dispatcher = self._push_dispatcher
+        audit = dispatcher.audit_payload() if dispatcher is not None else {'enabled': False}
+        if self._push_diagnostic:
+            audit['sender'] = dict(self._push_diagnostic)
+        return audit
+
     def create_pairing_payload(
         self,
         *,
@@ -636,6 +677,41 @@ class MobileGatewayService:
             scopes=scopes,
             expires_seconds=expires_seconds,
             reusable_claims=reusable_claims,
+        )
+
+    def ensure_reusable_pairing_payload(
+        self,
+        *,
+        gateway_url: str,
+        route_provider: str,
+        scopes: tuple[str, ...] = _DEFAULT_PAIRING_SCOPES,
+    ) -> dict[str, object]:
+        store = self._require_pairing_store()
+        store.write_gateway_state(
+            project_id=self._project_id,
+            gateway_url=gateway_url,
+            route_provider=route_provider,
+            capabilities=self._capabilities(),
+        )
+        return store.ensure_reusable_pairing_payload(
+            project_id=self._project_id,
+            gateway_url=gateway_url,
+            route_provider=route_provider,
+            scopes=scopes,
+        )
+
+    def rotate_reusable_pairing_payload(
+        self,
+        *,
+        gateway_url: str,
+        route_provider: str,
+        scopes: tuple[str, ...] = _DEFAULT_PAIRING_SCOPES,
+    ) -> dict[str, object]:
+        return self._require_pairing_store().rotate_reusable_pairing_payload(
+            project_id=self._project_id,
+            gateway_url=gateway_url,
+            route_provider=route_provider,
+            scopes=scopes,
         )
 
     def dispatch_get(self, path: str, headers: Mapping[str, object] | None = None) -> tuple[int, dict[str, object]]:
@@ -662,6 +738,13 @@ class MobileGatewayService:
                 'status': 'ok',
                 'audit': self.invalidation_audit_payload(),
             }
+        if route == '/v1/mobile/push/audit':
+            self._authenticate(headers, required_scopes=('notify',))
+            return 200, {
+                'schema_version': _SCHEMA_VERSION,
+                'status': 'ok',
+                'audit': self.push_audit_payload(),
+            }
         prefix = '/v1/projects/'
         suffix = '/view'
         if route.startswith(prefix) and route.endswith(suffix):
@@ -687,11 +770,15 @@ class MobileGatewayService:
             )
         if route == '/v1/devices/me':
             device = self._authenticate(headers, required_scopes=('view',))
-            return 200, {
+            payload = {
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'ok',
                 'device': device.public_payload(),
             }
+            presence = self._require_pairing_store().presence_for_device(device.device_id)
+            if presence is not None:
+                payload['presence'] = presence
+            return 200, payload
         raise MobileGatewayError('not found', status_code=404)
 
     def notification_stream_target_from_path(self, path: str) -> bool:
@@ -964,7 +1051,7 @@ class MobileGatewayService:
             headers,
             allowed_scopes=('file_upload', 'message_submit', 'ask'),
         )
-        if len(body) > _MAX_MOBILE_FILE_BYTES:
+        if len(body) > _MAX_MOBILE_UPLOAD_FILE_BYTES:
             raise MobileGatewayError('file too large', status_code=413)
         view_payload = self._request_project_view(project)
         view = _map(view_payload.get('view'))
@@ -1030,10 +1117,7 @@ class MobileGatewayService:
             raise MobileGatewayError('not found', status_code=404)
         project_id, agent, file_id = target
         project = self._require_project(project_id)
-        self._authenticate_any_scope(
-            headers,
-            allowed_scopes=('file_download', 'content', 'view'),
-        )
+        self._authenticate(headers, required_scopes=('file_download',))
         directory = self._mobile_file_dir(project.project_id, agent, file_id)
         metadata = _read_file_metadata(directory)
         if not metadata:
@@ -1075,6 +1159,20 @@ class MobileGatewayService:
             except MobileGatewayPairingError as exc:
                 raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
             return 201, result
+        if route == '/v1/devices/me/presence':
+            device = self._authenticate(headers, required_scopes=('view',))
+            try:
+                presence = self._require_pairing_store().record_presence(
+                    device_id=device.device_id,
+                    visible=bool(payload.get('visible')),
+                    focused_project_id=_optional_text(payload.get('focused_project_id')),
+                    focused_agent=_optional_text(payload.get('focused_agent')),
+                    terminal_id=_optional_text(payload.get('terminal_id')),
+                    user_activity=bool(payload.get('user_activity')),
+                )
+            except MobileGatewayPairingError as exc:
+                raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
+            return 200, {'schema_version': _SCHEMA_VERSION, 'status': 'ok', 'presence': presence}
         project_route = _parse_project_action_route(route)
         if project_route is not None:
             project_id, action = project_route
@@ -1126,6 +1224,37 @@ class MobileGatewayService:
                 raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
             return 200, result
         raise MobileGatewayError('not found', status_code=404)
+
+    def dispatch_put(
+        self,
+        path: str,
+        body: Mapping[str, object] | None,
+        headers: Mapping[str, object] | None = None,
+    ) -> tuple[int, dict[str, object]]:
+        route = urlparse(path).path.rstrip('/') or '/'
+        if route != '/v1/devices/me/push-token':
+            raise MobileGatewayError('not found', status_code=404)
+        device = self._authenticate(headers, required_scopes=('notify',))
+        try:
+            self._require_pairing_store().register_push_token(
+                device_id=device.device_id,
+                token=str((body or {}).get('token') or ''),
+            )
+        except MobileGatewayPairingError as exc:
+            raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
+        return 200, {'schema_version': _SCHEMA_VERSION, 'status': 'ok'}
+
+    def dispatch_delete(
+        self,
+        path: str,
+        headers: Mapping[str, object] | None = None,
+    ) -> tuple[int, dict[str, object]]:
+        route = urlparse(path).path.rstrip('/') or '/'
+        if route != '/v1/devices/me/push-token':
+            raise MobileGatewayError('not found', status_code=404)
+        device = self._authenticate(headers, required_scopes=('notify',))
+        self._require_pairing_store().delete_push_token(device_id=device.device_id)
+        return 200, {'schema_version': _SCHEMA_VERSION, 'status': 'ok'}
 
     def _submit_agent_message(
         self,
@@ -1569,6 +1698,8 @@ class MobileGatewayService:
         self._closed = True
         if self._project_health_cache is not None:
             self._project_health_cache.close()
+        if self._push_dispatcher is not None:
+            self._push_dispatcher.close()
         if self._owns_background_executor and self._background_executor is not None:
             close = getattr(self._background_executor, 'close', None)
             if callable(close):
@@ -1639,6 +1770,8 @@ class MobileGatewayService:
         )
         for event in emitted:
             self._record_project_activity(event.project_id, activity_at=event.completed_at)
+            if self._push_dispatcher is not None:
+                self._push_dispatcher.deliver(event)
 
     def _register_invalidation_watch(self, query: Mapping[str, object]) -> None:
         project_id = _query_text(query, 'watch_project_id')
@@ -2060,7 +2193,7 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                 if service.file_upload_target_from_path(self.path) is not None:
                     status, payload = service.dispatch_file_upload(
                         self.path,
-                        self._read_raw_body(max_bytes=_MAX_MOBILE_FILE_BYTES),
+                        self._read_raw_body(max_bytes=_MAX_MOBILE_UPLOAD_FILE_BYTES),
                         self.headers,
                     )
                 else:
@@ -2079,6 +2212,25 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
                     'status': 'error',
                     'error': _error_text(exc),
                 }
+            self._send_json(status, payload)
+
+        def do_PUT(self) -> None:  # noqa: N802 - stdlib hook
+            try:
+                status, payload = service.dispatch_put(self.path, self._read_json_body(), self.headers)
+            except MobileGatewayError as exc:
+                status = exc.status_code
+                payload = {'schema_version': _SCHEMA_VERSION, 'status': 'error', 'error': _error_text(exc)}
+            except ValueError as exc:
+                status = 400
+                payload = {'schema_version': _SCHEMA_VERSION, 'status': 'error', 'error': _error_text(exc)}
+            self._send_json(status, payload)
+
+        def do_DELETE(self) -> None:  # noqa: N802 - stdlib hook
+            try:
+                status, payload = service.dispatch_delete(self.path, self.headers)
+            except MobileGatewayError as exc:
+                status = exc.status_code
+                payload = {'schema_version': _SCHEMA_VERSION, 'status': 'error', 'error': _error_text(exc)}
             self._send_json(status, payload)
 
         def log_message(self, format: str, *args) -> None:  # noqa: A002 - stdlib signature
@@ -2118,6 +2270,8 @@ def build_mobile_gateway_server(listen: ListenAddress, service: MobileGatewaySer
             while True:
                 try:
                     time.sleep(_NOTIFICATION_STREAM_POLL_SECONDS)
+                    if _socket_peer_is_closed(self.connection):
+                        return
                     events = service.notification_events_since(
                         self.path,
                         self.headers,
@@ -3005,7 +3159,12 @@ def _claude_native_conversation_items(
                         'format': 'markdown',
                         'source': 'provider_native/claude',
                         'state': 'sent',
-                        'attachments': [],
+                        'attachments': _artifact_link_attachments(
+                            body,
+                            file_roots=file_roots,
+                            project_id=project_id,
+                            agent=agent,
+                        ),
                     }
                 else:
                     item = {
@@ -3750,7 +3909,12 @@ def _codex_rollout_conversation_items(
                 'format': 'markdown',
                 'source': 'provider_native/codex',
                 'state': 'sent',
-                'attachments': [],
+                'attachments': _artifact_link_attachments(
+                    body,
+                    file_roots=file_roots,
+                    project_id=project_id,
+                    agent=agent,
+                ),
             }
         else:
             item = {
@@ -4142,7 +4306,12 @@ def _codex_event_message_conversation_item(
             'format': 'markdown',
             'source': 'provider_native/codex',
             'state': 'sent',
-            'attachments': [],
+            'attachments': _artifact_link_attachments(
+                body,
+                file_roots=file_roots,
+                project_id=project_id,
+                agent=agent,
+            ),
         }
     if payload_type == 'agent_message':
         return {
@@ -4202,35 +4371,46 @@ def _inject_workspace_artifacts(
         text = match.group(1)
         url = match.group(2)
         parsed = urlparse(url)
-        if parsed.scheme or parsed.netloc or url.startswith('#'):
+        if url.startswith('#'):
+            return match.group(0)
+        if parsed.scheme not in {'', 'file'}:
+            return match.group(0)
+        if parsed.netloc not in {'', 'localhost'}:
             return match.group(0)
         try:
             link_path = unquote(parsed.path)
             if not link_path.strip():
                 return match.group(0)
-            target_path = Path(link_path)
+            target_path = Path(link_path).expanduser()
             if not target_path.is_absolute():
                 target_path = project_root / target_path
             target_path = target_path.resolve(strict=False)
             try:
                 relative_path = target_path.relative_to(project_root_resolved)
             except ValueError:
+                relative_path = None
+            if (
+                relative_path is not None
+                and not _workspace_artifact_relative_path_allowed(relative_path)
+            ):
                 return match.group(0)
-            if not _workspace_artifact_relative_path_allowed(relative_path):
+            target_stat = target_path.stat()
+            if not stat.S_ISREG(target_stat.st_mode):
                 return match.group(0)
-            if not target_path.is_file():
+            if target_stat.st_size > _MAX_MOBILE_DOWNLOAD_FILE_BYTES:
                 return match.group(0)
-            stat = target_path.stat()
-            if stat.st_size > _MAX_MOBILE_FILE_BYTES:
-                return match.group(0)
-            content = target_path.read_bytes()
-            digest = hashlib.sha256(content).hexdigest()
+            digest = _file_sha256(target_path)
+            path_identity = (
+                relative_path.as_posix()
+                if relative_path is not None
+                else target_path.as_posix()
+            )
             identity = '\0'.join(
                 (
                     project_id,
                     agent,
-                    relative_path.as_posix(),
-                    str(stat.st_size),
+                    path_identity,
+                    str(target_stat.st_size),
                     digest,
                 )
             ).encode('utf-8')
@@ -4244,8 +4424,7 @@ def _inject_workspace_artifacts(
             if not mobile_file_dir.is_dir():
                 mobile_file_dir.mkdir(parents=True, exist_ok=True)
                 content_path = mobile_file_dir / 'content.bin'
-                content_path.write_bytes(content)
-                shutil.copystat(target_path, content_path, follow_symlinks=True)
+                shutil.copy2(target_path, content_path, follow_symlinks=True)
                 mime_type = (
                     mimetypes.guess_type(target_path.name)[0]
                     or 'application/octet-stream'
@@ -4258,7 +4437,7 @@ def _inject_workspace_artifacts(
                     'device_id': 'auto-injected',
                     'file_name': target_path.name,
                     'mime_type': mime_type,
-                    'size_bytes': stat.st_size,
+                    'size_bytes': target_stat.st_size,
                     'sha256': digest,
                     'created_at': _utc_now(),
                 }
@@ -4271,6 +4450,14 @@ def _inject_workspace_artifacts(
             return match.group(0)
 
     return re.sub(r'\[([^\]]+)\]\(([^)]+)\)', repl, body)
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open('rb') as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b''):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _clean_native_message_text(text: str) -> str:

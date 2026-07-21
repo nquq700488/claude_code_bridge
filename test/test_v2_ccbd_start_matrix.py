@@ -14,6 +14,7 @@ import pytest
 
 from cli.phase2 import maybe_handle_phase2
 import cli.phase2 as phase2_module
+from runtime_accelerator.ownership import load_runtime_accelerator_owner, owner_manifest_path
 
 
 def _repo_root() -> Path:
@@ -48,6 +49,16 @@ def _wait_for_pid_exit(pid: int, *, timeout_s: float = 3.0) -> None:
             return
         time.sleep(0.05)
     raise AssertionError(f'pid {pid} did not exit within {timeout_s}s')
+
+
+def _wait_for_accelerator_owner(project_root: Path, *, timeout_s: float = 3.0):
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        owner = load_runtime_accelerator_owner(project_root)
+        if owner is not None:
+            return owner
+        time.sleep(0.05)
+    raise AssertionError(f'runtime accelerator owner was not recorded: {owner_manifest_path(project_root)}')
 
 
 def _wait_for_lifecycle(path: Path, *, desired_state: str, phase: str, timeout_s: float = 3.0) -> dict[str, object]:
@@ -138,6 +149,7 @@ def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> N
     assert start_1.returncode == 0, start_1.stderr
     assert 'ccbd_started: true' in start_1.stdout
     assert 'agents: demo' in start_1.stdout
+    accelerator_before = _wait_for_accelerator_owner(project_root)
 
     lease_path = project_root / '.ccb' / 'ccbd' / 'lease.json'
     lifecycle_path = project_root / '.ccb' / 'ccbd' / 'lifecycle.json'
@@ -158,6 +170,9 @@ def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> N
     assert 'start_status: ok' in start_2.stdout
     assert 'ccbd_started:' in start_2.stdout
     assert 'agents: demo' in start_2.stdout
+    accelerator_after = _wait_for_accelerator_owner(project_root)
+    assert accelerator_after.pid != accelerator_before.pid
+    _wait_for_pid_exit(accelerator_before.pid)
 
     lease_after = json.loads(lease_path.read_text(encoding='utf-8'))
     lifecycle_after = json.loads(lifecycle_path.read_text(encoding='utf-8'))
@@ -176,6 +191,78 @@ def test_ccb_start_restarts_dead_daemon_on_subsequent_start(tmp_path: Path) -> N
 
     kill = _run_ccb(['kill', '-f'], cwd=project_root)
     assert kill.returncode == 0, kill.stderr
+    _wait_for_pid_exit(accelerator_after.pid)
+    assert not owner_manifest_path(project_root).exists()
     lifecycle_killed = _wait_for_lifecycle(lifecycle_path, desired_state='stopped', phase='unmounted')
     assert lifecycle_killed['desired_state'] == 'stopped'
     assert lifecycle_killed['phase'] == 'unmounted'
+
+
+@pytest.mark.ccb_lifecycle_smoke
+def test_ccb_kill_force_reaps_accelerator_after_keeper_and_daemon_exit(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-kill-dead-accelerator'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('demo:fake\n', encoding='utf-8')
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+    accelerator = _wait_for_accelerator_owner(project_root)
+    lease = json.loads((project_root / '.ccb' / 'ccbd' / 'lease.json').read_text(encoding='utf-8'))
+    keeper_pid = int(lease['keeper_pid'])
+    daemon_pid = int(lease['ccbd_pid'])
+
+    os.kill(keeper_pid, signal.SIGTERM)
+    _wait_for_pid_exit(keeper_pid)
+    os.kill(daemon_pid, signal.SIGTERM)
+    _wait_for_pid_exit(daemon_pid)
+
+    kill = _run_ccb(['kill', '-f'], cwd=project_root)
+
+    assert kill.returncode == 0, kill.stderr
+    _wait_for_pid_exit(accelerator.pid)
+    assert not owner_manifest_path(project_root).exists()
+
+
+@pytest.mark.ccb_lifecycle_smoke
+def test_ccb_kill_force_recovers_corrupt_runtime_accelerator_owner(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-kill-corrupt-accelerator'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('demo:fake\n', encoding='utf-8')
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+    accelerator = _wait_for_accelerator_owner(project_root)
+    manifest_path = owner_manifest_path(project_root)
+    manifest_path.write_text('{invalid\n', encoding='utf-8')
+
+    kill = _run_ccb(['kill', '-f'], cwd=project_root)
+
+    assert kill.returncode == 0, kill.stderr
+    assert f'kill_action: recover_corrupt_runtime_accelerator_owner:{accelerator.pid}' in kill.stdout
+    assert 'kill_warning:' not in kill.stdout
+    _wait_for_pid_exit(accelerator.pid)
+    assert not manifest_path.exists()
+
+
+@pytest.mark.ccb_lifecycle_smoke
+def test_ccb_normal_kill_preserves_corrupt_runtime_accelerator_owner_with_warning(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-kill-preserve-corrupt-accelerator'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text('demo:fake\n', encoding='utf-8')
+
+    start = _run_ccb([], cwd=project_root)
+    assert start.returncode == 0, start.stderr
+    accelerator = _wait_for_accelerator_owner(project_root)
+    manifest_path = owner_manifest_path(project_root)
+    manifest_path.write_text('{invalid\n', encoding='utf-8')
+
+    kill = _run_ccb(['kill'], cwd=project_root)
+
+    assert kill.returncode == 0, kill.stderr
+    assert 'kill_warning: runtime_accelerator_corrupt_owner_preserved:force_required:' in kill.stdout
+    assert 'kill_action: recover_corrupt_runtime_accelerator_owner:' not in kill.stdout
+    _wait_for_pid_exit(accelerator.pid)
+    assert manifest_path.exists()

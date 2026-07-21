@@ -258,6 +258,35 @@ def test_registry_keeps_last_seen_only_refresh_in_memory_without_disk_rewrite(tm
     assert material.queue_depth == 2
 
 
+def test_registry_exact_noop_does_not_rewrite_runtime(tmp_path: Path) -> None:
+    layout = PathLayout(tmp_path / 'repo')
+    registry = AgentRegistry(layout, _config())
+    runtime = AgentRuntime(
+        agent_name='demo',
+        state=AgentState.IDLE,
+        pid=123,
+        started_at='2026-04-22T00:00:00Z',
+        last_seen_at='2026-04-22T00:00:01Z',
+        runtime_ref='tmux:%1',
+        session_ref='session-1',
+        workspace_path=str(layout.workspace_path('demo')),
+        project_id='proj-1',
+        backend_type='pane-backed',
+        queue_depth=0,
+        socket_path=None,
+        health='healthy',
+        provider='codex',
+        runtime_root=str(layout.agent_provider_runtime_dir('demo', 'codex')),
+    )
+    saved = registry.upsert(runtime)
+    save_count = registry._runtime_store.save_count
+
+    same = registry.upsert_authority(saved)
+
+    assert same is saved
+    assert registry._runtime_store.save_count == save_count
+
+
 def test_registry_upsert_authority_preserves_newer_authority_fields_from_stale_candidate(tmp_path: Path) -> None:
     layout = PathLayout(tmp_path / 'repo')
     registry = AgentRegistry(layout, _config())

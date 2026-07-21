@@ -58,9 +58,15 @@ class PaneChatController {
     required CcbAgent agent,
     required CcbProjectView view,
     required String body,
+    List<int> submitBytes = const [13],
   }) {
     return _enqueueWrite(agent.name, () async {
-      await _sendNow(agent: agent, view: view, body: body);
+      await _sendNow(
+        agent: agent,
+        view: view,
+        body: body,
+        submitBytes: submitBytes,
+      );
     });
   }
 
@@ -68,6 +74,7 @@ class PaneChatController {
     required CcbAgent agent,
     required CcbProjectView view,
     required String body,
+    required List<int> submitBytes,
   }) async {
     if (_disposed) {
       throw const TerminalTransportException('pane chat controller is closed');
@@ -101,7 +108,7 @@ class PaneChatController {
         );
       }
       try {
-        await session.writeBytes(const [13]);
+        await session.writeBytes(submitBytes);
       } catch (error) {
         throw PaneChatSendException(
           stage: PaneChatSendFailureStage.enter,

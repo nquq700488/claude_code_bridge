@@ -19,6 +19,7 @@ from .session import load_project_session
 
 class ClaudeProviderAdapter:
     provider = 'claude'
+    restart_resume_supported = True
     completion_reliability_policy = CompletionReliabilityPolicy(
         provider='claude',
         primary_authority='hook_artifact_or_session_event_log',

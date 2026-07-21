@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from dataclasses import replace
+import math
 import os
 from pathlib import Path
 import shutil
@@ -14,11 +16,13 @@ from provider_core.runtime_shared import (
     provider_executable as resolve_provider_executable,
     provider_start_parts as resolve_provider_start_parts,
 )
+from runtime_observability import record_startup_operation, startup_operation_scope
 from terminal_runtime import TmuxBackend
 from workspace.models import WorkspacePlan
 
 from .provider_hooks import prepare_provider_workspace, provider_workspace_path_for_prepare
 from .provider_binding import AgentBinding, resolve_agent_binding
+from .role_command_policy import role_command_policy_for_spec, role_command_policy_requires_enforcement
 from .runtime_launch_runtime import (
     best_effort_kill_tmux_pane as _best_effort_kill_tmux_pane_impl,
     binding_runtime_alive as _binding_runtime_alive_impl,
@@ -39,6 +43,12 @@ from .runtime_launch_runtime import (
 class RuntimeLaunchResult:
     launched: bool
     binding: AgentBinding | None
+    timings_ms: dict[str, float] | None = None
+
+    def __post_init__(self) -> None:
+        if self.timings_ms is None:
+            return
+        object.__setattr__(self, 'timings_ms', _clean_runtime_launch_timings(self.timings_ms))
 
 
 def _runtime_launcher(provider: str) -> ProviderRuntimeLauncher | None:
@@ -55,27 +65,38 @@ def ensure_agent_runtime(
     assigned_pane_id: str | None = None,
     style_index: int = 0,
     tmux_socket_path: str | None = None,
+    provider_prepared: bool = False,
+    effective_command: ParsedStartCommand | None = None,
 ) -> RuntimeLaunchResult:
     launcher = _runtime_launcher(spec.provider)
     runtime_dir = context.paths.agent_provider_runtime_dir(spec.name, spec.provider)
-    provider_workspace_path = provider_workspace_path_for_prepare(
-        command=command,
-        spec=spec,
-        plan=plan,
-        runtime_dir=runtime_dir,
-        launcher=launcher,
+    launch_command = (
+        effective_command
+        if effective_command is not None
+        else effective_start_command(command, spec)
     )
-    prepare_provider_workspace(
-        layout=context.paths,
-        spec=spec,
-        workspace_path=provider_workspace_path,
-        completion_dir=runtime_dir / 'completion',
-        agent_name=spec.name,
-        auto_permission=command.auto_permission,
-    )
+    if not provider_prepared:
+        provider_workspace_path = provider_workspace_path_for_prepare(
+            command=launch_command,
+            spec=spec,
+            plan=plan,
+            runtime_dir=runtime_dir,
+            launcher=launcher,
+        )
+        record_startup_operation('provider_prepare_attempt_count')
+        with startup_operation_scope('provider_prepare'):
+            prepare_provider_workspace(
+                layout=context.paths,
+                spec=spec,
+                workspace_path=provider_workspace_path,
+                completion_dir=runtime_dir / 'completion',
+                agent_name=spec.name,
+                auto_permission=launch_command.auto_permission,
+            )
+        record_startup_operation('provider_prepare_count')
     return _ensure_agent_runtime_impl(
         context,
-        command,
+        launch_command,
         spec,
         plan,
         binding,
@@ -91,6 +112,14 @@ def ensure_agent_runtime(
     )
 
 
+def effective_start_command(command: ParsedStartCommand, spec: AgentSpec) -> ParsedStartCommand:
+    """Resolve the single command used for provider preparation and launch."""
+    policy = role_command_policy_for_spec(spec)
+    if role_command_policy_requires_enforcement(policy) and command.auto_permission:
+        return replace(command, auto_permission=False)
+    return command
+
+
 def _launch_tmux_runtime(
     context: CliContext,
     command: ParsedStartCommand,
@@ -101,8 +130,8 @@ def _launch_tmux_runtime(
     assigned_pane_id: str | None = None,
     style_index: int = 0,
     tmux_socket_path: str | None = None,
-) -> None:
-    _launch_tmux_runtime_impl(
+) -> dict[str, float]:
+    return _launch_tmux_runtime_impl(
         context,
         command,
         spec,
@@ -122,6 +151,21 @@ def _launch_tmux_runtime(
         # when the assigned pane is missing/foreign (e.g. after pane was reclaimed).
         allow_detached_fallback=True,
     )
+
+
+def _clean_runtime_launch_timings(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    timings: dict[str, float] = {}
+    for key, raw_value in value.items():
+        try:
+            parsed = float(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(parsed) or parsed < 0:
+            continue
+        timings[str(key)] = parsed
+    return timings
 
 
 def _write_session_file(

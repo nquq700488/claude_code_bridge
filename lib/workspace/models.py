@@ -22,6 +22,7 @@ class WorkspacePlan:
     branch_template: str | None
     unsafe_shared_workspace: bool
     workspace_scope: str = 'agent'
+    base_commit: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, 'project_root', Path(self.project_root).expanduser().resolve())
@@ -31,6 +32,11 @@ class WorkspacePlan:
             object.__setattr__(self, 'binding_path', Path(self.binding_path).expanduser().resolve())
         object.__setattr__(self, 'agent_name', normalize_agent_name(self.agent_name))
         object.__setattr__(self, 'workspace_scope', str(self.workspace_scope or 'agent').strip().lower())
+        if self.base_commit is not None:
+            base_commit = str(self.base_commit).strip()
+            if not base_commit:
+                raise ValueError('base_commit cannot be empty')
+            object.__setattr__(self, 'base_commit', base_commit)
 
 
 @dataclass(frozen=True)

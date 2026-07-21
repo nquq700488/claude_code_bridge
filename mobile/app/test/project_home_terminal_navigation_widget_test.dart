@@ -10,7 +10,7 @@ import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
 
 void main() {
-  testWidgets('paired terminal navigation uses focused project id', (
+  testWidgets('paired terminal navigation uses the selected agent pane', (
     tester,
   ) async {
     final profileStore = await _profileStoreWithHost();
@@ -43,14 +43,14 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
     await tester.pumpAndSettle();
 
-    expect(gatewayRepository.focusAgentCalls, [('proj-demo', 'lead', 4)]);
+    expect(gatewayRepository.focusAgentCalls, isEmpty);
     expect(find.byType(TerminalView), findsOneWidget);
     expect(
       find.byKey(const ValueKey('ccb-live-terminal-view')),
       findsOneWidget,
     );
     expect(terminalTransport.requests, hasLength(1));
-    expect(terminalTransport.requests.single.target.projectId, 'proj-focused');
+    expect(terminalTransport.requests.single.target.projectId, 'proj-demo');
     expect(terminalTransport.requests.single.target.agent, 'lead');
     expect(
       terminalTransport.requests.single.target.kind,
@@ -63,39 +63,42 @@ void main() {
     expect(find.byType(TerminalView), findsNothing);
   });
 
-  testWidgets('paired stale focus does not navigate or open transport', (
-    tester,
-  ) async {
-    final profileStore = await _profileStoreWithHost();
-    final gatewayRepository = _TerminalNavigationRepository(
-      initialPayload: _payloadWithoutNamespaceEpoch(),
-    );
-    final terminalTransport = RecordingTerminalTransport();
-    await tester.pumpWidget(
-      MaterialApp(
-        home: ProjectHomeScreen(
-          repository: FakeMobileCcbRepository(
-            projectViewPayload: demoPayloadWithReviewWindow(),
+  testWidgets(
+    'paired stale terminal identity does not navigate or open transport',
+    (tester) async {
+      final profileStore = await _profileStoreWithHost();
+      final gatewayRepository = _TerminalNavigationRepository(
+        initialPayload: _payloadWithoutNamespaceEpoch(),
+      );
+      final terminalTransport = RecordingTerminalTransport();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: FakeMobileCcbRepository(
+              projectViewPayload: demoPayloadWithReviewWindow(),
+            ),
+            profileStore: profileStore,
+            gatewayRepositoryFactory: (_) => gatewayRepository,
+            gatewayTerminalTransportFactory: (_) => terminalTransport,
           ),
-          profileStore: profileStore,
-          gatewayRepositoryFactory: (_) => gatewayRepository,
-          gatewayTerminalTransportFactory: (_) => terminalTransport,
         ),
-      ),
-    );
-    await tester.pumpAndSettle();
-    await activateStoredGatewayProfile(tester);
+      );
+      await tester.pumpAndSettle();
+      await activateStoredGatewayProfile(tester);
 
-    await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
-    await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('open-agent-terminal-button')),
+      );
+      await tester.pumpAndSettle();
 
-    expect(gatewayRepository.focusAgentCalls, isEmpty);
-    expect(find.byType(TerminalView), findsNothing);
-    expect(terminalTransport.requests, isEmpty);
-    expect(find.text('Project view is stale'), findsOneWidget);
-  });
+      expect(gatewayRepository.focusAgentCalls, isEmpty);
+      expect(find.byType(TerminalView), findsNothing);
+      expect(terminalTransport.requests, isEmpty);
+      expect(find.text('Project view is stale'), findsNothing);
+    },
+  );
 
-  testWidgets('paired focus failure does not navigate or open transport', (
+  testWidgets('paired terminal navigation does not depend on focus success', (
     tester,
   ) async {
     final profileStore = await _profileStoreWithHost();
@@ -122,10 +125,10 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
     await tester.pumpAndSettle();
 
-    expect(gatewayRepository.focusAgentCalls, [('proj-demo', 'mobile', 4)]);
-    expect(find.byType(TerminalView), findsNothing);
-    expect(terminalTransport.requests, isEmpty);
-    expect(find.text('Bad state: focus failed'), findsOneWidget);
+    expect(gatewayRepository.focusAgentCalls, isEmpty);
+    expect(find.byType(TerminalView), findsOneWidget);
+    expect(terminalTransport.requests, hasLength(1));
+    expect(find.text('Bad state: focus failed'), findsNothing);
   });
 
   testWidgets('fake terminal navigation opens without focus', (tester) async {

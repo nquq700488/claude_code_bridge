@@ -266,6 +266,19 @@ void main() {
     },
   );
 
+  test('403 scope denial preserves paired identity semantics', () {
+    final error = projectHomeGatewayActivationExceptionFor(
+      GatewayHttpException(
+        Uri.parse('http://host.local/v1/devices/me'),
+        403,
+        'device scope denied',
+      ),
+    );
+
+    expect(error.kind, ProjectHomeGatewayActivationFailureKind.scopeDenied);
+    expect(error.message, isNot(contains('Re-pair')));
+  });
+
   test('gateway runtime session times out project list load', () async {
     final profile = _pairedHost(
       hostId: 'host-id',
@@ -313,7 +326,10 @@ GatewayPairedHost _pairedHost({
 }
 
 class _RecordingRepository
-    implements MobileCcbRepository, MobileGatewayProfileHealthProbe {
+    implements
+        MobileCcbRepository,
+        MobileGatewayProfileHealthProbe,
+        MobileGatewayCoreRouteVerifier {
   final getProjectViewCalls = <String>[];
   var listProjectsCalls = 0;
   var healthCalls = 0;
@@ -349,6 +365,18 @@ class _RecordingRepository
       routeProvider: RouteProviderKind.lan,
       revoked: false,
     );
+  }
+
+  @override
+  Future<void> verifyCoreRoutes() async {
+    final health = await this.health();
+    if (health.status.toLowerCase() != 'ok') {
+      throw GatewayHttpException(Uri(), 503, 'gateway health is degraded');
+    }
+    final device = await this.device();
+    if (device.revoked) {
+      throw GatewayHttpException(Uri(), 401, 'device revoked');
+    }
   }
 
   @override

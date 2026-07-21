@@ -19,6 +19,8 @@ def usable_project_namespace_binding(
     inspect_project_namespace_pane_fn,
     same_tmux_socket_path_fn,
     window_name: str | None = None,
+    namespace_epoch: int | None = None,
+    namespace_pane_records: dict[str, object] | None = None,
 ) -> object | None:
     context = build_binding_validation_context(
         tmux_socket_path=tmux_socket_path,
@@ -27,6 +29,8 @@ def usable_project_namespace_binding(
         agent_name=agent_name,
         project_id=project_id,
         window_name=window_name,
+        namespace_epoch=namespace_epoch,
+        namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=tmux_backend_factory,
         inspect_project_namespace_pane_fn=inspect_project_namespace_pane_fn,
         same_tmux_socket_path_fn=same_tmux_socket_path_fn,
@@ -47,6 +51,8 @@ def usable_project_binding(
     inspect_project_namespace_pane_fn,
     same_tmux_socket_path_fn,
     window_name: str | None = None,
+    namespace_epoch: int | None = None,
+    namespace_pane_records: dict[str, object] | None = None,
 ):
     context = build_binding_validation_context(
         tmux_socket_path=tmux_socket_path,
@@ -55,6 +61,8 @@ def usable_project_binding(
         agent_name=agent_name,
         project_id=project_id,
         window_name=window_name,
+        namespace_epoch=namespace_epoch,
+        namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=tmux_backend_factory,
         inspect_project_namespace_pane_fn=inspect_project_namespace_pane_fn,
         same_tmux_socket_path_fn=same_tmux_socket_path_fn,
@@ -76,6 +84,8 @@ def usable_agent_only_project_binding(
     inspect_project_namespace_pane_fn,
     same_tmux_socket_path_fn,
     window_name: str | None = None,
+    namespace_epoch: int | None = None,
+    namespace_pane_records: dict[str, object] | None = None,
 ):
     context = build_binding_validation_context(
         tmux_socket_path=tmux_socket_path,
@@ -84,6 +94,8 @@ def usable_agent_only_project_binding(
         agent_name=agent_name,
         project_id=project_id,
         window_name=window_name,
+        namespace_epoch=namespace_epoch,
+        namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=tmux_backend_factory,
         inspect_project_namespace_pane_fn=inspect_project_namespace_pane_fn,
         same_tmux_socket_path_fn=same_tmux_socket_path_fn,

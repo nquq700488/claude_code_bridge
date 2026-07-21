@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 
 import '../../app/app_theme.dart';
+import '../../app/background_connection.dart';
 import '../../l10n/ccb_mobile_localizations.dart';
 import '../../transport/route_provider.dart';
 import 'gateway_pairing_panel.dart';
@@ -22,6 +23,11 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
     required this.onClaim,
     this.themePreference = CcbThemePreference.system,
     this.onThemePreferenceChanged,
+    this.backgroundConnectionEnabled = false,
+    this.onBackgroundConnectionEnabledChanged,
+    this.backgroundConnectionSystemStatus,
+    this.backgroundConnectionSystemStatusLoading = false,
+    this.onOpenBackgroundConnectionSystemSettings,
     this.onClose,
     super.key,
   });
@@ -33,8 +39,13 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
   final bool claiming;
   final bool loadingProfiles;
   final CcbThemePreference themePreference;
+  final bool backgroundConnectionEnabled;
+  final BackgroundConnectionSystemStatus? backgroundConnectionSystemStatus;
+  final bool backgroundConnectionSystemStatusLoading;
   final ValueChanged<RouteProviderKind> onRouteKindChanged;
   final ValueChanged<CcbThemePreference>? onThemePreferenceChanged;
+  final ValueChanged<bool>? onBackgroundConnectionEnabledChanged;
+  final VoidCallback? onOpenBackgroundConnectionSystemSettings;
   final VoidCallback onScan;
   final VoidCallback onClaim;
   final VoidCallback? onClose;
@@ -138,12 +149,126 @@ class ProjectHomeOnboardingScaffold extends StatelessWidget {
                 onThemePreferenceChanged: onThemePreferenceChanged,
               ),
               const SizedBox(height: 16),
+              _BackgroundConnectionSection(
+                enabled: backgroundConnectionEnabled,
+                onChanged: onBackgroundConnectionEnabledChanged,
+                systemStatus: backgroundConnectionSystemStatus,
+                systemStatusLoading: backgroundConnectionSystemStatusLoading,
+                onOpenSystemSettings: onOpenBackgroundConnectionSystemSettings,
+              ),
+              const SizedBox(height: 16),
               const ProjectHomeUpdatePanel(),
             ],
           ),
         ),
       ),
     );
+  }
+}
+
+class _BackgroundConnectionSection extends StatelessWidget {
+  const _BackgroundConnectionSection({
+    required this.enabled,
+    required this.onChanged,
+    required this.systemStatus,
+    required this.systemStatusLoading,
+    required this.onOpenSystemSettings,
+  });
+
+  final bool enabled;
+  final ValueChanged<bool>? onChanged;
+  final BackgroundConnectionSystemStatus? systemStatus;
+  final bool systemStatusLoading;
+  final VoidCallback? onOpenSystemSettings;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final colorScheme = theme.colorScheme;
+    final strings = CcbMobileLocalizations.of(context);
+    return Material(
+      color: colorScheme.surfaceContainerLow,
+      shape: RoundedRectangleBorder(
+        side: BorderSide(color: colorScheme.outlineVariant),
+        borderRadius: BorderRadius.circular(8),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          SwitchListTile(
+            key: const ValueKey('background-connection-switch'),
+            value: enabled,
+            onChanged: onChanged,
+            secondary: Icon(
+              Icons.sync_lock_outlined,
+              color: colorScheme.primary,
+            ),
+            title: Text(strings.backgroundConnection),
+            subtitle: Text(strings.backgroundConnectionDescription),
+          ),
+          Divider(height: 1, color: colorScheme.outlineVariant),
+          ListTile(
+            key: const ValueKey('background-connection-system-settings'),
+            onTap: systemStatusLoading ? null : onOpenSystemSettings,
+            leading:
+                systemStatusLoading
+                    ? Icon(
+                      Icons.sync_outlined,
+                      color: colorScheme.onSurfaceVariant,
+                    )
+                    : Icon(
+                      _systemStatusIcon,
+                      color: _systemStatusColor(colorScheme),
+                    ),
+            title: Text(strings.backgroundConnectionSystemSettings),
+            subtitle: Text(_systemStatusDescription(strings)),
+            trailing: const Icon(Icons.open_in_new),
+          ),
+        ],
+      ),
+    );
+  }
+
+  IconData get _systemStatusIcon {
+    final status = systemStatus;
+    if (status == null) {
+      return Icons.help_outline;
+    }
+    if (status.isRestricted) {
+      return Icons.warning_amber_outlined;
+    }
+    if (!status.batteryOptimizationExempt) {
+      return Icons.battery_saver_outlined;
+    }
+    return Icons.check_circle_outline;
+  }
+
+  Color _systemStatusColor(ColorScheme colorScheme) {
+    final status = systemStatus;
+    if (status == null) {
+      return colorScheme.onSurfaceVariant;
+    }
+    if (status.isRestricted) {
+      return colorScheme.error;
+    }
+    if (!status.batteryOptimizationExempt) {
+      return colorScheme.tertiary;
+    }
+    return colorScheme.primary;
+  }
+
+  String _systemStatusDescription(CcbMobileLocalizations strings) {
+    final status = systemStatus;
+    if (status == null) {
+      return strings.backgroundConnectionSystemUnknown;
+    }
+    if (status.isRestricted) {
+      return strings.backgroundConnectionSystemRestricted;
+    }
+    if (!status.batteryOptimizationExempt) {
+      return strings.backgroundConnectionSystemOptimized;
+    }
+    return strings.backgroundConnectionSystemUnrestricted;
   }
 }
 

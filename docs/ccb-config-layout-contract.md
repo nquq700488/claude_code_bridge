@@ -263,15 +263,26 @@ Contract:
 - legacy compact and hybrid configs that do not declare `[windows]` remain
   single-window configs; they are mounted in the project workspace window and
   keep their existing `cmd` pane semantics
+- when a legacy layout has `cmd_enabled=true`, its normalized single-window
+  topology and topology signature retain the `cmd` leaf, while that window's
+  `agent_names` continues to contain only configured agents
+- the default managed sidebar is outside that complete legacy user layout;
+  sidebar, cmd, and agent leaves must materialize as distinct panes for both
+  left and right sidebar positions
+- topology consumers must resolve the unique managed cmd identity for the
+  current project/session/window/namespace epoch; physical pane order and the
+  first/root pane are not cmd authority
 - `[windows]` is the authority for layout, default agent traversal, per-window
   agent grouping, provider selection, default workspace mode, and the effective
   configured-agent set.
 - Each `[windows]` value uses the compact layout grammar, but `cmd` is not supported in windows topology.
 - Every agent leaf in `[windows]` must declare a provider.
 - Each configured agent is an agent leaf referenced by `[windows]` and must appear in exactly one window layout.
-- `[tool_windows.<name>]` may declare a managed non-agent tmux window such as
-  Neovim. Tool windows are part of managed topology but not part of the
-  configured agent set.
+- `[tool_windows.<name>]` may declare a managed non-agent tmux window. Tool
+  windows are part of managed topology but not part of the configured agent
+  set. The built-in supported file/workbench surface is the `rich` layout alias;
+  legacy `neovim`, `nvim`, and `ccb-nvim` tool-window configurations are not
+  supported.
 - A tool window requires `command`, may set `label`, and defaults
   `show_in_sidebar = true`.
 - `command` affects managed tmux topology and explicit reload planning.
@@ -300,11 +311,14 @@ Contract:
   unrelated panes.
 - Guarded reload should reflow a window after successful append-only
   `add_agent` and idle `remove_agent` mutations, then reapply managed sidebar
-  width. For fully CCB-managed agent windows with one to six effective agent
-  panes, reflow should apply the fixed visual order used by the runtime layout
-  planner: `p1,p3,p5` in the left column and `p2,p4,p6` in the right column,
-  preserving pane identity through tmux movement instead of respawning
-  providers. Windows outside that safe shape fall back to tmux even compaction.
+  width. When a removal leaves a Window owned entirely by the static project
+  config, reflow must realize its validated target binary topology, including
+  horizontal/vertical direction, explicit `@N` hints, inline managed tools,
+  and Sidebar position, while preserving pane identity. Windows containing
+  dynamic Agent overlays and legacy topology records without a usable layout
+  retain the fixed runtime order for one to six effective Agent panes:
+  `p1,p3,p5` in the left column and `p2,p4,p6` in the right column. Windows
+  outside either safe shape fall back to tmux even compaction.
   Reflow must preserve surviving pane identity and report
   `namespace_reflowed_windows` or `namespace_reflow_errors` in apply
   diagnostics.
@@ -361,15 +375,14 @@ Contract:
 Example managed tool window:
 
 ```toml
-[tool_windows.neovim]
-command = "ccb-nvim"
-label = "neovim"
+[tool_windows.files]
+command = "CCB_WORKBENCH_PROFILE=rich CCB_WORKBENCH_FORCE_RICH=1 ccb-workbench files"
+label = "files"
 ```
 
-The CCB-managed `ccb-nvim` command uses isolated Neovim/LazyVim XDG paths and
-must not modify the user's default `~/.config/nvim`, Neovim data/cache/state
-directories, or global tmux configuration. tmux compatibility settings for tool
-windows must remain project/session/window scoped.
+The preferred built-in spelling is the compact `rich` layout alias inside
+`[windows]`, for example `main = "agent1:codex, rich"`. tmux compatibility
+settings for tool windows must remain project/session/window scoped.
 
 ### 4.2 Agent API Shortcut
 

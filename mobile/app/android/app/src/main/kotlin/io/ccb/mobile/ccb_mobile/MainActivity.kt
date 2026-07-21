@@ -1,6 +1,7 @@
 package io.ccb.mobile.ccb_mobile
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -11,6 +12,8 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
@@ -23,6 +26,7 @@ class MainActivity : FlutterActivity() {
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        createDefaultNotificationChannel()
         MethodChannel(
             flutterEngine.dartExecutor.binaryMessenger,
             "io.ccb.mobile/external_url"
@@ -49,6 +53,45 @@ class MainActivity : FlutterActivity() {
                 result.success(false)
             } catch (_: SecurityException) {
                 result.success(false)
+            }
+        }
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "io.ccb.mobile/background_connection"
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "start" -> result.success(BackgroundConnectionService.start(this))
+                "stop" -> {
+                    BackgroundConnectionService.stop(this)
+                    result.success(null)
+                }
+                "readSystemStatus" -> {
+                    val activityManager =
+                        getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                    val powerManager =
+                        getSystemService(Context.POWER_SERVICE) as PowerManager
+                    val backgroundRestricted =
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.P &&
+                            activityManager.isBackgroundRestricted
+                    val batteryOptimizationExempt =
+                        Build.VERSION.SDK_INT < Build.VERSION_CODES.M ||
+                            powerManager.isIgnoringBatteryOptimizations(packageName)
+                    val lowPowerStandbyRestricted =
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE &&
+                            powerManager.isLowPowerStandbyEnabled &&
+                            !powerManager.isExemptFromLowPowerStandby
+                    result.success(
+                        mapOf(
+                            "background_restricted" to backgroundRestricted,
+                            "battery_optimization_exempt" to batteryOptimizationExempt,
+                            "low_power_standby_restricted" to lowPowerStandbyRestricted
+                        )
+                    )
+                }
+                "openSystemSettings" -> {
+                    result.success(openApplicationSystemSettings())
+                }
+                else -> result.notImplemented()
             }
         }
         localNotificationsChannel = MethodChannel(
@@ -97,6 +140,28 @@ class MainActivity : FlutterActivity() {
         dispatchNotificationTap(intent)
     }
 
+    private fun openApplicationSystemSettings(): Boolean {
+        val appDetailsIntent = Intent(
+            Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+            Uri.fromParts("package", packageName, null)
+        )
+        return try {
+            startActivity(appDetailsIntent)
+            true
+        } catch (_: ActivityNotFoundException) {
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+                true
+            } catch (_: ActivityNotFoundException) {
+                false
+            } catch (_: SecurityException) {
+                false
+            }
+        } catch (_: SecurityException) {
+            false
+        }
+    }
+
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
@@ -134,6 +199,20 @@ class MainActivity : FlutterActivity() {
         requestPermissions(
             arrayOf(Manifest.permission.POST_NOTIFICATIONS),
             postNotificationsRequestCode
+        )
+    }
+
+    private fun createDefaultNotificationChannel() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            return
+        }
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        manager.createNotificationChannel(
+            NotificationChannel(
+                defaultNotificationChannelId,
+                "CCB task completion",
+                NotificationManager.IMPORTANCE_DEFAULT
+            )
         )
     }
 
@@ -281,6 +360,7 @@ class MainActivity : FlutterActivity() {
             "ccb_task_completion_summary"
         private const val taskCompletionNotificationGroupKey =
             "io.ccb.mobile.ccb_mobile.TASK_COMPLETION_NOTIFICATIONS"
+        private const val defaultNotificationChannelId = "ccb_task_completion"
         private const val notificationTapAction =
             "io.ccb.mobile.ccb_mobile.TASK_COMPLETION_NOTIFICATION_TAP"
         private const val notificationPayloadExtra =

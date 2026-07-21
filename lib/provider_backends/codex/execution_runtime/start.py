@@ -43,10 +43,21 @@ def start_active_submission(
     reader = reader_factory(prepared.session, None)
     state = reader.capture_state()
     request_anchor = request_anchor_fn(job.job_id)
-    no_wrap = no_wrap_requested(job)
+    reply_delivery = str(job.request.message_type or '').strip().lower() == 'reply_delivery'
+    # Reply delivery is transport work, but Codex still needs a durable request
+    # anchor so ccbd can distinguish "sent to pane" from "accepted by Codex".
+    no_wrap = no_wrap_requested(job) and not reply_delivery
     prompt = job.request.body if no_wrap else wrap_prompt_fn(job.request.body, request_anchor)
     session_path = state_session_path(state)
-    wait_for_runtime_ready(prepared.backend, prepared.pane_id)
+    if not wait_for_runtime_ready(prepared.backend, prepared.pane_id):
+        return _runtime_not_ready_submission(
+            job,
+            provider=adapter.provider,
+            now=now,
+            source_kind=CompletionSourceKind.PROTOCOL_EVENT_STREAM,
+            work_dir=prepared.work_dir,
+            pane_id=prepared.pane_id,
+        )
     send_prompt_to_runtime_target(prepared.backend, prepared.pane_id, prompt)
 
     return ProviderSubmission(
@@ -84,6 +95,7 @@ def start_active_submission(
             'delivery_target_pane_id': prepared.pane_id,
             'delivery_target_session_path': session_path,
             'delivery_confirmed_at': '',
+            'reply_delivery_complete_on_dispatch': reply_delivery,
         },
     )
 
@@ -158,6 +170,45 @@ def resolved_delivery_timeout_s(default: float = 120.0) -> float:
         return max(0.0, float(os.environ.get('CCB_CODEX_DELIVERY_TIMEOUT_S', default)))
     except Exception:
         return max(0.0, default)
+
+
+def _runtime_not_ready_submission(
+    job: JobRecord,
+    *,
+    provider: str,
+    now: str,
+    source_kind: CompletionSourceKind,
+    work_dir: Path,
+    pane_id: str,
+) -> ProviderSubmission:
+    diagnostics = {
+        'provider': provider,
+        'mode': 'error',
+        'reason': 'runtime_unavailable',
+        'error': 'codex_runtime_not_ready',
+        'error_type': 'codex_runtime_not_ready',
+        'delivery_retryable': True,
+        'delivery_failure_kind': 'runtime_not_ready',
+        'delivery_workspace_path': str(work_dir),
+        'delivery_target_pane_id': str(pane_id),
+    }
+    return ProviderSubmission(
+        job_id=job.job_id,
+        agent_name=job.agent_name,
+        provider=provider,
+        accepted_at=now,
+        ready_at=now,
+        source_kind=source_kind,
+        reply='',
+        diagnostics=diagnostics,
+        runtime_state={
+            'mode': 'error',
+            'reason': 'runtime_unavailable',
+            'error': 'codex_runtime_not_ready',
+            'diagnostics': diagnostics,
+            'next_seq': 1,
+        },
+    )
 
 
 __all__ = [

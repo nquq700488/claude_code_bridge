@@ -27,8 +27,8 @@ def project_dir(reader) -> Path:
 
 
 def session_is_sidechain(session_path: Path) -> bool | None:
-    entry = _first_json_entry(session_path, line_limit=20)
-    if entry is None or 'isSidechain' not in entry:
+    entry = _first_json_entry_with_key(session_path, key='isSidechain', line_limit=20)
+    if entry is None:
         return None
     return bool(entry.get('isSidechain'))
 
@@ -40,6 +40,11 @@ def set_preferred_session(reader, session_path: Path | None) -> None:
     if session_belongs_to_current_project(reader, candidate):
         reader._preferred_session = candidate
         reader._preferred_session_locked = True
+
+
+def allow_preferred_session_rotation(reader) -> None:
+    """Allow a bound Claude pane to move to a newer same-project session."""
+    reader._preferred_session_locked = False
 
 
 def _resolved_existing_path(pathlike: Path | str | None) -> Path | None:
@@ -70,12 +75,12 @@ def _candidate_parent_allowed(candidate_parent: Path, *, allowed_dirs: list[Path
     return any(candidate_parent == allowed_dir or allowed_dir in candidate_parent.parents for allowed_dir in allowed_dirs)
 
 
-def _first_json_entry(session_path: Path, *, line_limit: int) -> dict | None:
+def _first_json_entry_with_key(session_path: Path, *, key: str, line_limit: int) -> dict | None:
     try:
         with session_path.open('r', encoding='utf-8', errors='replace') as handle:
             for _ in range(line_limit):
                 entry = _json_line_entry(handle.readline())
-                if entry is None:
+                if entry is None or key not in entry:
                     continue
                 return entry
     except OSError:
@@ -100,6 +105,7 @@ def _json_line_entry(line: str) -> dict | None:
 
 __all__ = [
     "project_dir",
+    "allow_preferred_session_rotation",
     "session_belongs_to_current_project",
     "session_is_sidechain",
     "set_preferred_session",

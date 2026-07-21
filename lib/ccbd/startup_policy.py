@@ -13,7 +13,7 @@ def _float_env(name: str, default: float) -> float:
         return float(default)
 
 
-STARTUP_TRANSACTION_TIMEOUT_S = max(0.1, _float_env('CCB_STARTUP_TRANSACTION_TIMEOUT_S', 20.0))
+STARTUP_TRANSACTION_TIMEOUT_S = max(0.1, _float_env('CCB_STARTUP_TRANSACTION_TIMEOUT_S', 30.0))
 STARTUP_PROGRESS_STALL_TIMEOUT_S = max(0.0, _float_env('CCB_STARTUP_PROGRESS_STALL_TIMEOUT_S', 0.0))
 KEEPER_READY_TIMEOUT_S = max(0.1, _float_env('CCB_KEEPER_READY_TIMEOUT_S', 2.0))
 CONTROL_PLANE_RPC_TIMEOUT_S = max(0.1, _float_env('CCB_CONTROL_PLANE_RPC_TIMEOUT_S', 0.5))

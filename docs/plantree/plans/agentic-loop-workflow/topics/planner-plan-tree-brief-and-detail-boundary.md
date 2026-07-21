@@ -35,6 +35,25 @@ docs/plantree/plans/<plan>/
 `README.md` remains the discoverability entrypoint. `brief.md` is the planner's
 main editable planning surface for active work.
 
+## Long-Lived Context Exception
+
+`planner` is one of the two deliberate long-lived context holders in the
+workflow, alongside `frontdesk`. This is an exception for macro planning state,
+not permission to accumulate implementation detail.
+
+Planner's retained context should stay limited to coarse plan shape: current
+objective, roadmap/TODO state, accepted constraints, decisions, open questions,
+brief summaries, readiness state, and stable evidence links. It should consume
+`task_detailer`, worker, reviewer, and round-review outputs through compact
+imported artifacts. It should not keep raw task-local clarification threads,
+source-evidence bodies, worker logs, or review transcripts as conversational
+memory.
+
+This boundary keeps planner useful across many tasks without forcing
+orchestrator, detailer, workers, or reviewers to become long-lived memory
+owners. Those roles are expected to be fresh per activation and to rehydrate
+from planner/task artifacts only.
+
 ## Brief Schema
 
 The brief should stay compact and link-rich.
@@ -115,6 +134,9 @@ Planner may:
 - publish macro task refs and handoff refs for detail refinement;
 - review `macro-adjustment-request` artifacts and request script-owned plan
   updates when accepted.
+- own the compact global architecture map, cross-task dependency summary,
+  invariants, acceptance coverage, and integration milestones used by the
+  Decision 022 global-consistency gate.
 
 Planner must not:
 
@@ -125,6 +147,9 @@ Planner must not:
 - turn task-local clarification into long-lived planner conversation context;
 - accept a detail summary or macro adjustment as authority before script-owned
   import or decision handling.
+- read every detail body merely to decide whether local work is globally safe;
+  the detailer must provide a compact global-impact artifact with evidence
+  refs.
 
 ## Task Detailer Detail Docs Boundary
 
@@ -140,6 +165,8 @@ Detail expansion belongs to `task_detailer` in V1.
 - worker/reviewer handoff material;
 - task-local clarification artifacts;
 - stable summary backfill for the brief or task document;
+- mandatory compact global-impact classification, including an explicit
+  `none` result when no macro surface changes;
 - `macro-adjustment-request` when detail evidence invalidates a macro
   assumption.
 
@@ -182,6 +209,54 @@ summary artifact:
 Planner decides whether this summary is stable enough for the brief. If it is
 not stable, the task detail docs remain linked as work in progress rather than
 absorbed into the macro summary.
+
+Stable summary backfill remains optional because not every local fact belongs
+in long-lived planner context. Global-impact classification is separate and
+mandatory: it exists to prove that the local detail packet was checked against
+planner-owned interfaces, dependencies, invariants, and acceptance coverage.
+
+## Compact Planner Import Policy
+
+Planner consumes task evidence through compact imported artifacts, not by
+copying detail bodies into planner-owned state.
+
+The compact planner import evidence kinds are:
+
+- `detail_summary`: stable summary backfill from detail work. It may inform
+  `brief.md`, roadmap/status handoff text, decision links, open-question links,
+  and task refs after planner review. It must not copy detail design bodies,
+  source-evidence maps, task-local clarification, or worker handoff detail into
+  the brief or roadmap.
+- `macro_adjustment_request`: a request for planner review. It may propose one
+  macro update, but importing it must not mutate roadmap, decisions,
+  open questions, task status, or next owner by itself. Planner either rejects
+  it with a short reason or requests a script-owned plan update.
+- `round_summary`: compact round result evidence. It is imported only through
+  script-owned round import, not generic artifact import. Planner may use it to
+  rehydrate the brief, update a compact status handoff, or plan the next task
+  after explicit review.
+
+The script-side import contract records compact policy metadata on these
+artifacts:
+
+```text
+planner_compact_import.policy = planner_compact_import
+planner_compact_import.allowed_updates =
+  brief, roadmap_status_handoff, decision_links, open_question_links, task_refs
+```
+
+Forbidden planner-owned imports remain:
+
+- detail design body;
+- source-evidence map;
+- task-local clarification thread or transcript;
+- worker/reviewer handoff detail;
+- provider reply text as authority.
+
+`round_summary` has one additional guard: `ccb plan task-artifact --kind
+round_summary` is rejected. A round result must pass through `ccb plan
+task-import-round`, which binds the loop id, round result, actor metadata, and
+status transition in one script-owned operation.
 
 ## Cleanup And Retention Rules
 

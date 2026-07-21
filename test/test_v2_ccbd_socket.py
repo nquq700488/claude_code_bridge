@@ -85,8 +85,11 @@ def _wait_for(path: Path, timeout: float = 10.0) -> None:
             if path.suffix != '.sock':
                 return
             try:
-                CcbdClient(path, timeout_s=1.0).ping('ccbd')
-                return
+                payload = CcbdClient(path, timeout_s=1.0).ping('ccbd')
+                diagnostics = payload.get('diagnostics')
+                stage = diagnostics.get('startup_stage') if isinstance(diagnostics, dict) else None
+                if stage in {None, '', 'mounted'}:
+                    return
             except CcbdClientError as exc:
                 last_error = str(exc)
         time.sleep(0.05)
@@ -428,6 +431,7 @@ def test_ccbd_heartbeat_records_step_metrics_without_background_worker(tmp_path:
     assert app.control_plane_metrics.last_heartbeat_duration_s is not None
     assert app.control_plane_metrics.heartbeat_step_duration_s['health_monitor'] >= 0.0
     assert app.control_plane_metrics.heartbeat_step_duration_s['runtime_supervision'] >= 0.0
+    assert 'frontdesk_session_observer' not in app.control_plane_metrics.heartbeat_step_duration_s
     assert app.control_plane_metrics.last_heartbeat_agents_inspected == 1
     assert app.control_plane_metrics.last_heartbeat_runtime_store_writes == 0
 
@@ -499,7 +503,7 @@ def test_socket_server_uses_larger_listen_backlog(tmp_path: Path, monkeypatch) -
             pass
 
     monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle.socket.socket', lambda *args, **kwargs: _FakeSocket())
-    monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle._bound_socket_stat', lambda path: None)
+    monkeypatch.setattr('ccbd.socket_server_runtime.lifecycle._bound_socket_stat', lambda path: (1, 2))
 
     server = CcbdSocketServer(socket_path)
     server.listen()
@@ -1108,7 +1112,7 @@ def test_start_persists_policy(tmp_path: Path, monkeypatch) -> None:
     policy = app.start_policy_store.load()
     assert policy is not None
     assert policy.auto_permission is True
-    assert policy.recovery_restore is True
+    assert policy.recovery_restore is False
     assert policy.source == 'start_command'
 
     client.shutdown()

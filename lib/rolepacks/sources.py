@@ -25,6 +25,7 @@ DEFAULT_AGENT_ROLES_SPEC_ARCHIVE_URL = (
     'https://github.com/SeemSeam/agent-roles-spec/archive/refs/heads/main.zip'
 )
 SYSTEM_ROLE_SOURCE_NAMES = ('systemroles', 'dotroles')
+SOURCE_CHECKOUT_DRAFT_ROLE_SOURCE_NAME = 'ccb-source-drafts'
 
 
 @dataclass(frozen=True)
@@ -112,6 +113,10 @@ def load_role_sources(*, include_default: bool = True, refresh_default: bool = F
     sources: list[RoleSource] = []
     seen: set[str] = set()
     if include_default:
+        source_checkout_drafts = source_checkout_draft_role_source()
+        if source_checkout_drafts is not None:
+            sources.append(source_checkout_drafts)
+            seen.add(source_checkout_drafts.name)
         for source in system_role_sources():
             if source.name in seen:
                 continue
@@ -136,6 +141,20 @@ def load_role_sources(*, include_default: bool = True, refresh_default: bool = F
         sources.append(RoleSource(name=name, path=Path(raw_path).expanduser()))
         seen.add(name)
     return tuple(sources)
+
+
+def source_checkout_draft_role_source() -> RoleSource | None:
+    if not _source_checkout_draft_roles_enabled():
+        return None
+    source_root = Path(__file__).resolve().parents[2]
+    drafts = source_root / 'docs' / 'plantree' / 'plans' / 'agentic-loop-workflow' / 'drafts'
+    if not _looks_like_role_source(drafts):
+        return None
+    return RoleSource(
+        name=SOURCE_CHECKOUT_DRAFT_ROLE_SOURCE_NAME,
+        path=drafts.resolve(),
+        source_type='source-checkout',
+    )
 
 
 def add_role_source(name: str, path: Path) -> dict[str, object]:
@@ -581,6 +600,13 @@ def _include_reference_roles_default() -> bool:
     return value in {'1', 'true', 'yes', 'on'}
 
 
+def _source_checkout_draft_roles_enabled() -> bool:
+    if os.environ.get('CCB_TEST_ENTRYPOINT') == '1':
+        return True
+    value = str(os.environ.get('CCB_INCLUDE_SOURCE_DRAFT_ROLEPACKS') or '').strip().lower()
+    return value in {'1', 'true', 'yes', 'on'}
+
+
 def _looks_like_agent_roles_spec(path: Path) -> bool:
     root = Path(path).expanduser()
     return (root / 'roles').is_dir() or (root / 'reference_roles').is_dir()
@@ -809,6 +835,7 @@ __all__ = [
     'RoleSource',
     'SourceRole',
     'DEFAULT_AGENT_ROLES_SPEC_GIT_URL',
+    'SOURCE_CHECKOUT_DRAFT_ROLE_SOURCE_NAME',
     'SYSTEM_ROLE_SOURCE_NAMES',
     'add_role_source',
     'default_agent_roles_source',
@@ -823,6 +850,7 @@ __all__ = [
     'remove_role_source',
     'role_catalog_status',
     'source_registry_path',
+    'source_checkout_draft_role_source',
     'system_role_sources',
     'tree_digest',
 ]

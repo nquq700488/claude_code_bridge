@@ -62,11 +62,12 @@ def test_ask_alias_help_uses_canonical_usage(monkeypatch) -> None:
 
     assert code == 0
     text = stdout.getvalue()
-    assert 'ask [--compact] [--silence] [--chain] [--artifact-request] [--artifact-reply] <target> [--] <message...>' in text
+    assert 'ask [--compact] [--silence] [--chain] [--artifact-request] [--inline-request] [--artifact-reply] <target> [--] <message...>' in text
     assert '--compact request a distilled reply that preserves key information' in text
     assert '--silence request silent-on-success delivery; failures/blockers still surface' in text
     assert '--chain mark this ask as part of the current active task chain' in text
     assert '--artifact-request force the request body into a CCB text artifact' in text
+    assert '--inline-request keep the request body inline and disable automatic artifact spill' in text
     assert '--artifact-reply force the final reply into a CCB text artifact' in text
     assert '--artifact-io enable both --artifact-request and --artifact-reply' in text
     assert 'nested asks from active tasks must use --chain or --silence' in text

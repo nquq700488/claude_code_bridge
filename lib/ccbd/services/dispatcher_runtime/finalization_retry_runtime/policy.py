@@ -7,6 +7,8 @@ from ..failure_policy import is_nonretryable_api_failure
 DEFAULT_RETRYABLE_REASONS = frozenset({'api_error', 'transport_error'})
 DEFAULT_RETRYABLE_ERROR_TYPES = frozenset({'api_error', 'transport_error', 'provider_api_error'})
 DEFAULT_RETRYABLE_RUNTIME_REASONS = frozenset({'pane_dead', 'pane_unavailable', 'runtime_unavailable', 'backend_unavailable'})
+DEFAULT_RETRYABLE_INCOMPLETE_REASONS = frozenset({'task_complete_empty_reply'})
+DEFAULT_RETRYABLE_INCOMPLETE_ERROR_TYPES = frozenset({'empty_provider_reply'})
 TIMEOUT_INSPECTION_REASONS = frozenset({'timeout'})
 
 
@@ -48,6 +50,11 @@ def policy_bool(value: object, default: bool) -> bool:
     return default
 
 
+def has_retryable_diagnostic(decision) -> bool:
+    diagnostics = getattr(decision, 'diagnostics', {}) or {}
+    return policy_bool(diagnostics.get('delivery_retryable'), False)
+
+
 def provider_supports_resume(dispatcher, provider: str) -> bool:
     try:
         manifest = dispatcher._provider_catalog.get(provider)
@@ -62,10 +69,19 @@ def is_retryable_failure(
     retry_policy: dict[str, object],
     provider_supports_resume_value: bool,
 ) -> bool:
-    if decision.status.value != JobStatus.FAILED.value:
+    status = decision.status.value
+    if status == JobStatus.INCOMPLETE.value:
+        if has_retryable_diagnostic(decision):
+            return True
+        reason = str(decision.reason or '').strip().lower()
+        error_type = str(decision.diagnostics.get('error_type') or '').strip().lower()
+        return reason in DEFAULT_RETRYABLE_INCOMPLETE_REASONS or error_type in DEFAULT_RETRYABLE_INCOMPLETE_ERROR_TYPES
+    if status != JobStatus.FAILED.value:
         return False
     if is_nonretryable_api_failure(decision):
         return False
+    if has_retryable_diagnostic(decision):
+        return True
     reason = str(decision.reason or '').strip().lower()
     if reason in retryable_reasons(retry_policy):
         return True
@@ -77,7 +93,10 @@ def is_retryable_failure(
 
 
 __all__ = [
+    'DEFAULT_RETRYABLE_INCOMPLETE_ERROR_TYPES',
+    'DEFAULT_RETRYABLE_INCOMPLETE_REASONS',
     'DEFAULT_RETRYABLE_RUNTIME_REASONS',
+    'has_retryable_diagnostic',
     'TIMEOUT_INSPECTION_REASONS',
     'is_retryable_failure',
     'policy_bool',

@@ -244,6 +244,18 @@ def test_parse_ask_artifact_io_enables_request_and_reply(parser: CliParser) -> N
     )
 
 
+def test_parse_ask_inline_request_disables_automatic_spill(parser: CliParser) -> None:
+    parsed = parser.parse(['ask', '--inline-request', 'agent1', 'frontdesk intake'])
+
+    assert parsed == ParsedAskCommand(
+        project=None,
+        target='agent1',
+        sender=None,
+        message='frontdesk intake',
+        inline_request=True,
+    )
+
+
 @pytest.mark.parametrize(
     ('argv', 'message'),
     [

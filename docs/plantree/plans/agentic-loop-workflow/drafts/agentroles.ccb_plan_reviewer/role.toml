@@ -8,7 +8,7 @@ description = "Independent semantic readiness reviewer for CCB planner artifacts
 license = "Apache-2.0"
 
 [catalog]
-level = "draft"
+level = "experimental"
 
 [identity]
 default_name = "plan_reviewer"

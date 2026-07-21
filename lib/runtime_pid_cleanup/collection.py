@@ -62,6 +62,18 @@ def collect_project_process_candidates(
         if not matched_markers:
             continue
         candidates.setdefault(pid, []).extend(matched_markers)
+    from runtime_accelerator.config import accelerator_socket_path
+    from runtime_accelerator.ownership import legacy_marker_path, legacy_runtime_accelerator_pids
+
+    socket_path = accelerator_socket_path(project_root)
+    if socket_path is not None:
+        marker = legacy_marker_path(project_root)
+        for pid in legacy_runtime_accelerator_pids(
+            project_root,
+            socket_path=socket_path,
+            process_cmdlines=process_cmdlines,
+        ):
+            candidates.setdefault(pid, []).append(marker)
     return candidates
 
 
@@ -88,10 +100,13 @@ def _project_runtime_markers(project_root: Path, *, ccb_root: Path, layout: Path
 def collect_project_authority_pid_candidates(project_root: Path) -> dict[int, list[Path]]:
     layout = PathLayout(project_root)
     candidates: dict[int, list[Path]] = {}
+    from runtime_accelerator.ownership import owner_manifest_path
+
     for path, keys in (
         (layout.ccbd_lease_path, ('ccbd_pid', 'keeper_pid')),
         (layout.ccbd_keeper_path, ('keeper_pid',)),
         (layout.ccbd_lifecycle_path, ('owner_pid', 'keeper_pid')),
+        (owner_manifest_path(project_root), ('pid',)),
     ):
         payload = _load_json_object(path)
         if payload is None:

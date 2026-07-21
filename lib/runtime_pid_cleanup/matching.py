@@ -14,6 +14,25 @@ def pid_matches_project(
     path_within_fn,
     os_name: str = os.name,
 ) -> bool:
+    accelerator_hints = tuple(
+        path for path in hint_paths if path.name in {'runtime-accelerator.json', 'runtime-accelerator.legacy'}
+    )
+    if accelerator_hints:
+        from runtime_accelerator.ownership import (
+            runtime_accelerator_pid_matches_legacy,
+            runtime_accelerator_pid_matches_owner,
+        )
+
+        return all(
+            runtime_accelerator_pid_matches_owner(
+                pid,
+                project_root=project_root,
+                manifest_path=path,
+            )
+            if path.name == 'runtime-accelerator.json'
+            else runtime_accelerator_pid_matches_legacy(pid, project_root=project_root)
+            for path in accelerator_hints
+        )
     if os_name == 'nt':
         return True
     normalized_hints = normalize_hint_roots(project_root, hint_paths=hint_paths)

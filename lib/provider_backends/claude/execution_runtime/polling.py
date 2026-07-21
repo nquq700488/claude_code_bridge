@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 from completion.models import CompletionItemKind
@@ -57,13 +58,21 @@ def poll_submission(
     state = _poll_event_batches(submission, prepared.reader, poll, state=state, now=now)
     if isinstance(state, ProviderPollResult):
         return _merge_poll_result_items(state, prefix_items=dispatch_items)
-
     # If the session event log produced no turn boundary, scan the tmux pane
     # for a Claude content-safety interruption.  This interruption is NOT
     # reflected in the event log — it only shows as pane text.
     if not poll.reached_turn_boundary and poll.anchor_seen and not submission.runtime_state.get('claude_interruption_detected'):
         _check_claude_pane_interruption(submission, poll, backend=prepared.backend, pane_id=prepared.pane_id, now=now)
 
+    pane_terminal = _idle_pane_round_result_terminal(
+        submission,
+        prepared=prepared,
+        poll=poll,
+        state=state,
+        now=now,
+    )
+    if pane_terminal is not None:
+        return _merge_poll_result_items(pane_terminal, prefix_items=dispatch_items)
     return _merge_poll_result_items(
         finalize_poll_result(submission, poll, state=state),
         prefix_items=dispatch_items,
@@ -105,6 +114,107 @@ def _check_claude_pane_interruption(
     poll.next_seq += 1
     poll.reached_turn_boundary = True
     submission.runtime_state['claude_interruption_detected'] = True
+
+
+_ROUND_RESULT_RE = re.compile(
+    r"(?:^|\n)\s*[●•⏺]\s*round\s+result\s*:\s*"
+    r"(pass|partial|replan_required|blocked)\b",
+    re.IGNORECASE,
+)
+
+
+def _idle_pane_round_result_terminal(
+    submission: ProviderSubmission,
+    *,
+    prepared,
+    poll,
+    state: dict[str, object],
+    now: str,
+) -> ProviderPollResult | None:
+    """Recover a parser-enforced round result omitted from Claude's event log.
+
+    Some Claude-compatible endpoints render the final answer and return to the
+    input box without persisting a final assistant text event or firing Stop.
+    The request anchor, result, and idle prompt must all be visible in order in
+    the same pane snapshot; no elapsed-time inference is used.
+    """
+    if submission.agent_name != "ccb_round_reviewer":
+        return None
+    if poll.reached_turn_boundary or not poll.anchor_seen or not poll.request_anchor:
+        return None
+    get_pane_content = getattr(prepared.backend, "get_pane_content", None)
+    if not callable(get_pane_content):
+        return None
+    try:
+        pane_text = str(get_pane_content(prepared.pane_id, lines=2000) or "")
+    except Exception:
+        return None
+    anchored = _pane_text_after_latest_anchor(pane_text, poll.request_anchor)
+    if anchored is None:
+        return None
+    matches = tuple(_ROUND_RESULT_RE.finditer(anchored))
+    if not matches:
+        return None
+    match = matches[-1]
+    after_result = anchored[match.end() :]
+    if not _has_idle_input_box(after_result):
+        return None
+
+    round_result = match.group(1).lower()
+    reply = f"round result: {round_result}"
+    updated = replace(
+        submission,
+        reply=reply,
+        runtime_state={
+            **submission.runtime_state,
+            "state": state,
+            "next_seq": poll.next_seq,
+            "anchor_seen": poll.anchor_seen,
+            "reply_buffer": reply,
+            "raw_buffer": poll.raw_buffer,
+            "session_path": poll.session_path,
+            "last_assistant_uuid": poll.last_assistant_uuid,
+        },
+    )
+    decision = CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.COMPLETED,
+        reason="claude_idle_pane_round_result",
+        confidence=CompletionConfidence.OBSERVED,
+        reply=reply,
+        anchor_seen=True,
+        reply_started=True,
+        reply_stable=True,
+        provider_turn_ref=poll.request_anchor,
+        source_cursor=None,
+        finished_at=now,
+        diagnostics={
+            "completion_source": "idle_pane_round_result",
+            "pane_id": prepared.pane_id,
+            "round_result": round_result,
+            "session_event_final_text_missing": True,
+        },
+    )
+    return ProviderPollResult(submission=updated, items=tuple(poll.items), decision=decision)
+
+
+def _pane_text_after_latest_anchor(text: str, request_anchor: str) -> str | None:
+    index = text.rfind(request_anchor)
+    if index < 0:
+        return None
+    return text[index + len(request_anchor) :]
+
+
+def _has_idle_input_box(text: str) -> bool:
+    if "esc to interrupt" in text.lower():
+        return False
+    for line in text.splitlines():
+        normalized = line.replace("\xa0", " ").strip()
+        if normalized.startswith("❯") and not normalized[1:].strip():
+            return True
+        if re.fullmatch(r"[│|]\s*[>❯]\s*[│|]", normalized):
+            return True
+    return False
 
 
 def _prepare_submission_poll(

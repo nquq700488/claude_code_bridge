@@ -75,13 +75,27 @@ def handle_loop_run_once(context, command, out, services) -> int:
 
 
 def handle_loop_runner(context, command, out, services) -> int:
-    payload = services.loop_runner_once(context, command, services)
+    if bool(getattr(command, 'auto', False)):
+        payload = services.loop_runner_auto(context, command, services)
+    else:
+        payload = services.loop_runner_once(context, command, services)
     exit_code = 0 if str(payload.get('loop_runner_status') or '') in {'ok', 'idle', 'paused', 'blocked', 'terminal'} else 1
     if bool(getattr(command, 'json_output', False)):
         out.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
         out.write('\n')
         return exit_code
     services.write_lines(out, services.render_loop_runner(payload))
+    return exit_code
+
+
+def handle_frontdesk(context, command, out, services) -> int:
+    payload = services.frontdesk_intake_command(context, command, services)
+    exit_code = 0 if str(payload.get('frontdesk_intake_status') or '') == 'ok' else 1
+    if bool(getattr(command, 'json_output', False)):
+        out.write(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
+        out.write('\n')
+        return exit_code
+    services.write_lines(out, services.render_mapping(payload))
     return exit_code
 
 
@@ -209,6 +223,7 @@ __all__ = [
     'handle_fault_arm',
     'handle_fault_clear',
     'handle_fault_list',
+    'handle_frontdesk',
     'handle_kill',
     'handle_layout',
     'handle_logs',

@@ -41,8 +41,15 @@ require provider-native `EndTurn` evidence with a non-empty reply. Process exit
 without native terminal evidence is incomplete, and neither model-printed
 `CCB_DONE` nor an internal CCB turn-boundary item is completion authority.
 
+Grok startup argument normalization for Issue #255 has landed in source.
+Explicit `startup_args = ["--fullscreen"]` now suppresses CCB's injected
+`--minimal` default; unrelated startup arguments retain the minimal default.
+
 ## Last Landed
 
+- Fixed Issue #255 without changing the shared native CLI launcher: Grok
+  selects a prebuilt fullscreen launch configuration only when its explicit
+  startup arguments contain `--fullscreen`.
 - Shared pane-quiet support and Kimi/DeepSeek provider backends were added in
   the earlier first slice and remain as compatibility/test support.
 - Source-runtime smoke project added at
@@ -140,15 +147,11 @@ without native terminal evidence is incomplete, and neither model-printed
 
 ## Active TODO
 
-1. Land the Grok `ask` and `ccb-clear` design in
-   [topics/grok-ccb-skills-design.md](topics/grok-ccb-skills-design.md), then
-   execute the unit, isolated source-runtime, and real two-instance gates in
-   [topics/grok-ask-skill-test-plan.md](topics/grok-ask-skill-test-plan.md).
-2. Decide whether to keep the smoke/real test projects as reusable validation
+1. Decide whether to keep the smoke/real test projects as reusable validation
    fixtures.
-3. Decide whether provider-specific auth diagnostics should land before the
+2. Decide whether provider-specific auth diagnostics should land before the
    next public release or remain a follow-up.
-4. Decide whether real authenticated blackbox asks for all six next-wave CLIs
+3. Decide whether real authenticated blackbox asks for all six next-wave CLIs
    should be required before a public release or tracked as manual follow-up.
 
 ## Blocked By
@@ -162,6 +165,67 @@ Kimi hardening source work is unblocked. Remaining Kimi prompt-mode and auth
 diagnostic ideas stay deferred/open until real usage needs them.
 
 ## Last Verified
+
+Grok fullscreen startup regression, 2026-07-15:
+
+- The default/unrelated-argument path and explicit fullscreen override path
+  passed together (`9 passed`).
+- The expanded Grok, native CLI provider/execution/completion, launcher, and
+  session-file regression set passed (`186 passed`).
+- Config loading, provider catalog/registry, and repository hygiene regressions
+  passed (`139 passed`).
+
+Grok native CCB skill projection verification, 2026-07-13:
+
+- Grok normal-start permission alignment passed launcher regression coverage
+  (`11 passed`) and the wider Grok/native execution set (`202 passed`). In the
+  opened real project, both session records contained
+  `--permission-mode bypassPermissions`, both TUI footers reported
+  `always-approve`, and `grok1` executed `pwd` without an approval prompt.
+  Safe-start coverage verifies that `ccb -s` emits neither bypass mode nor CCB
+  skill allow rules.
+- Added instance-local native `ask` and `ccb-clear` packages, ownership-marked
+  projection, normal-start native bypass permission, safe-start isolation,
+  persisted policy, exact visible-pane caller environment, disable/conflict
+  behavior, and storage classification.
+- Focused Grok, native execution, launcher, skill-template, hygiene, storage,
+  and release-package tests: `204 passed`.
+- Both skill packages passed the skill creator `quick_validate.py` gate.
+- Real source-runtime project
+  `/home/bfly/yunwei/test_ccb2/grok-ask-emergency-20260713` mounted `grok1` and
+  `grok2`; native `grok inspect --json` found both skills at distinct managed
+  home paths, and both session records persisted exact caller identity plus
+  only `Bash(command ask *)` and `Bash(command ccb clear*)` allow rules.
+- The stale system OAuth file was reproduced first: managed copies matched it
+  byte-for-byte, while Grok reported `invalid_grant` and a revoked refresh
+  token. After `grok login --oauth`, both managed homes inherited the new
+  system auth file byte-for-byte and reported `is_expired=false`.
+- Authenticated direct job `job_a42e4b458172` returned exactly
+  `GROK_DIRECT_PROXY_OK_0713` and completed from native `EndTurn` as
+  `grok_run_stop`.
+- Authenticated parent job `job_da429c4e9645` loaded the injected `ask` skill,
+  created child job `job_caa4e135bb0c` on `grok2`, recovered the child result
+  through continuation job `job_963718371d32`, and returned
+  `GROK_PARENT_CHAIN_OK_0713` to the original caller.
+- Authenticated job `job_f39147abc472` loaded `ccb-clear` and ran exactly
+  `ccb clear grok2`; CCB reported one cleared target and no skips or failures.
+  Post-clear jobs `job_dd26aa9feb33` and `job_fc5b5d865c59` proved `grok2`
+  remained usable and `grok1` remained untouched.
+- The first opened-frontend test exposed that per-job headless execution hid
+  both the request and reply from the managed Grok panes. Grok execution now
+  sends the request to the target pane, reads that visible session's native
+  `updates.jsonl`, and binds completion to the matching
+  `turn_completed/end_turn` event. Reply delivery is dispatched to the
+  caller's visible pane.
+- Opened-frontend job `job_3d7385171e82` visibly appeared in `grok1`, returned
+  `FRONTEND_GROK1_VISIBLE_OK_0713` from native `end_turn`, and reply-delivery
+  job `job_6892ec58f379` visibly returned the result to `grok2`. Both panes ran
+  Grok's terminal-native `--minimal` UI so requests and replies remained
+  inspectable in tmux scrollback.
+- The host's intercepted DNS route initially sent Grok traffic to the wrong
+  endpoint. Relaunching the source runtime with the user's local Clash proxy
+  environment restored the provider network path; no CCB proxy fallback or TLS
+  weakening was added.
 
 Grok native completion verification:
 

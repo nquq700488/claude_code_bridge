@@ -3,27 +3,53 @@ import 'dart:convert';
 import 'dart:typed_data';
 
 import 'gateway_transport.dart';
+import 'gateway_connection_outcome.dart';
 import 'terminal_transport.dart';
 
-class GatewayTerminalTransport implements TerminalTransport {
-  GatewayTerminalTransport({required GatewayTransport transport})
-    : _transport = transport;
+class GatewayTerminalTransport
+    implements TerminalTransport, GatewayConnectionOutcomeReportable {
+  GatewayTerminalTransport({
+    required GatewayTransport transport,
+    Duration connectionTimeout = const Duration(seconds: 5),
+  }) : _transport = transport,
+       _connectionTimeout = connectionTimeout;
 
   final GatewayTransport _transport;
+  final Duration _connectionTimeout;
+  GatewayConnectionOutcomeReporter? _outcomeReporter;
+  final _sessions = <_GatewayTerminalSession>{};
+
+  @override
+  set outcomeReporter(GatewayConnectionOutcomeReporter? reporter) {
+    _outcomeReporter = reporter;
+    for (final session in _sessions) {
+      session.outcomeReporter = reporter;
+    }
+  }
 
   @override
   Future<TerminalSession> open(TerminalOpenRequest request) async {
-    final handle = await _transport.openTerminal(
-      GatewayTerminalOpenRequest.fromCcbTarget(
-        request.target,
-        geometry: request.geometry,
-      ),
-    );
-    return _GatewayTerminalSession(
-      transport: _transport,
-      request: request,
-      handle: handle,
-    );
+    try {
+      final handle = await _transport.openTerminal(
+        GatewayTerminalOpenRequest.fromCcbTarget(
+          request.target,
+          geometry: request.geometry,
+        ),
+      );
+      final session = _GatewayTerminalSession(
+        transport: _transport,
+        request: request,
+        handle: handle,
+        outcomeReporter: _outcomeReporter,
+        onClosed: _sessions.remove,
+        connectionTimeout: _connectionTimeout,
+      );
+      _sessions.add(session);
+      return session;
+    } catch (error) {
+      _outcomeReporter?.failed(GatewayConnectionOperation.terminal, error);
+      rethrow;
+    }
   }
 }
 
@@ -32,9 +58,15 @@ class _GatewayTerminalSession implements TerminalSession {
     required GatewayTransport transport,
     required TerminalOpenRequest request,
     required GatewayTerminalHandle handle,
+    GatewayConnectionOutcomeReporter? outcomeReporter,
+    required void Function(_GatewayTerminalSession session) onClosed,
+    required Duration connectionTimeout,
   }) : _transport = transport,
        _request = request,
        _handle = handle,
+       _outcomeReporter = outcomeReporter,
+       _onClosed = onClosed,
+       _connectionTimeout = connectionTimeout,
        _geometry = request.geometry {
     unawaited(
       _connect().catchError((Object error, StackTrace stackTrace) {
@@ -53,9 +85,18 @@ class _GatewayTerminalSession implements TerminalSession {
   StreamSubscription<GatewayTerminalFrame>? _subscription;
   Future<void>? _renewal;
   Completer<void>? _connectionReady;
+  var _connectionGeneration = 0;
+  int? _settledConnectionGeneration;
   int _nextInputSequence = 1;
   int _resumeCursor = 0;
   bool _closed = false;
+  GatewayConnectionOutcomeReporter? _outcomeReporter;
+  final void Function(_GatewayTerminalSession session) _onClosed;
+  final Duration _connectionTimeout;
+
+  set outcomeReporter(GatewayConnectionOutcomeReporter? reporter) {
+    _outcomeReporter = reporter;
+  }
 
   @override
   String get launchedCommand => _request.attachCommand;
@@ -83,10 +124,7 @@ class _GatewayTerminalSession implements TerminalSession {
   @override
   Future<void> resize(TerminalGeometry geometry) {
     _geometry = geometry;
-    return _transport.sendTerminalFrame(
-      _handle,
-      GatewayTerminalFrame.resize(geometry),
-    );
+    return _sendMutation(GatewayTerminalFrame.resize(geometry));
   }
 
   @override
@@ -109,12 +147,40 @@ class _GatewayTerminalSession implements TerminalSession {
       return;
     }
     _closed = true;
-    await _transport.sendTerminalFrame(
-      _handle,
-      GatewayTerminalFrame.closed('client_closed'),
-    );
-    await _cancelSubscription();
-    await _closeOutput();
+    Object? primaryError;
+    StackTrace? primaryStackTrace;
+    Object? cleanupError;
+    StackTrace? cleanupStackTrace;
+    try {
+      await _sendMutation(GatewayTerminalFrame.closed('client_closed'));
+    } catch (error, stackTrace) {
+      primaryError = error;
+      primaryStackTrace = stackTrace;
+    } finally {
+      _connectionGeneration += 1;
+      _outcomeReporter = null;
+      try {
+        await _cancelSubscription();
+      } catch (error, stackTrace) {
+        cleanupError = error;
+        cleanupStackTrace = stackTrace;
+      } finally {
+        try {
+          await _closeOutput();
+        } catch (error, stackTrace) {
+          cleanupError ??= error;
+          cleanupStackTrace ??= stackTrace;
+        } finally {
+          _onClosed(this);
+        }
+      }
+    }
+    if (primaryError != null) {
+      Error.throwWithStackTrace(primaryError, primaryStackTrace!);
+    }
+    if (cleanupError != null) {
+      Error.throwWithStackTrace(cleanupError, cleanupStackTrace!);
+    }
   }
 
   Future<void> _sendSequenced(GatewayTerminalFrame frame) async {
@@ -122,30 +188,55 @@ class _GatewayTerminalSession implements TerminalSession {
     if (renewal != null) {
       await renewal;
     }
-    return _transport.sendTerminalFrame(_handle, frame);
+    return _sendMutation(frame);
   }
 
-  Future<void> _connect({int? resumeCursor}) {
+  Future<void> _sendMutation(GatewayTerminalFrame frame) async {
+    try {
+      await _transport.sendTerminalFrame(_handle, frame);
+    } catch (error) {
+      _outcomeReporter?.failed(GatewayConnectionOperation.mutation, error);
+      rethrow;
+    }
+  }
+
+  Future<void> _connect({int? resumeCursor}) async {
     final ready = Completer<void>();
+    final generation = ++_connectionGeneration;
     _connectionReady = ready;
     _subscription = _transport
         .terminalFrames(_handle, resumeCursor: resumeCursor)
         .listen(
-          _handleFrame,
-          onError: _handleTransportError,
-          onDone: _handleDone,
+          (frame) => _handleFrame(generation, frame),
+          onError:
+              (Object error, StackTrace stackTrace) =>
+                  _handleTransportError(generation, error, stackTrace),
+          onDone: () => _handleDone(generation),
         );
-    return ready.future.timeout(
-      const Duration(seconds: 5),
-      onTimeout:
-          () =>
-              throw const TerminalTransportException(
-                'terminal stream connect timeout',
-              ),
-    );
+    try {
+      await ready.future.timeout(
+        _connectionTimeout,
+        onTimeout:
+            () =>
+                throw const TerminalTransportException(
+                  'terminal stream connect timeout',
+                ),
+      );
+    } catch (error, stackTrace) {
+      // Frame/transport errors already completed the readiness completer and
+      // reported themselves. A timeout has not, so report it structurally.
+      if (!ready.isCompleted) {
+        _completeConnectionError(generation, error, stackTrace);
+        if (generation == _connectionGeneration) {
+          await _cancelSubscription();
+        }
+      }
+      rethrow;
+    }
   }
 
-  void _handleFrame(GatewayTerminalFrame frame) {
+  void _handleFrame(int generation, GatewayTerminalFrame frame) {
+    if (!_isCurrentConnection(generation)) return;
     switch (frame.type) {
       case GatewayTerminalFrameType.output:
         final sequence = _int(frame.payload['seq']);
@@ -163,10 +254,11 @@ class _GatewayTerminalSession implements TerminalSession {
           _scheduleRenewTerminalHandle();
           return;
         }
-        _completeConnectionError(TerminalTransportException(code));
+        _completeConnectionError(generation, TerminalTransportException(code));
         _output.addError(TerminalTransportException(code));
       case GatewayTerminalFrameType.closed:
         _completeConnectionError(
+          generation,
           const TerminalTransportException('terminal stream closed'),
         );
         _closeOutput();
@@ -175,27 +267,33 @@ class _GatewayTerminalSession implements TerminalSession {
         if (sequence >= _nextInputSequence) {
           _nextInputSequence = sequence + 1;
         }
-        _completeConnectionReady();
+        _completeConnectionReady(generation);
       case GatewayTerminalFrameType.input:
       case GatewayTerminalFrameType.paste:
       case GatewayTerminalFrameType.resize:
     }
   }
 
-  void _handleDone() {
+  void _handleDone(int generation) {
+    if (!_isCurrentConnection(generation)) return;
     if (!_closed && !_output.isClosed) {
       const error = TerminalTransportException('terminal stream disconnected');
-      _completeConnectionError(error);
+      _completeConnectionError(generation, error);
       _output.addError(error);
     }
   }
 
-  void _handleTransportError(Object error, StackTrace stackTrace) {
+  void _handleTransportError(
+    int generation,
+    Object error,
+    StackTrace stackTrace,
+  ) {
+    if (!_isCurrentConnection(generation)) return;
     if (_isRenewableTerminalException(error)) {
       _scheduleRenewTerminalHandle();
       return;
     }
-    _completeConnectionError(error, stackTrace);
+    _completeConnectionError(generation, error, stackTrace);
     _output.addError(error, stackTrace);
   }
 
@@ -209,6 +307,7 @@ class _GatewayTerminalSession implements TerminalSession {
           }
         })
         .catchError((Object error, StackTrace stackTrace) {
+          _outcomeReporter?.failed(GatewayConnectionOperation.terminal, error);
           if (connection != null && !connection.isCompleted) {
             connection.completeError(error, stackTrace);
           }
@@ -251,14 +350,30 @@ class _GatewayTerminalSession implements TerminalSession {
     await _connect();
   }
 
-  void _completeConnectionReady() {
+  void _completeConnectionReady(int generation) {
+    if (!_isCurrentConnection(generation) ||
+        _settledConnectionGeneration == generation) {
+      return;
+    }
+    _settledConnectionGeneration = generation;
+    _outcomeReporter?.succeeded(GatewayConnectionOperation.terminal);
     final connection = _connectionReady;
     if (connection != null && !connection.isCompleted) {
       connection.complete();
     }
   }
 
-  void _completeConnectionError(Object error, [StackTrace? stackTrace]) {
+  void _completeConnectionError(
+    int generation,
+    Object error, [
+    StackTrace? stackTrace,
+  ]) {
+    if (!_isCurrentConnection(generation) ||
+        _settledConnectionGeneration == generation) {
+      return;
+    }
+    _settledConnectionGeneration = generation;
+    _outcomeReporter?.failed(GatewayConnectionOperation.terminal, error);
     final connection = _connectionReady;
     if (connection != null && !connection.isCompleted) {
       if (stackTrace == null) {
@@ -287,6 +402,9 @@ class _GatewayTerminalSession implements TerminalSession {
       // Reconnect and renewal must not hang forever on a stalled socket close.
     }
   }
+
+  bool _isCurrentConnection(int generation) =>
+      !_closed && generation == _connectionGeneration;
 }
 
 bool _isRenewableTerminalException(Object error) {

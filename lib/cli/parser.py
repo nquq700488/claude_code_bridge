@@ -18,6 +18,7 @@ from .parser_runtime import (
     parse_config,
     parse_doctor,
     parse_fault,
+    parse_frontdesk,
     parse_global_options,
     parse_inbox,
     parse_kill,
@@ -93,6 +94,13 @@ class CliParser:
         rest = tokens[1:]
         if command == 'ask':
             return parse_ask(
+                rest,
+                project=project,
+                read_optional_stdin=self._read_optional_stdin,
+                error_type=CliUsageError,
+            )
+        if command == 'frontdesk':
+            return parse_frontdesk(
                 rest,
                 project=project,
                 read_optional_stdin=self._read_optional_stdin,

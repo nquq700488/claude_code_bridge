@@ -104,6 +104,23 @@ class TmuxBackendPaneMutationMixin:
             active_border_style=active_border_style,
         )
 
+    def set_pane_identity(
+        self,
+        pane_id: str,
+        *,
+        title: str,
+        user_options: dict[str, str],
+        border_style: str | None = None,
+        active_border_style: str | None = None,
+    ) -> None:
+        self._services.pane_service.set_pane_identity(
+            pane_id,
+            title=title,
+            user_options=user_options,
+            border_style=border_style,
+            active_border_style=active_border_style,
+        )
+
     def activate_tmux_pane(self, pane_id: str) -> None:
         _activate_tmux_pane_impl(self, pane_id)
 

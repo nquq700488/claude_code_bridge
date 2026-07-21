@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Callable
+from typing import Callable, Mapping
 
 from ccbd.api_models import MessageEnvelope
 
@@ -88,6 +88,9 @@ def _payload_start(
     restore: bool = True,
     auto_permission: bool = True,
     terminal_size: tuple[int, int] | None = None,
+    startup_run_id: str | None = None,
+    daemon_started: bool | None = None,
+    readiness_trace: Mapping[str, object] | None = None,
 ) -> dict:
     payload = {
         'agent_names': list(agent_names),
@@ -98,6 +101,12 @@ def _payload_start(
         width, height = terminal_size
         payload['terminal_width'] = int(width)
         payload['terminal_height'] = int(height)
+    if startup_run_id is not None:
+        payload['startup_run_id'] = str(startup_run_id)
+    if daemon_started is not None:
+        payload['daemon_started'] = bool(daemon_started)
+    if readiness_trace is not None:
+        payload['readiness_trace'] = dict(readiness_trace)
     return payload
 
 
@@ -219,6 +228,25 @@ def _payload_project_sidebar_click(
     }
 
 
+def _payload_frontdesk_forward_planner(
+    *,
+    plan_slug: str | None = None,
+    request_id: str | None = None,
+    file_path: str | None = None,
+    intake_base64: str | None = None,
+    intake_text: str = '',
+    json_output: bool = False,
+) -> dict:
+    return {
+        'plan_slug': plan_slug,
+        'request_id': request_id,
+        'file_path': file_path,
+        'intake_base64': intake_base64,
+        'intake_text': str(intake_text or ''),
+        'json_output': bool(json_output),
+    }
+
+
 def _payload_project_reload_config(*, dry_run: bool = False) -> dict:
     return {'dry_run': bool(dry_run)}
 
@@ -251,6 +279,7 @@ client_endpoints = {
     'project_focus_window': ('project_focus_window', _payload_project_focus_window),
     'project_focus_agent': ('project_focus_agent', _payload_project_focus_agent),
     'project_sidebar_click': ('project_sidebar_click', _payload_project_sidebar_click),
+    'frontdesk_forward_planner': ('frontdesk_forward_planner', _payload_frontdesk_forward_planner),
 }
 
 

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import os
+from pathlib import Path
+
 from ccbd.keeper import KeeperStateStore
-from ccbd.models import LeaseHealth
+from ccbd.models import LeaseHealth, MountState
 from ccbd.services.mount import MountManager
 from ccbd.services.ownership import OwnershipGuard
 from ccbd.services.project_inspection import load_project_daemon_inspection
@@ -46,10 +49,16 @@ from .daemon_runtime.facade import STARTUP_PROGRESS_STALL_TIMEOUT_S as _DEF_STAR
 from .daemon_runtime.facade import START_TIMEOUT_S as _DEF_START_TIMEOUT_S
 
 
-def inspect_daemon(context: CliContext):
+def inspect_daemon(
+    context: CliContext,
+    *,
+    assume_mounted_socket_connectable: bool = False,
+):
     manager = MountManager(context.paths)
     guard = OwnershipGuard(context.paths, manager)
-    lease_inspection = guard.inspect()
+    lease_inspection = guard.inspect(
+        assume_mounted_socket_connectable=assume_mounted_socket_connectable,
+    )
     return manager, guard, load_project_daemon_inspection(
         context.project.project_id,
         lease_inspection=lease_inspection,
@@ -109,6 +118,30 @@ def connect_current_mounted_daemon(context: CliContext) -> DaemonHandle:
     )
 
 
+def connect_managed_caller_daemon(context: CliContext) -> DaemonHandle:
+    if not _is_managed_caller_context(context):
+        raise CcbdServiceError('managed caller daemon connection requires an active agent runtime')
+    _manager, _guard, inspection = inspect_daemon(
+        context,
+        assume_mounted_socket_connectable=True,
+    )
+    phase = _current_daemon_phase(inspection)
+    if phase != 'mounted':
+        raise _current_daemon_unavailable(inspection, phase=phase)
+    if str(getattr(inspection, 'desired_state', '') or '').strip() != 'running':
+        raise CcbdServiceError('project ccbd is stopping; managed agent commands cannot restart it')
+    lease_socket = _validate_managed_caller_lease(context, inspection)
+    handle = _connect_compatible_daemon(
+        context,
+        inspection,
+        restart_on_mismatch=False,
+        socket_path=lease_socket,
+    )
+    if handle is None:
+        raise CcbdServiceError(_incompatible_daemon_error())
+    return handle
+
+
 def _current_daemon_phase(inspection) -> str:
     phase = str(getattr(inspection, 'phase', '') or '').strip()
     if phase:
@@ -127,7 +160,14 @@ def invoke_mounted_daemon(
     allow_restart_stale: bool,
     request_fn,
 ):
-    handle = connect_mounted_daemon(context, allow_restart_stale=allow_restart_stale)
+    managed_caller = _is_managed_caller_context(context)
+    connect = connect_managed_caller_daemon if managed_caller else (
+        lambda current: connect_mounted_daemon(
+            current,
+            allow_restart_stale=allow_restart_stale,
+        )
+    )
+    handle = connect(context)
     assert handle.client is not None
     try:
         return request_fn(handle.client)
@@ -135,9 +175,70 @@ def invoke_mounted_daemon(
         normalized = _normalize_request_failure(context)
         if normalized is not None:
             raise normalized from exc
-        handle = connect_mounted_daemon(context, allow_restart_stale=allow_restart_stale)
+        handle = connect(context)
         assert handle.client is not None
         return request_fn(handle.client)
+
+
+def _is_managed_caller_context(context: CliContext) -> bool:
+    if str(getattr(context.project, 'source', '') or '') != 'caller-runtime':
+        return False
+    project_root = _resolved_path(context.project.project_root)
+    caller_root = _resolved_env_path('CCB_CALLER_PROJECT_ROOT')
+    if caller_root is None or caller_root != project_root:
+        return False
+    caller_project_id = str(os.environ.get('CCB_CALLER_PROJECT_ID') or '').strip()
+    if not caller_project_id or caller_project_id != str(context.project.project_id):
+        return False
+    runtime_dir = _resolved_env_path('CCB_CALLER_RUNTIME_DIR')
+    if runtime_dir is None:
+        return False
+    agents_dir = _resolved_path(context.paths.agents_dir)
+    try:
+        relative = runtime_dir.relative_to(agents_dir)
+    except ValueError:
+        return False
+    if len(relative.parts) < 2:
+        return False
+    actor = str(os.environ.get('CCB_CALLER_ACTOR') or '').strip().lower()
+    return bool(actor) and relative.parts[0].lower() == actor
+
+
+def _resolved_env_path(name: str):
+    raw = str(os.environ.get(name) or '').strip()
+    return _resolved_path(raw) if raw else None
+
+
+def _resolved_path(value):
+    current = Path(value).expanduser()
+    try:
+        return current.resolve()
+    except Exception:
+        return current.absolute()
+
+
+def _current_daemon_unavailable(inspection, *, phase: str) -> CcbdServiceError:
+    if phase == 'unmounted':
+        return CcbdServiceError('project ccbd is unmounted; managed agent commands cannot start it')
+    if phase == 'starting':
+        return CcbdServiceError('project ccbd is starting; wait for keeper to finish startup')
+    if phase == 'stopping':
+        return CcbdServiceError('project ccbd is stopping; managed agent commands cannot restart it')
+    return CcbdServiceError(f'ccbd is unavailable: {getattr(inspection, "reason", "unknown")}')
+
+
+def _validate_managed_caller_lease(context: CliContext, inspection) -> Path:
+    lease = getattr(inspection, 'lease', None)
+    if lease is None:
+        raise CcbdServiceError('ccbd is unavailable: managed caller lease is missing')
+    if str(getattr(lease, 'project_id', '') or '') != str(context.project.project_id):
+        raise CcbdServiceError('ccbd is unavailable: managed caller lease project mismatch')
+    if getattr(lease, 'mount_state', None) is not MountState.MOUNTED:
+        raise CcbdServiceError('ccbd is unavailable: managed caller lease is not mounted')
+    raw_socket = str(getattr(lease, 'socket_path', '') or '').strip()
+    if not raw_socket:
+        raise CcbdServiceError('ccbd is unavailable: managed caller lease socket is missing')
+    return _resolved_path(raw_socket)
 
 
 def ping_local_state(context: CliContext) -> LocalPingSummary:
@@ -224,11 +325,13 @@ def _connect_compatible_daemon(
     inspection,
     *,
     restart_on_mismatch: bool,
+    socket_path=None,
 ) -> DaemonHandle | None:
     return _connect_compatible_daemon_runtime_impl(
         context,
         inspection,
         restart_on_mismatch=restart_on_mismatch,
+        socket_path=socket_path,
         probe_client_factory=_build_probe_control_plane_client,
         runtime_client_factory=_build_control_plane_client,
         daemon_matches_project_config_fn=_daemon_matches_project_config,

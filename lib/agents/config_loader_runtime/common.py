@@ -76,6 +76,17 @@ class ConfigValidationError(ValueError):
     pass
 
 
+class StructuredConfigValidationError(ConfigValidationError):
+    def __init__(self, *, code: str, path: str, message: str) -> None:
+        self.code = str(code)
+        self.path = str(path)
+        self.message = str(message)
+        super().__init__(f'{self.code} at {self.path}: {self.message}')
+
+    def to_record(self) -> dict[str, str]:
+        return {'code': self.code, 'path': self.path, 'message': self.message}
+
+
 @dataclass(frozen=True)
 class ConfigLoadResult:
     config: ProjectConfig
@@ -99,4 +110,5 @@ __all__ = [
     'DEFAULT_DEFAULT_AGENTS',
     'ConfigLoadResult',
     'ConfigValidationError',
+    'StructuredConfigValidationError',
 ]

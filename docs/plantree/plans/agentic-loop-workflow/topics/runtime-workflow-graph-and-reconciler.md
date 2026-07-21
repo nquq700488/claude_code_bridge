@@ -2,6 +2,20 @@
 
 Date: 2026-06-30
 
+## Scope Update
+
+This document records the landed desired-state topology controller and the
+earlier broader workflow-graph direction. Decision 020 narrows the preferred
+future contract: topology should become **mount topology** for agents,
+windows, panes, providers, and lifecycle. Normal communication flow should use
+CCB `ask` plus small document anchors instead of expanding topology into a
+general dispatch DSL.
+
+Keep the implementation evidence in this document, but treat sections about
+information-flow edges, call ordering, and release gates as legacy or
+experimental runner-dispatch scope unless a later decision explicitly restores
+them.
+
 ## Purpose
 
 Replace direct orchestrator-driven agent load/release with a desired-state
@@ -49,9 +63,9 @@ window names when a desired agent does not provide an explicit `window_name` or
 
 | Logical Window | Default Window | Profiles | Lifecycle Default |
 | :--- | :--- | :--- | :--- |
-| Window 1: user interaction | `ccb-user` | `ccb_frontdesk`, `ccb_task_detailer` | Long-lived/on-demand; hide or park before unload. |
-| Window 2: planning and orchestration | `ccb-plan` | `ccb_planner`, `ccb_orchestrator`, `ccb_round_reviewer` | Long-lived or semi-resident; hide or park before unload. |
-| Window 3+: execution workgroups | `ccb-exec`, `ccb-exec-2`, ... | `coder`, `code_reviewer` | Short-lived; unload only after idle/evidence gates. |
+| Window 1: user interaction | `ccb-user` | `ccb_frontdesk`, `ccb_task_detailer` | Visible; resident or on-demand, but context rules stay role-specific. |
+| Window 2: planning and orchestration | `ccb-plan` | `ccb_planner`, `ccb_orchestrator`, `ccb_round_reviewer` | Visible; planner may retain compact context, immaculate roles clear per activation. |
+| Window 3+: execution workgroups | `ccb-exec`, `ccb-exec-2`, ... | `coder`, `code_reviewer` | Visible while active; unload only after idle/evidence gates. |
 
 `ccb_round_reviewer` belongs in Window 2 because it reviews whole-round
 evidence and feeds planner/orchestrator decisions for the next loop. It is
@@ -63,6 +77,14 @@ recommended `coder + code_reviewer` work unit, one execution window holds up to
 three work units. The seventh execution agent starts `ccb-exec-2`; after
 release or park removes active execution agents, later agents are moved back
 into the first available execution window during reconcile.
+
+The current V1 product direction deliberately avoids hidden default placement
+for workflow roles. Visibility is controlled by deterministic windows rather
+than backgrounding the agent: `ccb-user` holds the user-facing boundary and
+task-local detail surface, `ccb-plan` holds planning/orchestration/round
+review, and `ccb-exec*` pages hold execution workgroups. Context freshness is
+still enforced separately by the immaculate-role contract; visible residency is
+not permission to reuse old conversation state.
 
 ## Runtime Files
 
@@ -148,7 +170,14 @@ Append-only diagnostic events:
 {"event": "retained_busy", "agent": "wf-code-reviewer-1", "reason": "ask_running"}
 ```
 
-## Graph Shape
+## Legacy Dispatch Compatibility Appendix
+
+The following graph, edge, artifact, and gate material is preserved as
+historical compatibility context for already-landed tests and migration. It is
+not the current mainline workflow contract. New work should prefer
+mount-topology plus ask-first orchestration from Decision 020.
+
+## Legacy Graph Shape
 
 The graph has four layers:
 
@@ -253,7 +282,7 @@ task-scoped detail docs, returns its detail packet to `ccb_orchestrator`, and
 submits task-scope macro adjustment requests for planner review through plan
 authority.
 
-## Edge Semantics
+## Legacy Edge Semantics
 
 Edges are not decorative arrows. Each edge must have enough information for
 scripts to validate ordering and for humans to audit the workflow.
@@ -536,9 +565,10 @@ V1 desired-state topology control is landed in the current worktree:
 Evidence:
 [history/runtime-topology-reconciler-2026-06-30.md](../history/runtime-topology-reconciler-2026-06-30.md).
 
-Remaining work is to broaden the runner side: execute release gates, import
-typed edge artifacts beyond reply files, handle conditional/rework branches,
-and release topology-owned execution agents after round evidence writeback.
+Remaining legacy-dispatch work is limited to compatibility guards and
+migration safety. Do not broaden this runner path into release gates, typed
+edge artifact scheduling, conditional/rework branches, or a general workflow
+DAG unless a later decision explicitly reverses Decision 020.
 
 ## Implementation Slice
 
@@ -558,13 +588,16 @@ Initial slice status:
 7. Done: fake-provider smoke proves committed topology drives ordered asks to
    `coder`, `code_reviewer`, and `ccb_round_reviewer`, writes edge evidence,
    and imports the round result.
-8. Next: reconcile before dispatch and after round writeback, then release
-   topology-owned execution agents through explicit release gates.
+8. Compatibility only: keep legacy graph dispatch tests explicit and guarded;
+   do not add new mainline edge/gate features.
 
 ## Test Targets
 
-- Proposal validation: duplicate agent ids, invalid profile, invalid edge
-  dependency, graph cycle, missing artifact, stale base revision.
+- Proposal validation: duplicate agent ids, invalid profile, stale base
+  revision, and mainline rejection of `edges`, `gates`, and `artifacts`.
+- Legacy-dispatch compatibility validation: explicit legacy flag, invalid edge
+  dependency, graph cycle, missing artifact, stale observed revision, drift,
+  and not-ready target rejection.
 - Commit: desired revision increments, proposal id and actor are recorded,
   events are appended.
 - Reconcile load: desired present + observed missing creates ready agents.
@@ -574,5 +607,6 @@ Initial slice status:
   kill or remove the pane.
 - Placement change: move/reflow preserves provider session when ownership is
   unchanged.
-- Loop runner smoke: `commit --apply` before dispatch, topology graph drives
-  ordered asks, round evidence imports, and release after writeback.
+- Mainline loop runner smoke: no topology edges; mount topology makes agents
+  askable, normal `ask` collaboration produces `round_summary`, scripts import
+  the summary, and dynamic execution agents release.

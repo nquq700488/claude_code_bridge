@@ -126,7 +126,7 @@ def _config_with_tool_window() -> ProjectConfig:
         cmd_enabled=False,
         layout_spec=base.layout_spec,
         windows=base.windows,
-        tool_windows=(ToolWindowSpec(name='neovim', order=0, command='ccb-nvim'),),
+        tool_windows=(ToolWindowSpec(name='files', order=0, command='ccb-workbench files'),),
         entry_window='main',
     )
 
@@ -1622,6 +1622,54 @@ def test_project_view_does_not_use_legacy_codex_prompt_idle_status(tmp_path: Pat
     assert agent['provider_runtime_status']['state'] == 'unknown'
 
 
+def test_project_view_surfaces_provider_auth_recovery_action(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-auth-blocked'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    detail = 'run `codex login` in the source profile before remounting'
+    runtime = _runtime(
+        'agent1',
+        project_id=project_id,
+        state=AgentState.DEGRADED,
+        health='provider-auth-revoked',
+    )
+    runtime.pane_state = 'missing'
+    runtime.reconcile_state = 'blocked'
+    runtime.last_failure_reason = detail
+    registry.upsert(runtime)
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(
+        project_id=project_id,
+        pid=123,
+        socket_path=layout.ccbd_socket_path,
+        generation=7,
+        started_at=NOW,
+    )
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: NOW)
+    response = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+        )
+    ).build_response()
+
+    agent = next(item for item in response['view']['agents'] if item['name'] == 'agent1')
+    assert agent['activity_state'] == 'failed'
+    assert agent['activity_reason'] == 'provider_auth_revoked'
+    assert agent['runtime_health'] == 'provider-auth-revoked'
+    assert agent['reconcile_state'] == 'blocked'
+    assert agent['runtime_failure_reason'] == detail
+
+
 def test_project_view_returns_minimal_windows_agents_and_comms(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     project_root.mkdir()
@@ -1873,10 +1921,10 @@ def test_project_view_includes_tool_window_without_agent_row(tmp_path: Path) -> 
 
     view = service.build_response()['view']
 
-    assert [window['name'] for window in view['windows']] == ['main', 'ops', 'neovim']
+    assert [window['name'] for window in view['windows']] == ['main', 'ops', 'files']
     tool = view['windows'][2]
     assert tool['kind'] == 'tool'
-    assert tool['label'] == 'neovim'
+    assert tool['label'] == 'files'
     assert tool['show_in_sidebar'] is True
     assert tool['agents'] == []
     assert [agent['name'] for agent in view['agents']] == ['agent1', 'agent2', 'agent3']
@@ -4116,6 +4164,22 @@ def test_activity_resolver_core_states() -> None:
         AgentActivityFacts(namespace_mounted=True, pane_id='%1', pane_state='missing'),
         now=NOW,
     ).reason == 'pane_missing_unowned'
+
+    auth_blocked = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            provider='codex',
+            runtime_state='degraded',
+            runtime_health='provider-auth-revoked',
+            reconcile_state='blocked',
+            pane_id='%1',
+            pane_state='missing',
+        ),
+        now=NOW,
+    )
+    assert auth_blocked.state == 'failed'
+    assert auth_blocked.source == 'runtime_health'
+    assert auth_blocked.reason == 'provider_auth_revoked'
 
 
 def test_activity_resolver_ignores_terminal_job_status_for_top_activity() -> None:

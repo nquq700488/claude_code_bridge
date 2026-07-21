@@ -8,7 +8,7 @@ description = "Short-lived node-level checker for worker output."
 license = "Apache-2.0"
 
 [catalog]
-level = "draft"
+level = "experimental"
 
 [identity]
 default_name = "code_reviewer"

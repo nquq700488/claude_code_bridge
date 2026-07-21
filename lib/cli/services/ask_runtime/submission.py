@@ -95,6 +95,7 @@ def submit_ask(
         message_body,
         owner_id=f'{normalized_sender}-to-{normalized_target}',
         force=bool(getattr(command, 'artifact_request', False)),
+        inline=bool(getattr(command, 'inline_request', False)),
     )
     payload = invoke_mounted_daemon_fn(
         context,
@@ -128,10 +129,21 @@ def _route_options(command) -> dict[str, object]:
         options['artifact_request'] = True
     if bool(getattr(command, 'artifact_reply', False)):
         options['artifact_reply'] = True
+    allowed_chain_targets = tuple(
+        str(value or '').strip().lower()
+        for value in (getattr(command, 'allowed_chain_targets', ()) or ())
+        if str(value or '').strip()
+    )
+    if allowed_chain_targets:
+        options['allowed_chain_targets'] = list(dict.fromkeys(allowed_chain_targets))
+    if bool(getattr(command, 'bind_chain_workspace_tree', False)):
+        options['bind_chain_workspace_tree'] = True
     return options
 
 
-def _artifact_request_body(layout, message_body: str, *, owner_id: str, force: bool):
+def _artifact_request_body(layout, message_body: str, *, owner_id: str, force: bool, inline: bool = False):
+    if inline:
+        return message_body, None
     if force:
         artifact = write_text_artifact(
             layout,
@@ -307,18 +319,19 @@ def _validate_project_local_ask_context(context, command, *, configured_agents: 
     cwd = _resolve_path(Path(context.cwd))
     local_anchor = _resolve_optional(find_nearest_project_anchor(cwd))
     source = str(getattr(context.project, 'source', '') or '')
+    source_test_explicit = _is_source_test_explicit_project_ask(
+        context,
+        command,
+        project_root=project_root,
+        cwd=cwd,
+    )
 
     if str(getattr(command, 'project', '') or '').strip():
-        if local_anchor is None:
+        if local_anchor is None and not source_test_explicit:
             raise ValueError(
                 'ask is project-local; --project cannot select a CCB project from outside that project'
             )
-        if local_anchor != project_root and not _is_source_test_explicit_project_ask(
-            context,
-            command,
-            project_root=project_root,
-            cwd=cwd,
-        ):
+        if local_anchor != project_root and not source_test_explicit:
             raise ValueError(
                 'ask is project-local; --project cannot target another .ccb project'
             )
@@ -328,7 +341,7 @@ def _validate_project_local_ask_context(context, command, *, configured_agents: 
         and local_anchor != project_root
         and source != 'caller-runtime'
         and not _is_internal_explicit_project_ask(context, command)
-        and not _is_source_test_explicit_project_ask(context, command, project_root=project_root, cwd=cwd)
+        and not source_test_explicit
     ):
         raise ValueError(
             'ask is project-local; workspace or cwd resolved to another .ccb project'

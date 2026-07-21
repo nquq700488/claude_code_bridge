@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from terminal_runtime.tmux_identity import pane_visual
+from terminal_runtime.tmux_identity import apply_ccb_pane_identity, pane_visual
 from terminal_runtime.tmux_theme import render_tmux_session_theme
 
 
@@ -99,3 +99,32 @@ def test_light_profile_uses_light_pane_and_sidebar_visuals() -> None:
     assert agent_visual.border_style.startswith('fg=#')
     assert sidebar_visual.label_style == '#[fg=#eff1f5]#[bg=#6c6f85]#[bold]'
     assert sidebar_visual.border_style == 'fg=#bcc0cc'
+
+
+def test_apply_ccb_pane_identity_prefers_batch_setter() -> None:
+    calls: list[dict[str, object]] = []
+
+    class Backend:
+        def set_pane_identity(self, pane_id: str, **kwargs) -> None:
+            calls.append({'pane_id': pane_id, **kwargs})
+
+        def set_pane_title(self, pane_id: str, title: str) -> None:
+            raise AssertionError('batch setter should replace individual updates')
+
+    apply_ccb_pane_identity(
+        Backend(),
+        '%3',
+        title='agent1',
+        agent_label='agent1',
+        project_id='proj-1',
+        slot_key='agent1',
+        window_name='review',
+        namespace_epoch=7,
+    )
+
+    assert len(calls) == 1
+    assert calls[0]['pane_id'] == '%3'
+    assert calls[0]['title'] == 'agent1'
+    assert calls[0]['user_options']['@ccb_slot'] == 'agent1'
+    assert calls[0]['user_options']['@ccb_window'] == 'review'
+    assert calls[0]['user_options']['@ccb_namespace_epoch'] == '7'

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from completion.models import CompletionDecision
+from provider_execution.base import ProviderSubmission
 
 
 @dataclass(frozen=True)
@@ -10,6 +11,7 @@ class ExecutionUpdate:
     job_id: str
     items: tuple
     decision: CompletionDecision | None
+    submission: ProviderSubmission | None = None
 
 
 @dataclass(frozen=True)

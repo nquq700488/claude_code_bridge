@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 from concurrent.futures import Future
+from datetime import datetime, timedelta, timezone
 import json
 import os
 import socket
@@ -1673,6 +1674,52 @@ def test_agent_conversation_keeps_codex_response_assistant_with_event_user(
     assert 'hidden context' not in json.dumps(payload)
 
 
+def test_codex_native_user_file_link_has_download_attachment(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo'
+    release_path = tmp_path / 'downloads' / 'ccb-mobile-release.apk'
+    release_path.parent.mkdir()
+    release_path.write_bytes(b'release apk body\n')
+    _write_codex_rollout(
+        project_root,
+        agent='mobile',
+        thread_id='thread-native-file',
+        records=[
+            {
+                'timestamp': '2026-06-25T12:00:00.000Z',
+                'type': 'event_msg',
+                'payload': {
+                    'type': 'user_message',
+                    'message': f'[release]({release_path.as_uri()})',
+                },
+            },
+        ],
+    )
+    service = _service(
+        _FakeCcbdClient(),
+        project_root=project_root,
+        mobile_dir=tmp_path / 'mobile',
+    )
+    pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('view',),
+    )
+    _, claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(pairing['pairing_code'])},
+    )
+
+    _, payload = service.dispatch_get(
+        '/v1/projects/proj-demo/agents/mobile/conversation?namespace_epoch=4&limit=20',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+
+    item = payload['conversation']['items'][0]
+    assert item['body'].startswith('[release](ccb-artifact://')
+    assert [attachment['file_name'] for attachment in item['attachments']] == [
+        'ccb-mobile-release.apk',
+    ]
+
+
 def test_agent_conversation_completes_codex_response_assistant_from_task_marker(
     tmp_path: Path,
 ) -> None:
@@ -2904,15 +2951,24 @@ def test_agent_conversation_maps_artifact_links_from_gateway_file_store(tmp_path
 
 def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
+    outside_dir = tmp_path / 'downloads'
     snapshot_dir = project_root / '.ccb' / 'ccbd' / 'snapshots'
     jobs_dir = project_root / '.ccb' / 'agents' / 'mobile'
     docs_dir = project_root / 'docs'
     snapshot_dir.mkdir(parents=True)
     jobs_dir.mkdir(parents=True)
     docs_dir.mkdir(parents=True)
+    outside_dir.mkdir()
     report_path = docs_dir / 'report.txt'
+    release_path = outside_dir / 'ccb-mobile-release.apk'
+    notes_path = outside_dir / 'release-notes.txt'
+    oversized_path = outside_dir / 'oversized.bin'
     hidden_path = project_root / '.ccb' / 'secret.txt'
     report_path.write_text('report body\n', encoding='utf-8')
+    release_path.write_bytes(b'release apk body\n')
+    notes_path.write_text('release notes\n', encoding='utf-8')
+    with oversized_path.open('wb') as oversized_file:
+        oversized_file.truncate(129 * 1024 * 1024)
     hidden_path.write_text('hidden\n', encoding='utf-8')
     (jobs_dir / 'jobs.jsonl').write_text(
         json.dumps(
@@ -2934,7 +2990,11 @@ def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> 
                         'Generated files:\n'
                         '- [report](docs/report.txt)\n'
                         '- [hidden](.ccb/secret.txt)\n'
-                        '- [outside](/etc/hosts)\n'
+                        f'- [outside]({release_path})\n'
+                        f'- [file URI]({notes_path.as_uri()})\n'
+                        f'- [directory]({outside_dir})\n'
+                        f'- [oversized]({oversized_path})\n'
+                        '- [remote file URI](file://remote-host/etc/hosts)\n'
                     ),
                 },
             }
@@ -2955,7 +3015,7 @@ def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> 
     )
     pairing = service.create_pairing_payload(
         gateway_url='http://127.0.0.1:8787',
-        scopes=('view',),
+        scopes=('view', 'file_download'),
     )
     _, claim = service.dispatch_post(
         '/v1/pairing/claim',
@@ -2974,8 +3034,27 @@ def test_non_native_conversation_resolves_project_file_links(tmp_path: Path) -> 
     )
     assert 'ccb-artifact://' in reply['body']
     assert '[hidden](.ccb/secret.txt)' in reply['body']
-    assert '[outside](/etc/hosts)' in reply['body']
-    assert [item['file_name'] for item in reply['attachments']] == ['report.txt']
+    assert '[directory]' in reply['body']
+    assert f'[oversized]({oversized_path})' in reply['body']
+    assert '[remote file URI](file://remote-host/etc/hosts)' in reply['body']
+    assert [item['file_name'] for item in reply['attachments']] == [
+        'report.txt',
+        'ccb-mobile-release.apk',
+        'release-notes.txt',
+    ]
+
+    release = next(
+        item
+        for item in reply['attachments']
+        if item['file_name'] == 'ccb-mobile-release.apk'
+    )
+    status, content, headers = service.dispatch_file_download(
+        f'/v1/projects/proj-demo/agents/mobile/files/{release["file_id"]}',
+        {'Authorization': f'Bearer {claim["device_token"]}'},
+    )
+    assert status == 200
+    assert content == b'release apk body\n'
+    assert headers['x-ccb-file-name'] == 'ccb-mobile-release.apk'
 
 
 def test_agent_conversation_requires_view_auth_and_fresh_epoch(tmp_path: Path) -> None:
@@ -3428,7 +3507,11 @@ def test_agent_file_routes_use_registry_project_id(tmp_path: Path) -> None:
 
 
 def test_agent_file_routes_require_file_scopes(tmp_path: Path) -> None:
-    service = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+    service = _service(
+        _FakeCcbdClient(project_root=str(tmp_path / 'repo')),
+        project_root=tmp_path / 'repo',
+        mobile_dir=tmp_path / 'mobile',
+    )
     pairing = service.create_pairing_payload(
         gateway_url='http://127.0.0.1:8787',
         scopes=('view',),
@@ -3450,6 +3533,29 @@ def test_agent_file_routes_require_file_scopes(tmp_path: Path) -> None:
             },
         )
     assert denied.value.status_code == 403
+
+    upload_pairing = service.create_pairing_payload(
+        gateway_url='http://127.0.0.1:8787',
+        scopes=('file_upload',),
+    )
+    _, upload_claim = service.dispatch_post(
+        '/v1/pairing/claim',
+        {'pairing_code': str(upload_pairing['pairing_code'])},
+    )
+    _, upload = service.dispatch_file_upload(
+        '/v1/projects/proj-demo/agents/mobile/files',
+        b'host file',
+        {
+            'Authorization': f'Bearer {upload_claim["device_token"]}',
+            'X-Ccb-File-Name': 'host.txt',
+        },
+    )
+    with pytest.raises(MobileGatewayError) as download_denied:
+        service.dispatch_file_download(
+            f'/v1/projects/proj-demo/agents/mobile/files/{upload["file_id"]}',
+            {'Authorization': f'Bearer {token}'},
+        )
+    assert download_denied.value.status_code == 403
 
 
 def test_pairing_claim_creates_hashed_device_records_and_audit(tmp_path: Path) -> None:
@@ -3546,6 +3652,141 @@ def test_reusable_pairing_can_claim_multiple_devices_until_revoked(tmp_path: Pat
     with pytest.raises(MobileGatewayPairingError) as denied:
         store.claim_pairing(pairing_code=pairing_code, device_name='Phone C')
     assert denied.value.reason == 'revoked'
+
+
+def test_reusable_handoff_survives_restart_and_manual_rotation_keeps_old_devices(tmp_path: Path) -> None:
+    mobile_dir = tmp_path / 'mobile'
+    store = MobileGatewayPairingStore(mobile_dir)
+    handoff = store.ensure_reusable_pairing_payload(
+        project_id='host-demo',
+        gateway_url='https://mobile.example.com',
+        route_provider='tailnet',
+        scopes=('view', 'notify'),
+    )
+    code = str(handoff['pairing_code'])
+    claims = [
+        store.claim_pairing(pairing_code=code, device_name=f'Phone {index}')
+        for index in range(4)
+    ]
+    old_token = str(claims[0]['device_token'])
+
+    restarted = MobileGatewayPairingStore(mobile_dir).ensure_reusable_pairing_payload(
+        project_id='host-demo',
+        gateway_url='https://mobile.example.com',
+        route_provider='tailnet',
+        scopes=('view', 'notify'),
+    )
+    assert restarted['pairing_code'] == code
+    assert restarted['generation'] == 1
+    assert (mobile_dir / 'pairing-handoff.json').stat().st_mode & 0o777 == 0o600
+
+    rotated = MobileGatewayPairingStore(mobile_dir).rotate_reusable_pairing_payload(
+        project_id='host-demo',
+        gateway_url='https://mobile.example.com',
+        route_provider='tailnet',
+        scopes=('view', 'notify'),
+    )
+    assert rotated['pairing_code'] != code
+    assert rotated['generation'] == 2
+    with pytest.raises(MobileGatewayPairingError) as denied:
+        store.claim_pairing(pairing_code=code, device_name='Old QR')
+    assert denied.value.reason == 'revoked'
+    assert store.authenticate_device(old_token, required_scopes=('view',)).device_id == claims[0]['device']['device_id']
+
+    audit = (mobile_dir / 'audit.jsonl').read_text(encoding='utf-8')
+    assert code not in audit
+    assert str(rotated['pairing_code']) not in audit
+    assert old_token not in audit
+
+
+def test_gateway_service_restart_reuses_persistent_handoff(tmp_path: Path) -> None:
+    first = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+    handoff = first.ensure_reusable_pairing_payload(
+        gateway_url='https://mobile.example.com',
+        route_provider='tailnet',
+    )
+    restarted = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+
+    restored = restarted.ensure_reusable_pairing_payload(
+        gateway_url='https://changed.example.com',
+        route_provider='lan',
+    )
+
+    assert restored['pairing_code'] == handoff['pairing_code']
+    assert restored['generation'] == handoff['generation']
+    assert restored['gateway_url'] == 'https://mobile.example.com'
+
+
+def test_device_presence_is_redacted_and_heartbeat_does_not_change_user_activity(tmp_path: Path) -> None:
+    service = _service(_FakeCcbdClient(), mobile_dir=tmp_path / 'mobile')
+    pairing = service.create_pairing_payload(gateway_url='http://127.0.0.1:8787')
+    _, claim = service.dispatch_post('/v1/pairing/claim', {'pairing_code': pairing['pairing_code']})
+    token = str(claim['device_token'])
+    headers = {'Authorization': f'Bearer {token}'}
+
+    _, first = service.dispatch_post('/v1/devices/me/presence', {
+        'visible': True,
+        'focused_project_id': 'proj-demo',
+        'focused_agent': 'mobile',
+        'terminal_id': 'term-demo',
+        'user_activity': True,
+    }, headers)
+    _, heartbeat = service.dispatch_post('/v1/devices/me/presence', {
+        'visible': True,
+        'focused_project_id': 'proj-demo',
+    }, headers)
+
+    assert first['presence']['last_user_activity_at'] == heartbeat['presence']['last_user_activity_at']
+    _, me = service.dispatch_get('/v1/devices/me', headers)
+    assert me['presence']['focused_agent'] == 'mobile'
+    stored = (tmp_path / 'mobile' / 'audit.jsonl').read_text(encoding='utf-8')
+    for secret in (token, str(pairing['pairing_code']), 'term-demo'):
+        assert secret not in stored
+
+
+def test_presence_expires_authoritatively_and_revoke_isolated_to_one_device(tmp_path: Path) -> None:
+    now = [datetime(2026, 7, 13, tzinfo=timezone.utc)]
+    store = MobileGatewayPairingStore(
+        tmp_path / 'mobile',
+        clock=lambda: now[0],
+        presence_ttl_seconds=90,
+    )
+    pairing = store.create_pairing_payload(
+        project_id='host-demo',
+        gateway_url='https://mobile.example.com',
+        route_provider='tailnet',
+        scopes=('view',),
+        expires_seconds=None,
+        reusable_claims=True,
+    )
+    first = store.claim_pairing(pairing_code=str(pairing['pairing_code']), device_name='Phone A')
+    second = store.claim_pairing(pairing_code=str(pairing['pairing_code']), device_name='Phone B')
+    first_id = str(first['device']['device_id'])
+    second_id = str(second['device']['device_id'])
+    first_presence = store.record_presence(
+        device_id=first_id,
+        visible=True,
+        focused_project_id='project-a',
+        focused_agent='agent-a',
+        user_activity=True,
+    )
+    now[0] += timedelta(seconds=1)
+    heartbeat = store.record_presence(device_id=first_id, visible=True)
+    assert heartbeat['last_user_activity_at'] == first_presence['last_user_activity_at']
+    store.record_presence(device_id=second_id, visible=True, focused_project_id='project-b')
+    now[0] += timedelta(seconds=91)
+
+    stale = store.presence_for_device(first_id)
+    assert stale is not None
+    assert stale['freshness'] == 'stale'
+    assert stale['visible'] is False
+    assert stale['focused_project_id'] == ''
+
+    store.revoke_device_locally(device_id=first_id)
+    assert store.presence_for_device(first_id) is None
+    second_presence = store.presence_for_device(second_id)
+    assert second_presence is not None
+    assert second_presence['freshness'] == 'stale'
 
 
 def test_host_local_device_revoke_lists_devices_and_revokes_terminal_handles(tmp_path: Path) -> None:

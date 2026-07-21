@@ -126,8 +126,11 @@ sidecar files referenced by source `config.toml`, such as
 `company-codex-api-key`, `company-codex.config.toml`, or other safe
 auth/key/token filenames at the source Codex home root. These sidecars and the
 `.ccb-auth-projection.json` evidence manifest are secret, agent-local startup
-material; they are refreshed during managed-home materialization, not while a
-running Codex process is hot-swapped.
+material. They are normally refreshed during managed-home materialization. If
+a dead managed Codex pane is classified as `provider_auth_revoked`, recovery
+may refresh only inherited auth files from the stable source Codex home before
+respawning; it must not refresh config, plugins, memory, skills, commands, or
+session authority in that recovery path.
 The managed `CODEX_HOME/AGENTS.md` file is a CCB-generated memory bundle, not user data; it
 combines filtered inheritable source-home `AGENTS.md`, project shared
 `.ccb/ccb_memory.md`, and agent-private `.ccb/agents/<agent>/memory.md` when
@@ -154,6 +157,10 @@ When `ccb` starts a managed Codex agent:
 - it must refresh only inheritable Codex config, auth, skills, commands,
   plugin-bundle, and memory projections into the managed home on each managed
   launch so source-home and project-memory updates become visible after restart
+- accepting an already live, identity-proven binding is not a managed launch and
+  must not re-project the Codex home underneath that running process; when
+  startup must launch or relaunch, it performs the managed-home refresh exactly
+  once before process creation
 - for Codex official-login auth with `inherit_auth=false` and no explicit API
   authority, it must leave an existing managed-home `auth.json` untouched rather
   than deleting it, because that file may be an agent-local ChatGPT login stream
@@ -230,6 +237,19 @@ Managed Codex session reading has exactly two modes:
   - must verify the bound path remains inside that agent's managed home
   - must not drift to a newer workspace session outside explicit rebinding logic
 
+Codex native subagent rollouts are never managed-agent session authority:
+
+- a rollout whose `session_meta.thread_source` is `subagent`, or whose
+  `session_meta.source` declares native subagent provenance, must be excluded
+  from bootstrap scans, watchdog binding, persisted binding updates, session
+  rotation, resume, and completion polling
+- this exclusion applies even when the subagent rollout is newer, has the same
+  workspace `cwd`, inherits the parent's conversation, or contains the same
+  `CCB_REQ_ID`
+- a legacy persisted binding that points at a native subagent rollout must be
+  treated as invalid evidence and recovered by scanning only top-level
+  rollouts inside the same agent-scoped managed home
+
 Binding logic must not use shared `work_dir` as the cross-agent reconciliation key.
 
 Asynchronous binding paths such as log watchdogs must also honor the managed home and must not rebind an already bound managed session to a different Codex conversation only because a newer workspace log appeared.
@@ -238,6 +258,14 @@ Managed readers must not widen their search to global `~/.codex/sessions`,
 even when they can see a request anchor there. A request anchor observed outside
 the managed home is a contract violation or legacy-leak diagnostic, not a
 completion source.
+
+For an accepted CCB job, the top-level Codex turn binding is immutable. The
+first matching top-level `task_started.turn_id` binds the turn; assistant and
+terminal events carrying another turn id must not update reply state or
+terminalize the job. Codex collaboration `agent_message` and
+`sub_agent_activity` records are internal provider evidence and must not enter
+the caller-visible reply buffer. Caller-visible completion may come only from
+the bound top-level turn's final assistant message or `task_complete`.
 
 Native in-pane Codex session switches are supported only through the managed
 session-switch boundary:
@@ -254,11 +282,19 @@ session-switch boundary:
   runtime generation
 - when a running job is visible, auto-commit additionally requires the candidate
   log to contain that job's request anchor
+- for an active wrapped job, a unique newer top-level candidate inside the same
+  agent-managed session root may be adopted by exact request-anchor ownership
+  even when `/clear` produced stale or changed `cwd` metadata; this exception
+  does not apply to idle discovery, subagent logs, external roots, ambiguous
+  candidates, or text matches that are not the exact request anchor
 - ambiguous candidates, missing anchors, external logs, and runtime mismatches
   must be recorded as switch diagnostics and must not change binding authority
 - the switch committer is the only code path allowed to update
   `codex_session_id`, `codex_session_path`, old-binding metadata, and persisted
   resume command fields for a native in-pane switch
+- switch persistence must be atomic and serialized across bridge/execution
+  writers; stale writers must not overwrite a newer binding, and transfer or
+  reader activation must occur only after durable persistence succeeds
 - `doctor --fix` may reuse the same switch committer as a fallback repair path,
   but doctor must not define a separate binding authority model
 
@@ -275,6 +311,23 @@ Runtime pane reuse is a separate proof obligation from session-file binding:
 - if the live process identity is missing, unknown, or proves a different/non-resume Codex command without a committed managed in-pane switch, startup must reject that pane as reusable evidence and relaunch through the normal managed start command
 - the persisted `start_cmd` or `codex_start_cmd` is desired launch authority, not proof that the current pane process was launched with that command
 - relaunch after identity mismatch must preserve the agent-scoped `codex_home`, derived `codex_session_root`, and bound `codex_session_id` so ordinary `ccb` restores history while `ccb -n` remains the explicit fresh-start path
+- after a dead pane reports revoked provider auth, recovery may respawn once
+  only when `inherit_auth=true`, the stable source-home `auth.json` is valid,
+  and its auth projection differs from the managed home
+- missing, invalid, same-path, or unchanged source auth must block pane respawn
+  and replacement-pane creation with an actionable error; recovery must not
+  loop on the same revoked credential
+- a blocked dead pane must persist `pane_recovery_block` in the managed session
+  record so heartbeat does not repeatedly capture the same crash or retry the
+  same credential; a successful live pane or a normal remount clears the block
+- ccbd must project `provider_auth_revoked` as runtime health
+  `provider-auth-revoked` with `reconcile_state=blocked`, preserve the
+  actionable login/remount detail in `last_failure_reason`, and stop both
+  background recovery and dispatcher start attempts until an explicit remount
+  replaces that authority; repeated heartbeat must not increase
+  `restart_count`
+- `inherit_auth=false` and explicit API authority must preserve their existing
+  agent-local credential boundary and must not be overwritten from global auth
 - when the current explicit agent-local Codex provider authority differs from
   the provider authority recorded for the last managed session, startup must
   skip `resume` and start a fresh Codex conversation inside the same managed

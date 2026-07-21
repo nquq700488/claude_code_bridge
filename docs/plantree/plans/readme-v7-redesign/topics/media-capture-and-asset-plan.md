@@ -13,10 +13,9 @@ Existing public media:
 
 - `assets/show.png`
 - `assets/demo.webp`
-- `assets/nvim.png`
 - `assets/readme_previews/video1.gif`
 - `assets/readme_previews/video2.gif`
-- `assets/weixin.jpg`
+- `assets/weixin.png`
 
 These assets should be preserved until replacement references are merged and
 reviewed. Do not delete old assets as part of planning.

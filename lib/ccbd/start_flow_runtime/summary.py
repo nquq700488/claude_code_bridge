@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ccbd.models import CcbdStartupAgentResult
 from cli.services.tmux_project_cleanup import ProjectTmuxCleanupSummary
@@ -15,6 +15,7 @@ class StartFlowSummary:
     cleanup_summaries: tuple[ProjectTmuxCleanupSummary, ...] = ()
     actions_taken: tuple[str, ...] = ()
     agent_results: tuple[CcbdStartupAgentResult, ...] = ()
+    timings_ms: dict[str, float] = field(default_factory=dict)
 
     def to_record(self) -> dict[str, object]:
         return {
@@ -34,6 +35,7 @@ class StartFlowSummary:
                 for item in self.cleanup_summaries
             ],
             'agent_results': [item.to_record() for item in self.agent_results],
+            'timings_ms': dict(self.timings_ms),
         }
 
 

@@ -1534,8 +1534,12 @@ def _wait_for_path(path: Path, timeout: float = 5.0) -> None:
             if path.suffix != '.sock':
                 return
             try:
-                CcbdClient(path, timeout_s=0.2).ping('ccbd')
-                return
+                payload = CcbdClient(path, timeout_s=0.2).ping('ccbd')
+                diagnostics = payload.get('diagnostics')
+                stage = diagnostics.get('startup_stage') if isinstance(diagnostics, dict) else None
+                if stage in {None, '', 'mounted'}:
+                    return
+                last_error = f'startup_stage={stage}'
             except CcbdClientError as exc:
                 last_error = str(exc)
         time.sleep(0.02)
@@ -5907,10 +5911,22 @@ def test_ccb_gemini_real_adapter_recovers_after_restart_rotate_and_waits_for_new
         else:
             raise AssertionError('expected old-session snapshot before restart')
 
-        running = _wait_for_phase2_status(project_root, 'demo', 'running')
-        assert f'job_id: {job_id}' in running
-        assert 'reply: old preview reply' in running
-        assert 'completion_reason: None' in running
+        deadline = time.time() + 3.0
+        last_stdout = ''
+        while time.time() < deadline:
+            code, running, stderr = _run_phase2_local(['pend', 'demo'], cwd=project_root)
+            assert code == 0, stderr
+            last_stdout = running
+            if (
+                f'job_id: {job_id}' in running
+                and 'status: running' in running
+                and 'reply: old preview reply' in running
+            ):
+                assert 'completion_reason: None' in running
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f'expected old-session preview before restart; last={last_stdout!r}')
 
         app1.request_shutdown()
         thread1.join(timeout=2)

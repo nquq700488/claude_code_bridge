@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 
 from completion.models import CompletionSourceKind
@@ -119,6 +120,145 @@ def test_poll_submission_processes_events_until_turn_boundary(monkeypatch) -> No
         ("user", "hello"),
         ("assistant", "done"),
     ]
+
+
+def test_poll_submission_recovers_anchored_round_result_from_idle_pane(monkeypatch) -> None:
+    submission = replace(_submission(), agent_name="ccb_round_reviewer")
+    batches = iter(
+        [
+            ([{"role": "user", "text": "CCB_REQ_ID: job_1"}], {"cursor": 1}),
+            ([], {"cursor": 2}),
+        ]
+    )
+
+    class Backend:
+        def get_pane_content(self, pane_id: str, lines: int = 120) -> str:
+            assert pane_id == "%1"
+            assert lines == 2000
+            return (
+                "CCB_REQ_ID:\n  job_old\n● round result: blocked\n"
+                "CCB_REQ_ID:\n  job_1\nround result: blocked\n"
+                "Thinking...\n● round result: pass\n"
+                "╭──────────╮\n│ >        │\n╰──────────╯\n? for shortcuts\n"
+            )
+
+    prepared = SimpleNamespace(reader=object(), backend=Backend(), pane_id="%1")
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.prepare_active_poll_without_liveness",
+        lambda submission, now: prepared,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.poll_exact_hook",
+        lambda submission, now: None,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.ensure_active_pane_alive",
+        lambda submission, backend, pane_id, now: None,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.read_events",
+        lambda reader, state: next(batches),
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.state_session_path",
+        lambda state: "",
+    )
+
+    result = poll_submission(None, submission, now="2026-04-06T00:00:01Z")
+
+    assert isinstance(result, ProviderPollResult)
+    assert result.decision is not None
+    assert result.decision.status.value == "completed"
+    assert result.decision.reason == "claude_idle_pane_round_result"
+    assert result.decision.reply == "round result: pass"
+    assert result.decision.diagnostics["completion_source"] == "idle_pane_round_result"
+
+
+def test_poll_submission_does_not_use_round_result_while_pane_is_busy(monkeypatch) -> None:
+    submission = replace(_submission(), agent_name="ccb_round_reviewer")
+    batches = iter(
+        [
+            ([{"role": "user", "text": "CCB_REQ_ID: job_1"}], {"cursor": 1}),
+            ([], {"cursor": 2}),
+        ]
+    )
+
+    class Backend:
+        def get_pane_content(self, pane_id: str, lines: int = 120) -> str:
+            assert lines == 2000
+            return "CCB_REQ_ID: job_1\n● round result: pass\nesc to interrupt"
+
+    prepared = SimpleNamespace(reader=object(), backend=Backend(), pane_id="%1")
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.prepare_active_poll_without_liveness",
+        lambda submission, now: prepared,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.poll_exact_hook",
+        lambda submission, now: None,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.ensure_active_pane_alive",
+        lambda submission, backend, pane_id, now: None,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.read_events",
+        lambda reader, state: next(batches),
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.state_session_path",
+        lambda state: "",
+    )
+
+    result = poll_submission(None, submission, now="2026-04-06T00:00:01Z")
+
+    assert isinstance(result, ProviderPollResult)
+    assert result.decision is None
+
+
+def test_poll_submission_does_not_treat_unmarked_prompt_result_as_assistant_output(monkeypatch) -> None:
+    submission = replace(_submission(), agent_name="ccb_round_reviewer")
+    batches = iter(
+        [
+            ([{"role": "user", "text": "CCB_REQ_ID: job_1"}], {"cursor": 1}),
+            ([], {"cursor": 2}),
+        ]
+    )
+
+    class Backend:
+        def get_pane_content(self, pane_id: str, lines: int = 120) -> str:
+            assert lines == 2000
+            return (
+                "CCB_REQ_ID: job_1\nround result: blocked\n"
+                "╭──────────╮\n│ >        │\n╰──────────╯\n? for shortcuts\n"
+            )
+
+    prepared = SimpleNamespace(reader=object(), backend=Backend(), pane_id="%1")
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.prepare_active_poll_without_liveness",
+        lambda submission, now: prepared,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.poll_exact_hook",
+        lambda submission, now: None,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.ensure_active_pane_alive",
+        lambda submission, backend, pane_id, now: None,
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.read_events",
+        lambda reader, state: next(batches),
+    )
+    monkeypatch.setattr(
+        "provider_backends.claude.execution_runtime.polling.state_session_path",
+        lambda state: "",
+    )
+
+    result = poll_submission(None, submission, now="2026-04-06T00:00:01Z")
+
+    assert isinstance(result, ProviderPollResult)
+    assert result.decision is None
 
 
 def test_poll_submission_returns_system_terminal_result(monkeypatch) -> None:

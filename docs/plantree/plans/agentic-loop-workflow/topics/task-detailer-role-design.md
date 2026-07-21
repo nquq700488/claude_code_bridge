@@ -18,8 +18,24 @@ still preserving stable summaries and links in plan-tree.
 
 `task_detailer` also owns task-local clarification. If it cannot safely refine
 the task without user input, it creates a clarification-needed artifact and the
-frontend or `frontdesk` notifies the user to continue with that same
-`task_detailer` instance.
+frontend or `frontdesk` notifies the user. The controller then reactivates
+`task_detailer` for the same task/detail thread with a fresh context rehydrated
+from durable clarification and detail artifacts.
+
+## Context Purity
+
+`task_detailer` is an immaculate (`无垢`) role. It may be resident or visible in
+V1 layouts for observability, but each refinement pass and each clarification
+continuation must be context-fresh. The detailer should receive artifact refs,
+task ids, source refs, and normalized answers from the controller; it should not
+rely on conversational memory from a prior task, a prior detail pass, or another
+user clarification.
+
+Freshness is a runtime requirement, not a prompt convention. The controller
+should use a new provider session, a unique detailer identity, or a proven
+clear/reset step before delivering the next ask, and should preserve evidence of
+that freshness. The durable continuity is the task/detail packet and
+clarification artifacts, not the detailer's chat history.
 
 ## Placement In The Workflow
 
@@ -87,6 +103,9 @@ Minimum output set:
 - `worker-handoff.md`: concise handoff suitable for orchestrator ask payloads.
 - `detail-readiness.json`: `ready`, `needs_clarification`, `blocked`, or
   `not_ready`.
+- `detail-global-impact.json`: mandatory compact result for the target
+  Decision 022 path. It records `none`, `bounded`, or `macro` impact on global
+  interfaces, dependencies, invariants, assumptions, and acceptance.
 - `brief-update-summary.json`: optional stable summary and detail links for
   planner to import into the plan brief or task document.
 - `macro-adjustment-request.json`: optional artifact used only when source or
@@ -126,6 +145,7 @@ When clarification is needed:
   "clarification_refs": [],
   "macro_adjustment_request_refs": [],
   "readiness_ref": "detail-readiness.json",
+  "global_impact_ref": "detail-global-impact.json",
   "readiness": "ready",
   "review_ref": null,
   "next_owner": "orchestrator",
@@ -153,6 +173,12 @@ uncertain. If clarification was needed, the JSON sidecars should preserve the
 question id, blocking reason, options, answer ref, normalized decision, and
 impact on the detail packet.
 
+Local detail readiness is not global execution readiness. The controller must
+validate `detail-global-impact.json` before handing the packet to orchestrator:
+`none` may pass deterministically, `bounded` may require integration review,
+and `macro` must return to planner. The current source does not yet implement
+this mandatory gate; it is an explicit Decision 022 landing requirement.
+
 ## V1 Detail Design Maintenance
 
 `task_detailer` may maintain task-scoped detail design docs for the selected
@@ -176,6 +202,7 @@ Rules:
 - link detail docs from the detail packet manifest;
 - return a compact `brief-update-summary.json` or equivalent stable summary
   for planner import;
+- always return `detail-global-impact.json`, even when its result is `none`;
 - do not turn detail docs into a second roadmap or long-lived planner memory;
 - release or clear the short-lived detailer context after artifacts are
   imported, linked, blocked, or handed to clarification.
@@ -218,6 +245,12 @@ Rules:
   defers the request through script-owned state;
 - never treat a request as an accepted roadmap or decision change.
 
+Decision 029 makes delivery explicit: the Detailer uses one restricted direct
+`ask Planner --silence` capability with a versioned replan envelope. It cannot
+target other roles, wait, chain, or write Planner-owned PlanTree files. The
+script layer validates task revision and digest, persists exact-once intent,
+and prevents execution from continuing on the superseded bundle.
+
 ## Task-Local Clarification
 
 Clarification stays inside `task_detailer` in V1.
@@ -233,6 +266,8 @@ task_detailer -> continue refinement
 Rules:
 
 - Ask only questions that block task-local refinement.
+- Route the answer back to the same task/detail packet, not necessarily the
+  same provider conversation.
 - Prefer options and concrete tradeoffs over broad open-ended questions.
 - Record raw answer refs when the host provides them.
 - Normalize the answer into a stable summary before continuing.

@@ -15,7 +15,7 @@ def write_ask_usage(
         print("", file=out)
     print("Usage:", file=out)
     print(
-        f"  {command_name} [--compact] [--silence] [--chain] [--callback] [--notify-sender] [--artifact-request] [--artifact-reply] <target> [--] <message...>",
+        f"  {command_name} [--compact] [--silence] [--chain] [--callback] [--notify-sender] [--artifact-request] [--inline-request] [--artifact-reply] <target> [--] <message...>",
         file=out,
     )
     print("      --compact request a distilled reply that preserves key information", file=out)
@@ -24,6 +24,7 @@ def write_ask_usage(
     print("      --callback route the result back as a new task to the current agent", file=out)
     print("      --notify-sender request a completion notice to the sender agent inbox when the target agent finishes", file=out)
     print("      --artifact-request force the request body into a CCB text artifact", file=out)
+    print("      --inline-request keep the request body inline and disable automatic artifact spill", file=out)
     print("      --artifact-reply force the final reply into a CCB text artifact", file=out)
     print("      --artifact-io enable both --artifact-request and --artifact-reply", file=out)
     print("      nested asks from active tasks must use --chain or --silence", file=out)

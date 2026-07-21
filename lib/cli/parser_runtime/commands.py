@@ -11,6 +11,7 @@ from cli.models import (
     ParsedConfigUiCommand,
     ParsedConfigValidateCommand,
     ParsedDoctorCommand,
+    ParsedFrontdeskCommand,
     ParsedInboxCommand,
     ParsedKillCommand,
     ParsedLayoutCommand,
@@ -112,6 +113,45 @@ def parse_mobile(tokens: list[str], *, project: str | None, error_type) -> Parse
         listen=str(namespace.listen),
         public_url=public_url or None,
         route_provider=str(namespace.route_provider),
+    )
+
+
+def parse_frontdesk(
+    tokens: list[str],
+    *,
+    project: str | None,
+    read_optional_stdin,
+    error_type,
+) -> ParsedFrontdeskCommand:
+    if not tokens:
+        raise error_type('frontdesk requires one of: forward-planner')
+    action = str(tokens[0] or '').strip().lower()
+    if action != 'forward-planner':
+        raise error_type('frontdesk only supports: forward-planner')
+    parser = argparse.ArgumentParser(prog='ccb frontdesk forward-planner', add_help=False)
+    parser.add_argument('--plan', dest='plan_slug', default=None)
+    parser.add_argument('--request-id', default=None)
+    parser.add_argument('--file', dest='file_path', default=None)
+    parser.add_argument('--intake-base64', dest='intake_base64', default=None)
+    parser.add_argument('--json', dest='json_output', action='store_true')
+    namespace = parse_args(
+        parser,
+        tokens[1:],
+        error_message='invalid frontdesk forward-planner command',
+        error_type=error_type,
+    )
+    stdin_text = read_optional_stdin()
+    file_path = str(namespace.file_path).strip() if namespace.file_path is not None else None
+    intake_base64 = str(namespace.intake_base64).strip() if namespace.intake_base64 is not None else None
+    return ParsedFrontdeskCommand(
+        project=project,
+        action=action,
+        plan_slug=str(namespace.plan_slug).strip() if namespace.plan_slug is not None else None,
+        request_id=str(namespace.request_id).strip() if namespace.request_id is not None else None,
+        file_path=file_path or None,
+        intake_base64=intake_base64 or None,
+        intake_text=stdin_text,
+        json_output=bool(namespace.json_output),
     )
 
 
@@ -556,6 +596,7 @@ def parse_plan(tokens: list[str], *, project: str | None, error_type) -> ParsedP
         parser.add_argument('--task', required=True)
         parser.add_argument('--kind', required=True)
         parser.add_argument('--file', required=True)
+        parser.add_argument('--route', default=None)
         parser.add_argument('--json', dest='json_output', action='store_true')
         namespace = parse_args(parser, rest, error_message='invalid plan task-artifact command', error_type=error_type)
         return ParsedPlanTaskCommand(
@@ -564,12 +605,15 @@ def parse_plan(tokens: list[str], *, project: str | None, error_type) -> ParsedP
             task_id=str(namespace.task),
             artifact_kind=str(namespace.kind),
             file_path=str(namespace.file),
+            route=str(namespace.route) if namespace.route is not None else None,
             json_output=bool(namespace.json_output),
         )
     if action == 'task-status':
         parser = argparse.ArgumentParser(prog='ccb plan task-status', add_help=False)
         parser.add_argument('--task', required=True)
         parser.add_argument('--status', required=True)
+        parser.add_argument('--next-owner', default=None)
+        parser.add_argument('--activation-reason', default=None)
         parser.add_argument('--json', dest='json_output', action='store_true')
         namespace = parse_args(parser, rest, error_message='invalid plan task-status command', error_type=error_type)
         return ParsedPlanTaskCommand(
@@ -577,6 +621,8 @@ def parse_plan(tokens: list[str], *, project: str | None, error_type) -> ParsedP
             action=action,
             task_id=str(namespace.task),
             status=str(namespace.status),
+            next_owner=str(namespace.next_owner) if namespace.next_owner is not None else None,
+            activation_reason=str(namespace.activation_reason) if namespace.activation_reason is not None else None,
             json_output=bool(namespace.json_output),
         )
     if action == 'task-bind-loop':
@@ -689,13 +735,19 @@ def _parse_loop_run_once(tokens: list[str], *, project: str | None, error_type) 
         raise error_type('loop run-once requires --task or --task-id')
     if namespace.task is not None and namespace.task_id is not None:
         raise error_type('loop run-once cannot combine --task and --task-id')
+    task_value = _non_empty_task_id(
+        namespace.task if namespace.task is not None else namespace.task_id,
+        option='--task' if namespace.task is not None else '--task-id',
+        command='loop run-once',
+        error_type=error_type,
+    )
     if namespace.task is not None and namespace.loop_id is None:
         raise error_type('loop run-once --task requires --loop-id')
     return ParsedLoopRunOnceCommand(
         project=project,
         loop_id=str(namespace.loop_id) if namespace.loop_id is not None else None,
-        task=str(namespace.task) if namespace.task is not None else None,
-        task_id=str(namespace.task_id) if namespace.task_id is not None else None,
+        task=task_value if namespace.task is not None else None,
+        task_id=task_value if namespace.task_id is not None else None,
         worker_profile=str(namespace.worker_profile),
         reviewer_profile=str(namespace.reviewer_profile),
         orchestrator=str(namespace.orchestrator),
@@ -708,21 +760,63 @@ def _parse_loop_run_once(tokens: list[str], *, project: str | None, error_type) 
 def _parse_loop_runner(tokens: list[str], *, project: str | None, error_type) -> ParsedLoopRunnerCommand:
     parser = argparse.ArgumentParser(prog='ccb loop runner', add_help=False)
     parser.add_argument('--once', action='store_true')
+    parser.add_argument('--auto', action='store_true')
+    parser.add_argument('--task', default=None)
+    parser.add_argument('--task-id', default=None)
+    parser.add_argument('--plan', default=None)
+    parser.add_argument('--job', dest='role_job_id', default=None)
+    parser.add_argument('--wait-job', dest='wait_job_id', default=None)
     parser.add_argument('--timeout', type=float, default=None)
+    parser.add_argument('--max-steps', type=int, default=24)
+    parser.add_argument('--poll-interval', type=float, default=2.0)
     parser.add_argument('--consume-role-output', action='store_true')
     parser.add_argument('--json', dest='json_output', action='store_true')
     namespace = parse_args(parser, tokens, error_message='invalid loop runner command', error_type=error_type)
-    if not bool(namespace.once):
-        raise error_type('loop runner currently requires --once')
+    if bool(namespace.once) == bool(namespace.auto):
+        raise error_type('loop runner requires exactly one of --once or --auto')
+    if namespace.task is not None and namespace.task_id is not None:
+        raise error_type('loop runner cannot combine --task and --task-id')
     if namespace.timeout is not None and float(namespace.timeout) <= 0:
         raise error_type('loop runner --timeout must be positive')
+    if int(namespace.max_steps) <= 0:
+        raise error_type('loop runner --max-steps must be positive')
+    if float(namespace.poll_interval) < 0:
+        raise error_type('loop runner --poll-interval must be non-negative')
+    if bool(namespace.once) and str(namespace.wait_job_id or '').strip():
+        raise error_type('loop runner --wait-job requires --auto')
+    if bool(namespace.consume_role_output) and not str(namespace.role_job_id or '').strip():
+        raise error_type('loop runner --consume-role-output requires --job <job_id>')
+    if namespace.role_job_id is not None and not bool(namespace.consume_role_output):
+        raise error_type('loop runner --job requires --consume-role-output')
+    requested_task_id = None
+    if namespace.task is not None or namespace.task_id is not None:
+        requested_task_id = _non_empty_task_id(
+            namespace.task if namespace.task is not None else namespace.task_id,
+            option='--task' if namespace.task is not None else '--task-id',
+            command='loop runner',
+            error_type=error_type,
+        )
     return ParsedLoopRunnerCommand(
         project=project,
-        once=True,
+        once=bool(namespace.once),
+        auto=bool(namespace.auto),
+        task_id=requested_task_id,
+        plan_slug=str(namespace.plan) if namespace.plan is not None else None,
+        role_job_id=str(namespace.role_job_id) if namespace.role_job_id is not None else None,
+        wait_job_id=str(namespace.wait_job_id).strip() if namespace.wait_job_id is not None else None,
         timeout_s=float(namespace.timeout) if namespace.timeout is not None else None,
+        max_steps=int(namespace.max_steps),
+        poll_interval_s=float(namespace.poll_interval),
         consume_role_output=bool(namespace.consume_role_output),
         json_output=bool(namespace.json_output),
     )
+
+
+def _non_empty_task_id(value, *, option: str, command: str, error_type) -> str:
+    task_id = str(value or '').strip()
+    if not task_id:
+        raise error_type(f'{command} {option} requires a non-empty task id')
+    return task_id
 
 
 def _parse_agent_spec_token(
@@ -957,9 +1051,35 @@ def parse_doctor(tokens: list[str], *, project: str | None, error_type) -> Parse
 
 
 def parse_config(tokens: list[str], *, project: str | None, error_type):
-    if tokens == ['validate']:
-        return ParsedConfigValidateCommand(project=project)
-    if tokens[:1] == ['ui']:
+    if not tokens:
+        raise error_type('config supports: validate, effective, migrate, ui')
+    action = str(tokens[0]).strip().lower()
+    if action in {'validate', 'effective'}:
+        parser = argparse.ArgumentParser(prog=f'ccb config {action}', add_help=False)
+        parser.add_argument('--json', dest='json_output', action='store_true')
+        namespace = parse_args(
+            parser,
+            tokens[1:],
+            error_message=f'invalid config {action} command',
+            error_type=error_type,
+        )
+        return ParsedConfigValidateCommand(project=project, action=action, json_output=bool(namespace.json_output))
+    if action == 'migrate':
+        parser = argparse.ArgumentParser(prog='ccb config migrate', add_help=False)
+        parser.add_argument('--to', dest='to_version', type=int, required=True)
+        parser.add_argument('--dry-run', dest='dry_run', action='store_true')
+        parser.add_argument('--json', dest='json_output', action='store_true')
+        namespace = parse_args(parser, tokens[1:], error_message='invalid config migrate command', error_type=error_type)
+        if not namespace.dry_run:
+            raise error_type('config migrate requires --dry-run; automatic writes are not supported')
+        return ParsedConfigValidateCommand(
+            project=project,
+            action='migrate',
+            json_output=bool(namespace.json_output),
+            to_version=int(namespace.to_version),
+            dry_run=True,
+        )
+    if action == 'ui':
         parser = argparse.ArgumentParser(prog='ccb config ui', add_help=False)
         parser.add_argument('--no-open', dest='no_open', action='store_true')
         parser.add_argument('--port', type=int, default=0)
@@ -976,7 +1096,7 @@ def parse_config(tokens: list[str], *, project: str | None, error_type):
             no_open=bool(namespace.no_open),
             port=int(namespace.port),
         )
-    raise error_type('config only supports: ccb config validate or ccb config ui')
+    raise error_type('config supports: validate, effective, migrate, ui')
 
 
 def parse_reload(tokens: list[str], *, project: str | None, error_type) -> ParsedReloadCommand:
@@ -999,6 +1119,7 @@ __all__ = [
     'parse_cleanup',
     'parse_config',
     'parse_doctor',
+    'parse_frontdesk',
     'parse_inbox',
     'parse_kill',
     'parse_logs',

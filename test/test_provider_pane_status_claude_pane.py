@@ -62,3 +62,27 @@ def test_claude_pane_reports_scheduled_task_as_tool_running() -> None:
 
     assert status.state == "tool_running"
     assert status.reason == "claude_pane_scheduled_task_running"
+
+
+def test_claude_pane_ignores_nonfatal_auto_update_failure_footer() -> None:
+    status = parse_claude_pane_status(
+        "round result: pass\n"
+        "╭──────────╮\n"
+        "│ >        │\n"
+        "╰──────────╯\n"
+        "? for shortcuts  Bypassing Permissions\n"
+        "✗ Auto-update failed · Try claude doctor\n"
+    )
+
+    assert status.state == "unknown"
+    assert status.reason == "no_known_status_pattern"
+
+
+def test_claude_pane_still_reports_real_failure_with_auto_update_footer() -> None:
+    status = parse_claude_pane_status(
+        "Provider request failed\n"
+        "✗ Auto-update failed · Try claude doctor\n"
+    )
+
+    assert status.state == "api_error"
+    assert status.reason == "provider_api_error"

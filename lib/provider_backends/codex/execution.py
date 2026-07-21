@@ -6,9 +6,9 @@ from pathlib import Path
 from ccbd.system import parse_utc_timestamp
 from ccbd.api_models import JobRecord
 from completion.models import CompletionConfidence, CompletionDecision, CompletionItemKind, CompletionStatus
-from provider_backends.codex.comm_runtime.binding import extract_cwd_from_log_file, extract_session_id
-from provider_backends.codex.comm_runtime.pathing import normalize_work_dir
-from provider_core.protocol import REQ_ID_PREFIX, request_anchor_for_job, wrap_codex_turn_prompt
+from provider_backends.codex.comm_runtime.binding import extract_session_id, is_codex_subagent_log
+from provider_backends.codex.session_switch import SwitchCandidate, select_exact_anchor_candidate, write_rebound
+from provider_core.protocol import request_anchor_for_job, wrap_codex_turn_prompt
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import build_item, request_anchor_from_runtime_state
 from provider_execution.reliability import CompletionReliabilityPolicy
@@ -26,6 +26,7 @@ from .session_runtime.follow_policy import codex_session_root_path, should_follo
 
 class CodexProviderAdapter:
     provider = 'codex'
+    restart_resume_supported = True
     completion_reliability_policy = CompletionReliabilityPolicy(
         provider='codex',
         primary_authority='protocol_log',
@@ -52,15 +53,20 @@ class CodexProviderAdapter:
         delivery_failure = _delivery_acceptance_guard(submission, now=now)
         if delivery_failure is not None:
             return delivery_failure
+        if _quarantined_anchor_fallback_pending(submission.runtime_state):
+            return ProviderPollResult(submission=submission)
         result = _poll_submission(submission, now=now)
         if result is not None:
             updated_submission = _record_delivery_progress(result.submission, now=now)
             if updated_submission is not result.submission:
-                return ProviderPollResult(
+                result = ProviderPollResult(
                     submission=updated_submission,
                     items=result.items,
                     decision=result.decision,
                 )
+            reply_delivery_result = _reply_delivery_accepted_result(result, now=now)
+            if reply_delivery_result is not None:
+                return reply_delivery_result
         if result is None and submission is not original_submission:
             return ProviderPollResult(submission=submission)
         return result
@@ -93,6 +99,9 @@ class CodexProviderAdapter:
             'delivery_confirmed_at': submission.runtime_state.get('delivery_confirmed_at'),
             'delivery_failure_kind': submission.runtime_state.get('delivery_failure_kind'),
             'delivery_failed_at': submission.runtime_state.get('delivery_failed_at'),
+            'reply_delivery_complete_on_dispatch': submission.runtime_state.get(
+                'reply_delivery_complete_on_dispatch'
+            ),
         }
 
     def resume(
@@ -118,11 +127,14 @@ class CodexProviderAdapter:
 def _reader_factory(session, preferred_log: Path | None):
     work_dir = Path(session.work_dir)
     default_log = Path(session.codex_session_path).expanduser() if session.codex_session_path else None
+    selected_log = preferred_log if preferred_log is not None else default_log
+    invalid_subagent_binding = selected_log is not None and is_codex_subagent_log(selected_log)
     kwargs: dict[str, object] = {
-        "log_path": preferred_log if preferred_log is not None else default_log,
-        "session_id_filter": session.codex_session_id or None,
+        "log_path": None if invalid_subagent_binding else selected_log,
+        "session_id_filter": None if invalid_subagent_binding else (session.codex_session_id or None),
         "work_dir": work_dir,
-        "follow_workspace_sessions": should_follow_workspace_sessions(
+        "follow_workspace_sessions": invalid_subagent_binding
+        or should_follow_workspace_sessions(
             work_dir=work_dir,
             session_file=getattr(session, "session_file", None),
             session_data=getattr(session, "data", None),
@@ -135,6 +147,11 @@ def _reader_factory(session, preferred_log: Path | None):
 
 
 def _locked_reader_for_log(session, log_path: Path, *, work_dir: Path) -> CodexLogReader | None:
+    try:
+        if not log_path.is_file():
+            return None
+    except OSError:
+        return None
     session_id = extract_session_id(log_path)
     if not session_id:
         return None
@@ -163,6 +180,8 @@ def _refresh_reader_for_current_session_binding(submission: ProviderSubmission) 
     current_log = _current_session_log(session)
     if current_log is None or not current_log.exists():
         return submission
+    if is_codex_subagent_log(current_log):
+        return submission
 
     current_log_str = _normalized_path_string(current_log)
     poll_state = dict(state.get('state') or {})
@@ -186,7 +205,7 @@ def _refresh_reader_for_current_session_binding(submission: ProviderSubmission) 
                 session_id=str(state.get('codex_anchor_fallback_session_id') or ''),
             )
 
-        anchor_fallback = _anchor_fallback_log(
+        anchor_fallback = _anchor_fallback_candidate(
             submission,
             state=state,
             poll_state=poll_state,
@@ -195,12 +214,26 @@ def _refresh_reader_for_current_session_binding(submission: ProviderSubmission) 
             current_log=current_log,
         )
         if anchor_fallback is not None:
-            reader = _locked_reader_for_log(session, anchor_fallback, work_dir=work_dir)
+            if (
+                _locked_reader_for_log(session, anchor_fallback.path, work_dir=work_dir) is not None
+                and _commit_exact_anchor_fallback_rebind(session, anchor_fallback)
+            ):
+                rebound = _submission_with_locked_reader(
+                    submission,
+                    state=state,
+                    poll_state=poll_state,
+                    session=session,
+                    work_dir=work_dir,
+                    log_path=anchor_fallback.path,
+                    fallback=False,
+                )
+                if rebound is not None:
+                    return rebound
             return _submission_with_anchor_fallback_diagnostics(
                 submission,
                 state=state,
-                log_path=anchor_fallback,
-                session_id=str(getattr(reader, '_session_id_filter', '') or '') if reader is not None else '',
+                log_path=anchor_fallback.path,
+                session_id=anchor_fallback.session_id,
             )
         return submission
 
@@ -225,6 +258,8 @@ def _refresh_reader_for_current_session_binding(submission: ProviderSubmission) 
 def _record_delivery_progress(submission: ProviderSubmission, *, now: str) -> ProviderSubmission:
     state = dict(submission.runtime_state)
     if not _delivery_progress_tracking_required(state):
+        return submission
+    if _quarantined_anchor_fallback_pending(state):
         return submission
 
     marker, progress_kind = _delivery_progress_marker(submission, state)
@@ -255,6 +290,49 @@ def _record_delivery_progress(submission: ProviderSubmission, *, now: str) -> Pr
     else:
         updated_state.pop('delivery_session_missing_since', None)
     return replace(submission, runtime_state=updated_state)
+
+
+def _reply_delivery_accepted_result(
+    result: ProviderPollResult,
+    *,
+    now: str,
+) -> ProviderPollResult | None:
+    state = dict(result.submission.runtime_state)
+    if not bool(state.get('reply_delivery_complete_on_dispatch')):
+        return None
+    if not bool(state.get('anchor_seen')):
+        return None
+
+    request_anchor = request_anchor_from_runtime_state(state, fallback=result.submission.job_id)
+    updated = replace(
+        result.submission,
+        runtime_state={
+            **state,
+            'delivery_state': 'accepted',
+            'delivery_confirmed_at': str(state.get('delivery_confirmed_at') or now),
+        },
+    )
+    source_cursor = result.items[-1].cursor if result.items else None
+    decision = CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.COMPLETED,
+        reason='reply_delivery_sent',
+        confidence=CompletionConfidence.OBSERVED,
+        reply='',
+        anchor_seen=True,
+        reply_started=False,
+        reply_stable=True,
+        provider_turn_ref=request_anchor or result.submission.job_id,
+        source_cursor=source_cursor,
+        finished_at=now,
+        diagnostics={
+            'reply_delivery': True,
+            'delivery_status': 'accepted',
+            'provider': result.submission.provider,
+            'submission_mode': str(state.get('mode') or 'active'),
+        },
+    )
+    return ProviderPollResult(submission=updated, items=result.items, decision=decision)
 
 
 def _delivery_progress_tracking_required(state: dict[str, object]) -> bool:
@@ -330,6 +408,13 @@ def _delivery_acceptance_guard(submission: ProviderSubmission, *, now: str) -> P
     if not str(state.get('delivery_target_pane_id') or '').strip():
         return None
 
+    # The shared selector has already proved an exact active-job anchor in a
+    # newer managed-root log.  Let protocol polling consume that authority
+    # instead of terminalizing the stale official binding at its old timeout.
+    fallback_quarantined = _quarantined_anchor_fallback_pending(state)
+    if _active_anchor_fallback_log(state) is not None and not fallback_quarantined:
+        return None
+
     failure_kind = _delivery_failure_kind(state, submission=submission, now=now)
     if not failure_kind:
         return None
@@ -362,7 +447,7 @@ def _delivery_acceptance_guard(submission: ProviderSubmission, *, now: str) -> P
     checked_root = codex_session_root_path(getattr(session, 'data', None))
 
     poll_state = dict(state.get('state') or {})
-    if not _current_log_is_drained(current_log, poll_state.get('offset')):
+    if not fallback_quarantined and not _current_log_is_drained(current_log, poll_state.get('offset')):
         return None
 
     return _delivery_failure_result(
@@ -680,7 +765,19 @@ def _active_anchor_fallback_log(state: dict[str, object]) -> Path | None:
     return path if path.is_file() else None
 
 
-def _anchor_fallback_log(
+def _quarantined_anchor_fallback_pending(state: dict[str, object]) -> bool:
+    if str(state.get('mode') or '').strip().lower() != 'active':
+        return False
+    if bool(state.get('anchor_seen') or state.get('no_wrap')):
+        return False
+    if str(state.get('delivery_state') or '').strip() != 'pending_anchor':
+        return False
+    return bool(state.get('codex_anchor_fallback_quarantined')) and bool(
+        str(state.get('codex_anchor_fallback_log') or '').strip()
+    )
+
+
+def _anchor_fallback_candidate(
     submission: ProviderSubmission,
     *,
     state: dict[str, object],
@@ -688,7 +785,7 @@ def _anchor_fallback_log(
     session,
     work_dir: Path,
     current_log: Path,
-) -> Path | None:
+) -> SwitchCandidate | None:
     if bool(state.get('anchor_seen') or state.get('no_wrap')):
         return None
     if _current_log_has_unread_data(current_log, poll_state.get('offset')):
@@ -696,35 +793,75 @@ def _anchor_fallback_log(
     request_anchor = request_anchor_from_runtime_state(state, fallback=submission.job_id)
     if not request_anchor:
         return None
-    root = codex_session_root_path(getattr(session, 'data', None))
-    if root is None or not root.is_dir():
-        return None
-    target_work_dir = normalize_work_dir(work_dir)
-    if not target_work_dir:
-        return None
+    data = dict(getattr(session, 'data', None) or {})
+    data.setdefault('work_dir', str(work_dir))
+    data.setdefault('codex_session_path', str(current_log))
+    return select_exact_anchor_candidate(
+        data,
+        session_file=getattr(session, 'session_file', None),
+        request_anchor=request_anchor,
+    )
 
-    current_path = _normalized_resolved_path(current_log)
-    matches: list[Path] = []
+
+def _commit_exact_anchor_fallback_rebind(session, candidate: SwitchCandidate) -> bool:
+    update = getattr(session, 'update_codex_log_binding', None)
+    if not callable(update):
+        return False
+    data_before = _session_data_copy(session)
+    before = _session_binding_snapshot(getattr(session, 'data', None))
+    old_session_id, old_session_path = before
     try:
-        candidates = sorted(root.glob('**/*.jsonl'))
-    except OSError:
+        update(
+            log_path=str(candidate.path),
+            session_id=candidate.session_id,
+            post_write_validate=lambda: candidate.path.is_file(),
+        )
+    except Exception:
+        _restore_session_data(session, data_before)
+        return False
+    after = _session_binding_snapshot(getattr(session, 'data', None))
+    if after == before:
+        return False
+    write_rebound(
+        _session_runtime_dir(session),
+        candidate=candidate,
+        old_session_id=old_session_id,
+        old_session_path=old_session_path,
+        reason='exact_request_anchor_fallback',
+    )
+    return True
+
+
+def _session_data_copy(session) -> dict[str, object] | None:
+    data = getattr(session, 'data', None)
+    return dict(data) if isinstance(data, dict) else None
+
+
+def _restore_session_data(session, data_before: dict[str, object] | None) -> None:
+    data = getattr(session, 'data', None)
+    if data_before is None or not isinstance(data, dict):
+        return
+    data.clear()
+    data.update(data_before)
+
+
+def _session_binding_snapshot(data: object) -> tuple[str, str]:
+    source = data if isinstance(data, dict) else {}
+    return (
+        str(source.get('codex_session_id') or '').strip(),
+        str(source.get('codex_session_path') or '').strip(),
+    )
+
+
+def _session_runtime_dir(session) -> Path | None:
+    data = getattr(session, 'data', None)
+    raw = data.get('runtime_dir') if isinstance(data, dict) else None
+    if not raw:
         return None
-    for candidate in candidates:
-        if not candidate.is_file():
-            continue
-        if _normalized_resolved_path(candidate) == current_path:
-            continue
-        if not _log_matches_work_dir(candidate, target_work_dir):
-            continue
-        if not extract_session_id(candidate):
-            continue
-        if _log_contains_request_anchor(candidate, request_anchor):
-            matches.append(candidate)
-            if len(matches) > 1:
-                return None
-    if len(matches) != 1:
+    try:
+        return Path(str(raw)).expanduser()
+    except Exception:
         return None
-    return matches[0]
 
 
 def _current_log_has_unread_data(log_path: Path, offset: object) -> bool:
@@ -743,28 +880,6 @@ def _current_log_is_drained(log_path: Path, offset: object) -> bool:
         return log_path.stat().st_size <= offset
     except OSError:
         return False
-
-
-def _log_matches_work_dir(log_path: Path, target_work_dir: str) -> bool:
-    raw = extract_cwd_from_log_file(log_path)
-    if not raw:
-        return False
-    try:
-        return normalize_work_dir(Path(raw).expanduser()) == target_work_dir
-    except Exception:
-        return False
-
-
-def _log_contains_request_anchor(log_path: Path, request_anchor: str) -> bool:
-    needle = f'{REQ_ID_PREFIX} {request_anchor}'
-    try:
-        with log_path.open('r', encoding='utf-8-sig', errors='ignore') as handle:
-            for line in handle:
-                if needle in line:
-                    return True
-    except OSError:
-        return False
-    return False
 
 
 def _normalized_resolved_path(value: object) -> str:

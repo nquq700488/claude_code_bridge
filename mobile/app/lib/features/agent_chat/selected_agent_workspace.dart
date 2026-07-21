@@ -30,6 +30,7 @@ import 'selected_agent_workspace_view.dart';
 
 const agentMessageMaxAttachments = 5;
 const agentMessageMaxAttachmentBytes = 25 * 1024 * 1024;
+const agentMessageMaxDownloadBytes = 128 * 1024 * 1024;
 const selectedAgentTabKeyBytes = [9];
 const selectedAgentEscapeKeyBytes = [27];
 const selectedAgentExpandScrollDuration = Duration(milliseconds: 220);
@@ -595,30 +596,34 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   }) async {
     final controller = _draftController(agent.name);
     final body = controller.text;
-    if (body.isEmpty) {
+    final attachments = _draftAttachments(agent.name);
+    if (body.trim().isEmpty && attachments.isEmpty) {
       await _sendPaneKey(agent, bytes: bytes, label: label);
       return;
     }
-    final outcome = await _paneMessageSubmitter.sendTextThenKey(
-      transport: widget.terminalTransport,
+    if (!widget.sendEnabled || widget.view.namespaceEpoch == null) {
+      _showSnack(widget.sendDisabledReason ?? 'Refresh target before sending');
+      return;
+    }
+    await _messageSubmitCoordinator.send(
       agent: agent,
-      view: widget.view,
-      refreshView: widget.onRefreshView,
       body: body,
-      bytes: bytes,
+      attachments: attachments,
+      view: widget.view,
+      repository: widget.repository,
+      terminalTransport: widget.terminalTransport,
+      usePaneInput: true,
+      paneSubmitBytes: bytes,
+      refreshView: widget.onRefreshView,
+      onAccepted: () {
+        controller.clear();
+        _uiControllers.clearDraftAttachments(agent.name);
+        _localExceptionStatusAgentNames.remove(agent.name);
+        _recentPaneOutputText.remove(agent.name);
+        _markAwaitingPaneResponse(agent.name);
+        widget.onProjectActivity?.call();
+      },
     );
-    if (!mounted || widget.agent?.name != agent.name) {
-      return;
-    }
-    if (!outcome.sent) {
-      _showSnack('Could not send $label: ${outcome.error}');
-      return;
-    }
-    setState(() {
-      controller.clear();
-      _markAwaitingPaneResponse(agent.name);
-    });
-    _refreshLatest(agent.name);
   }
 
   Future<void> _pickAttachments({
@@ -629,10 +634,6 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       final result = await FilePicker.pickFiles(
         allowMultiple: true,
         type: type,
-        allowedExtensions:
-            type == FileType.custom
-                ? const ['pdf', 'txt', 'md', 'doc', 'docx']
-                : null,
       );
       if (result == null || result.files.isEmpty) {
         return;
@@ -755,8 +756,8 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         }
         return downloadedPath;
       }
-      if (attachment.sizeBytes > agentMessageMaxAttachmentBytes) {
-        _showSnack('${attachment.fileName} is larger than 25 MB');
+      if (attachment.sizeBytes > agentMessageMaxDownloadBytes) {
+        _showSnack('${attachment.fileName} is larger than 128 MB');
         return null;
       }
       if (_downloadingAttachmentIds.contains(attachment.fileId)) {
@@ -770,9 +771,9 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         agentName: agent.name,
         fileId: attachment.fileId,
       );
-      if (bytes.length > agentMessageMaxAttachmentBytes) {
+      if (bytes.length > agentMessageMaxDownloadBytes) {
         if (_isCurrentAgentSelection(projectId: projectId, agent: agent)) {
-          _showSnack('${attachment.fileName} is larger than 25 MB');
+          _showSnack('${attachment.fileName} is larger than 128 MB');
         }
         return null;
       }
@@ -1197,7 +1198,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
             onPickFileAttachment: () {
               _pickAttachments(
                 agentName: selectedAgent.name,
-                type: FileType.custom,
+                type: FileType.any,
               );
             },
             onRemoveAttachment: (localId) {
@@ -1305,6 +1306,11 @@ String? _mimeTypeForExtension(String? extension) {
     'heic' => 'image/heic',
     'heif' => 'image/heif',
     'bmp' => 'image/bmp',
+    'mp4' || 'm4v' => 'video/mp4',
+    'mov' => 'video/quicktime',
+    'webm' => 'video/webm',
+    'mkv' => 'video/x-matroska',
+    'avi' => 'video/x-msvideo',
     'pdf' => 'application/pdf',
     'txt' => 'text/plain',
     'md' => 'text/markdown',

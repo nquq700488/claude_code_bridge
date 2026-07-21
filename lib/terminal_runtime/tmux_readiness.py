@@ -14,6 +14,9 @@ _TMUX_TRANSIENT_SERVER_ERROR_MARKERS = (
 _TMUX_ABSENT_SERVER_ERROR_MARKERS = (
     'no server running',
 )
+_TMUX_ABSENT_SOCKET_ERROR_MARKER_PAIRS = (
+    ('error connecting to', 'no such file or directory'),
+)
 _TMUX_MISSING_SESSION_ERROR_MARKERS = (
     "can't find session",
     'session not found',
@@ -150,7 +153,9 @@ def is_tmux_absent_server_text(text: str) -> bool:
     normalized = str(text or '').strip().lower()
     if not normalized:
         return False
-    return any(marker in normalized for marker in _TMUX_ABSENT_SERVER_ERROR_MARKERS)
+    if any(marker in normalized for marker in _TMUX_ABSENT_SERVER_ERROR_MARKERS):
+        return True
+    return any(all(marker in normalized for marker in pair) for pair in _TMUX_ABSENT_SOCKET_ERROR_MARKER_PAIRS)
 
 
 def is_tmux_missing_session_text(text: str) -> bool:

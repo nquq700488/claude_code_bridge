@@ -14,6 +14,9 @@ class FakeTerminalScreen extends StatefulWidget {
     required this.projectId,
     this.agentName,
     this.windowName,
+    this.expectedNamespaceEpoch,
+    this.expectedWindowName,
+    this.expectedPaneId,
     this.terminalTransport,
     this.gatewayTerminal = false,
     super.key,
@@ -26,6 +29,9 @@ class FakeTerminalScreen extends StatefulWidget {
   final String projectId;
   final String? agentName;
   final String? windowName;
+  final int? expectedNamespaceEpoch;
+  final String? expectedWindowName;
+  final String? expectedPaneId;
   final TerminalTransport? terminalTransport;
   final bool gatewayTerminal;
 
@@ -48,6 +54,17 @@ class _FakeTerminalScreenState extends State<FakeTerminalScreen> {
         widget.agentName != null
             ? view.terminalTargetForAgent(widget.agentName!)
             : view.terminalTargetForWindow(widget.windowName!);
+    if (widget.agentName != null &&
+        (widget.expectedNamespaceEpoch != null &&
+                target.namespaceEpoch != widget.expectedNamespaceEpoch ||
+            widget.expectedWindowName != null &&
+                target.window != widget.expectedWindowName ||
+            widget.expectedPaneId != null &&
+                target.paneId != widget.expectedPaneId)) {
+      throw StateError(
+        'Project view is stale. Refresh and open terminal again.',
+      );
+    }
     return _FakeTerminalModel(view: view, target: target);
   }
 
@@ -62,7 +79,9 @@ class _FakeTerminalScreenState extends State<FakeTerminalScreen> {
             title: Text(model?.title ?? widget.agentName ?? widget.windowName!),
           ),
           body:
-              model == null
+              snapshot.hasError
+                  ? Center(child: Text('${snapshot.error}'))
+                  : model == null
                   ? const Center(child: CircularProgressIndicator())
                   : AgentTerminalPane(
                     view: model.view,

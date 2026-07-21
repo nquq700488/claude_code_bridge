@@ -15,6 +15,7 @@ import rolepacks.agent_roles_manager as agent_roles_manager
 import rolepacks.sources as role_sources
 from agents.config_loader import load_project_config
 from cli.entrypoint import run_cli_entrypoint
+from cli.services.role_command_policy import load_role_command_policy
 from project_memory import load_memory_sources
 from provider_profiles.codex_home_config import materialize_codex_home_config
 from rolepacks.manifest import RoleManifestError, load_role_manifest
@@ -1389,6 +1390,177 @@ print(json.dumps({{
     assert load_installed_role('agentroles.archi') is not None
     assert (tmp_path / '.roles' / 'installed' / 'agentroles.archi' / 'install.json').is_file()
     assert not (tmp_path / 'xdg-data' / 'ccb' / 'roles' / 'agentroles.archi' / 'install.json').exists()
+
+
+def test_source_test_roles_install_uses_source_checkout_draft_rolepacks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'xdg-data'))
+    monkeypatch.setenv('AGENT_ROLES_STORE', str(tmp_path / '.roles'))
+    monkeypatch.setenv('CCB_TEST_ENTRYPOINT', '1')
+
+    required_roles = (
+        'agentroles.ccb_frontdesk',
+        'agentroles.ccb_planner',
+        'agentroles.ccb_orchestrator',
+        'agentroles.ccb_task_detailer',
+        'agentroles.ccb_round_reviewer',
+        'agentroles.coder',
+        'agentroles.code_reviewer',
+    )
+    installed_contract_markers = {
+        'agentroles.ccb_orchestrator': (
+            'skills/orchestration-bundle-candidate/SKILL.md',
+            'ccb.loop.orchestration_bundle_candidate.v1',
+        ),
+        'agentroles.ccb_task_detailer': (
+            'templates/detail-packet.md',
+            'global impact: none|bounded|macro',
+        ),
+        'agentroles.ccb_round_reviewer': (
+            'templates/round-result.md',
+            'project-root verification evidence',
+        ),
+        'agentroles.coder': (
+            'templates/node-work-result.md',
+            'canonical node work packet',
+        ),
+        'agentroles.code_reviewer': (
+            'templates/node-check-result.md',
+            'exact node workspace',
+        ),
+    }
+
+    for role_id in required_roles:
+        payload = install_role(role_id, with_tools=False)
+        role = load_installed_role(role_id)
+        metadata = json.loads(
+            (tmp_path / '.roles' / 'installed' / role_id / 'install.json').read_text(
+                encoding='utf-8',
+            )
+        )
+
+        assert payload['role_status'] == 'installed'
+        assert payload['role_id'] == role_id
+        assert role is not None
+        assert role.id == role_id
+        assert metadata['source'] == 'path'
+        assert metadata['source_path'].endswith(
+            f'docs/plantree/plans/agentic-loop-workflow/drafts/{role_id}'
+        )
+        assert metadata['version'] == role.version
+        assert metadata['digest'] == f'sha256:{tree_digest(role.root)}'
+        assert str(tmp_path / '.roles' / 'installed') in payload['path']
+        if role_id in installed_contract_markers:
+            relative_path, marker = installed_contract_markers[role_id]
+            installed_contract = role.root / relative_path
+            assert installed_contract.is_file()
+            assert marker.lower() in installed_contract.read_text(encoding='utf-8').lower()
+
+
+def test_frontdesk_rolepack_forbids_direct_project_artifact_implementation() -> None:
+    role_root = (
+        REPO_ROOT
+        / 'docs'
+        / 'plantree'
+        / 'plans'
+        / 'agentic-loop-workflow'
+        / 'drafts'
+        / 'agentroles.ccb_frontdesk'
+    )
+    role = load_role_manifest(role_root)
+    policy = load_role_command_policy(role)
+    role_permissions = role.table('permissions')
+    frontdesk_text = '\n'.join(
+        (
+            (role_root / 'memory.md').read_text(encoding='utf-8'),
+            (role_root / 'adapters' / 'ccb' / 'memory.md').read_text(encoding='utf-8'),
+            (role_root / 'skills' / 'frontdesk-intake' / 'SKILL.md').read_text(encoding='utf-8'),
+        )
+    ).lower()
+
+    assert role_permissions['write_files'] is False
+    assert policy is not None
+    assert policy.mode == 'deny_all_except'
+    assert policy.enforcement == 'required'
+    assert policy.generic_shell is False
+    assert policy.generic_ccb is False
+    assert policy.allowed_effects == ('planner_silence_handoff',)
+    assert policy.provider_tools == (('codex', 'ccb_frontdesk_ask_planner'),)
+    assert len(policy.allowed) == 1
+    assert policy.allowed[0].argv_prefix == (
+        'ask',
+        '--silence',
+        '--compact',
+        '--inline-request',
+        '--task-id',
+    )
+    assert policy.allowed[0].required_args == ('act-frontdesk-<request-id>', 'planner')
+    assert {'project_artifact_write', 'file_write', 'shell_exec', 'implementation'} <= set(policy.forbidden_effects)
+    assert 'create `docs/runtime-retest-a.md`' in frontdesk_text
+    assert 'do not create or verify that' in frontdesk_text
+    assert '**intake evidence**' in frontdesk_text
+    assert 'controller validates and deduplicates' in frontdesk_text
+    assert 'every user turn must pass this gate' in frontdesk_text
+    assert 'choose `planner_handoff`' in frontdesk_text
+    assert 'ask --silence --compact --inline-request' in frontdesk_text
+    assert 'ccb_frontdesk_ask_planner' in frontdesk_text
+    assert '--task-id act-frontdesk-<request-id> planner' in frontdesk_text
+    assert "<<'EOF'" not in frontdesk_text
+
+
+def test_task_detailer_rolepack_forbids_generic_commands_and_allows_only_planner_replan() -> None:
+    root = (
+        REPO_ROOT
+        / 'docs'
+        / 'plantree'
+        / 'plans'
+        / 'agentic-loop-workflow'
+        / 'drafts'
+        / 'agentroles.ccb_task_detailer'
+    )
+    role = load_role_manifest(root)
+    policy = load_role_command_policy(role)
+
+    assert role.table('permissions')['write_files'] is False
+    assert policy is not None
+    assert policy.generic_shell is False
+    assert policy.generic_ccb is False
+    assert policy.supported_providers == ('codex', 'claude')
+    assert policy.provider_tools == (('codex', 'ccb_task_detailer_replan_planner'),)
+    assert policy.allowed_effects == ('detailer_planner_replan_handoff',)
+    assert len(policy.allowed) == 1
+
+
+def test_round_reviewer_rolepack_is_a_readless_reply_only_command_surface() -> None:
+    root = (
+        REPO_ROOT
+        / 'docs'
+        / 'plantree'
+        / 'plans'
+        / 'agentic-loop-workflow'
+        / 'drafts'
+        / 'agentroles.ccb_round_reviewer'
+    )
+    role = load_role_manifest(root)
+    policy = load_role_command_policy(role)
+
+    assert role.table('permissions')['read_files'] is False
+    assert role.table('permissions')['write_files'] is False
+    assert role.table('adapters')['ccb']['command_surface'] == 'adapters/ccb/command-surface.toml'
+    assert policy is not None
+    assert policy.mode == 'deny_all_except'
+    assert policy.enforcement == 'required'
+    assert policy.if_unsupported == 'fail_mount'
+    assert policy.supported_providers == ('codex', 'claude')
+    assert policy.generic_shell is False
+    assert policy.generic_ccb is False
+    assert policy.allowed_effects == ('semantic_round_review_reply',)
+    assert policy.allowed == ()
+    assert {'file_read', 'file_write', 'test_exec', 'ask', 'authority_mutation'} <= set(
+        policy.forbidden_effects
+    )
 
 
 def test_legacy_ccb_store_migrates_to_spec_owned_store(tmp_path: Path, monkeypatch) -> None:

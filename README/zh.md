@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.1.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -180,9 +180,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.1.3 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.2.1 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.1.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.1.3/ccb-mobile-v8.1.3.apk)
+- [下载 CCB Mobile v8.2.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -250,7 +250,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.jpg" alt="微信群" width="240">
+  <img src="../assets/weixin.png" alt="微信群" width="240">
 </p>
 
 <a id="community"></a>
@@ -264,6 +264,53 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 <a id="release-notes"></a>
 
 ## 新版本记录
+
+<details open>
+<summary><b>v8.2.1</b> - 确定性启动、可操作的认证恢复与 Android 后台连接</summary>
+
+- 增加端到端启动代际栅栏、有限就绪证明，以及启动操作量和时间线诊断。
+- 对不可恢复的 Provider 认证失败停止无效重启，并通过 ping、project view 和 sidebar 显示登录操作。
+- 在更严格的 lifecycle 权威模型下保持增量 reload 身份校验和 shutdown 幂等行为。
+- 增加用户主动启用的 Android 后台连接控制，并保证每个 Agent 只保留一个 working reply 状态。
+- 将 Linux、macOS、npm 和签名 Android APK 的版本统一到 8.2.1。
+
+</details>
+
+<details>
+<summary><b>v8.2.0</b> - 启动提速、Provider 修复与 Mobile 稳定性</summary>
+
+- 减少 ccbd 启动关键路径的重复工作，同时保留 lifecycle 和 ownership 校验。
+- 修复 Grok fullscreen 启动冲突、Claude 凭据类型保持，以及 Config UI 模型和思考强度保存后退回继承值的问题。
+- 保持 Codex ask 传输与目标 session 绑定，并阻止已接受的空传输确认被无限重新排队。
+- 改进 Mobile 恢复、对话和终端交互、图片/文档/视频附件、主机文件下载与设备绑定 FCM 推送。
+- 将 Linux、macOS、npm 和签名 Android APK 的版本统一到 8.2.0。
+
+</details>
+
+<details>
+<summary><b>v8.1.6</b> - 已撤回</summary>
+
+- 已被后续版本替代，详细说明不再保留。
+
+</details>
+
+<details>
+<summary><b>v8.1.5</b> - 已撤回</summary>
+
+- 该版本已撤回并被替代，详细说明不再保留。
+
+</details>
+
+<details open>
+<summary><b>v8.1.4</b> - Codex subagent 隔离与 Grok 原生 skills</summary>
+
+- 阻止 Codex 原生 subagent rollout 抢占 CCB 请求绑定，也不能替换权威父会话和父 turn。
+- 内置 subagent 的活动、消息和完成事件只留在父 agent 的协作流程内，不再返回给 CCB caller。
+- Python runtime 与 Rust accelerator 使用相同隔离规则，并通过真实登录态 `spawn_agent` 回归确认 caller 只收到父 agent 最终回复。
+- 为每个受管 Grok home 独立注入原生 `ask` 与 `ccb-clear` skills，并且只开放这两个命令所需的精确权限。
+- 启动前刷新继承的系统 Grok 登录态，并通过每个 agent 的可见原生 Grok 会话处理 CCB 请求；双 Grok 真实测试已通过可见 ask、结果回收、指定目标 clear 和 clear 后隔离验证。
+
+</details>
 
 <details open>
 <summary><b>v8.1.3</b> - Mobile 交互可靠性与 Grok 完成判定</summary>

@@ -39,6 +39,12 @@ EXCLUDES = {
     ".pytest_cache",
     ".mypy_cache",
     ".venv",
+    ".dart_tool",
+    ".gradle",
+    ".idea",
+    "build",
+    "dist-mobile",
+    "node_modules",
     "target",
     # Maintainer-only utilities are versioned in git but must not ship in release tarballs.
     "dev_tools",
@@ -65,6 +71,13 @@ def main_for_target(target_platform: str) -> int:
     use_git_ref_source = is_git_checkout(REPO_ROOT) and not args.allow_dirty
     version = resolve_version(REPO_ROOT, git_ref=args.git_ref if use_git_ref_source else None)
     commit, commit_date = resolve_git_metadata(REPO_ROOT, git_ref=args.git_ref if is_git_checkout(REPO_ROOT) else None)
+    validate_release_identity(
+        REPO_ROOT,
+        version=version,
+        commit=commit,
+        git_ref=args.git_ref if use_git_ref_source else None,
+        release_manifest=args.release_manifest,
+    )
     artifact_basename = release_artifact_basename(target_platform, machine=platform.machine())
     if not artifact_basename:
         raise RuntimeError(
@@ -132,6 +145,11 @@ def parse_args(*, target_platform: str) -> argparse.Namespace:
         action="store_true",
         help="allow building from the current dirty worktree for local preview only",
     )
+    parser.add_argument(
+        "--release-manifest",
+        type=Path,
+        help="local release manifest used to reject an already assigned version before building",
+    )
     return parser.parse_args()
 
 
@@ -171,6 +189,63 @@ def resolve_git_metadata(repo_root: Path, *, git_ref: str | None = None) -> tupl
     commit = run_git(repo_root, ["log", "-1", "--format=%h", resolved_ref])
     commit_date = run_git(repo_root, ["log", "-1", "--format=%cs", resolved_ref])
     return commit or None, commit_date or None
+
+
+def validate_release_identity(
+    repo_root: Path,
+    *,
+    version: str,
+    commit: str | None,
+    git_ref: str | None = None,
+    release_manifest: Path | None = None,
+) -> None:
+    package_text = (
+        read_git_file(repo_root, git_ref=git_ref, relative_path="package.json")
+        if git_ref and is_git_checkout(repo_root)
+        else (repo_root / "package.json").read_text(encoding="utf-8")
+    )
+    try:
+        package_version = str(json.loads(package_text).get("version") or "").strip()
+    except (json.JSONDecodeError, OSError) as exc:
+        raise RuntimeError(f"unable to read package version: {exc}") from exc
+    if not version or package_version != version:
+        raise RuntimeError(
+            f"release identity mismatch: VERSION is {version or 'missing'} but package.json is {package_version or 'missing'}"
+        )
+    if not commit:
+        raise RuntimeError("release identity requires an exact Git commit")
+    if is_git_checkout(repo_root):
+        tagged_commit = run_git(repo_root, ["rev-parse", "--short", f"v{version}^{{commit}}"])
+        if tagged_commit and tagged_commit != commit:
+            raise RuntimeError(
+                f"release identity collision: Git tag v{version} resolves to different commit {tagged_commit}"
+            )
+    if release_manifest is not None:
+        _reject_manifest_version_collision(release_manifest, version=version, commit=commit)
+
+
+def _reject_manifest_version_collision(release_manifest: Path, *, version: str, commit: str) -> None:
+    try:
+        payload = json.loads(release_manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"unable to read release manifest {release_manifest}: {exc}") from exc
+    if isinstance(payload, dict):
+        entries = payload.get("releases", [payload])
+    else:
+        entries = payload
+    if not isinstance(entries, list):
+        raise RuntimeError(f"release manifest {release_manifest} must contain a release list")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("version") or "").strip() != version:
+            continue
+        recorded_commit = str(entry.get("commit") or "").strip()
+        if recorded_commit and recorded_commit != commit:
+            raise RuntimeError(
+                f"release identity collision: manifest already records v{version} for build {recorded_commit}"
+            )
+        raise RuntimeError(f"release identity collision: manifest already records v{version}")
 
 
 def run_git(repo_root: Path, args: list[str]) -> str:
@@ -687,6 +762,7 @@ __all__ = [
     "run_git",
     "should_ignore_copy_relpath",
     "utc_now",
+    "validate_release_identity",
     "write_release_metadata",
     "write_sha256",
 ]

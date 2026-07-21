@@ -19,9 +19,9 @@ void main() {
     expect(outcome.snackMessage, isNull);
   });
 
-  test('paired null focused view does not navigate', () {
+  test('paired null view does not navigate', () {
     final outcome = projectHomeGatewayTerminalNavigation(
-      focusedView: null,
+      view: null,
       agentName: 'lead',
       hasTerminalTransport: true,
     );
@@ -31,9 +31,9 @@ void main() {
     expect(outcome.snackMessage, isNull);
   });
 
-  test('paired focused view without transport returns exact snack', () {
+  test('paired view without transport returns exact snack', () {
     final outcome = projectHomeGatewayTerminalNavigation(
-      focusedView: _viewWithProjectId('proj-focused'),
+      view: _viewWithProjectId('proj-focused'),
       agentName: 'lead',
       hasTerminalTransport: false,
     );
@@ -43,9 +43,9 @@ void main() {
     expect(outcome.snackMessage, 'Gateway terminal transport is not ready');
   });
 
-  test('paired focused view with transport uses focused project id', () {
+  test('paired view with transport retains agent pane identity', () {
     final outcome = projectHomeGatewayTerminalNavigation(
-      focusedView: _viewWithProjectId('proj-focused'),
+      view: _viewWithProjectId('proj-focused'),
       agentName: 'mobile',
       hasTerminalTransport: true,
     );
@@ -54,12 +54,15 @@ void main() {
     expect(outcome.spec?.projectId, 'proj-focused');
     expect(outcome.spec?.agentName, 'mobile');
     expect(outcome.spec?.gatewayTerminal, isTrue);
+    expect(outcome.spec?.namespaceEpoch, 4);
+    expect(outcome.spec?.windowName, 'main');
+    expect(outcome.spec?.paneId, '%2');
     expect(outcome.snackMessage, isNull);
   });
 
   test('paired decision uses bool instead of owning transport object', () {
     final outcome = projectHomeGatewayTerminalNavigation(
-      focusedView: _viewWithProjectId('proj-focused'),
+      view: _viewWithProjectId('proj-focused'),
       agentName: 'lead',
       hasTerminalTransport: true,
     );

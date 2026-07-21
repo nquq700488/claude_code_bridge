@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from ccbd.models_runtime.common import CcbdModelError
@@ -32,6 +33,11 @@ class CcbdStartupAgentResult:
     runtime_pid: int | None = None
     runtime_root: str | None = None
     failure_reason: str | None = None
+    binding_reject_reason: str | None = None
+    duration_ms: float | None = None
+    provider_prepare_ms: float | None = None
+    provider_prepare_count: int = 0
+    timings_ms: dict[str, float] | None = None
 
     def __post_init__(self) -> None:
         if self.agent_name == '':
@@ -65,6 +71,11 @@ class CcbdStartupAgentResult:
             'runtime_pid': self.runtime_pid,
             'runtime_root': self.runtime_root,
             'failure_reason': self.failure_reason,
+            'binding_reject_reason': self.binding_reject_reason,
+            'duration_ms': self.duration_ms,
+            'provider_prepare_ms': self.provider_prepare_ms,
+            'provider_prepare_count': self.provider_prepare_count,
+            'timings_ms': dict(self.timings_ms or {}),
         }
 
     def summary_token(self) -> str:
@@ -95,7 +106,33 @@ class CcbdStartupAgentResult:
             runtime_pid=coerce_int(record.get('runtime_pid')),
             runtime_root=clean_text(record.get('runtime_root')),
             failure_reason=clean_text(record.get('failure_reason')),
+            binding_reject_reason=clean_text(record.get('binding_reject_reason')),
+            duration_ms=_coerce_float(record.get('duration_ms')),
+            provider_prepare_ms=_coerce_float(record.get('provider_prepare_ms')),
+            provider_prepare_count=max(0, coerce_int(record.get('provider_prepare_count')) or 0),
+            timings_ms=_clean_timings(record.get('timings_ms')),
         )
+
+
+def _coerce_float(value: object) -> float | None:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(parsed):
+        return None
+    return max(0.0, parsed)
+
+
+def _clean_timings(value: object) -> dict[str, float]:
+    if not isinstance(value, dict):
+        return {}
+    timings: dict[str, float] = {}
+    for key, raw_value in value.items():
+        parsed = _coerce_float(raw_value)
+        if parsed is not None:
+            timings[str(key)] = parsed
+    return timings
 
 
 __all__ = ['CcbdStartupAgentResult']

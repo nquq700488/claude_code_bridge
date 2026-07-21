@@ -51,6 +51,22 @@ def test_namespace_topology_plan_projects_sidebar_outside_user_layout(monkeypatc
     )
 
 
+def test_namespace_topology_plan_retains_legacy_cmd_as_a_distinct_topology_leaf() -> None:
+    config = ProjectConfig(
+        version=2,
+        default_agents=('agent1',),
+        agents={'agent1': _spec('agent1', 'codex')},
+        cmd_enabled=True,
+        layout_spec='cmd; agent1:codex',
+    )
+
+    plan = build_namespace_topology_plan(config)
+
+    assert plan.windows[0].user_layout == 'cmd; agent1:codex'
+    assert plan.windows[0].agent_names == ('agent1',)
+    assert plan.windows[0].realized_layout == 'sidebar; (cmd; agent1:codex)'
+
+
 def test_namespace_topology_plan_projects_right_sidebar_after_user_layout() -> None:
     config = ProjectConfig(
         version=2,
@@ -115,22 +131,22 @@ def test_namespace_topology_plan_includes_tool_window_without_agent_names(monkey
         agents={'agent1': _spec('agent1', 'codex')},
         layout_spec='agent1:codex',
         windows=(WindowSpec(name='main', order=0, layout_spec='agent1:codex', agent_names=('agent1',)),),
-        tool_windows=(ToolWindowSpec(name='neovim', order=0, command='ccb-nvim'),),
+        tool_windows=(ToolWindowSpec(name='files', order=0, command='ccb-workbench files'),),
         entry_window='main',
     )
 
     plan = build_namespace_topology_plan(config, ccbd_socket_path='/tmp/ccbd.sock', project_root='/repo')
 
-    assert [window.name for window in plan.windows] == ['main', 'neovim']
+    assert [window.name for window in plan.windows] == ['main', 'files']
     tool = plan.windows[1]
     assert tool.kind == 'tool'
-    assert tool.label == 'neovim'
-    assert tool.command == 'ccb-nvim'
+    assert tool.label == 'files'
+    assert tool.command == 'ccb-workbench files'
     assert tool.agent_names == ()
-    assert tool.user_layout == 'ccb-nvim'
+    assert tool.user_layout == 'ccb-workbench files'
     assert tool.realized_layout == 'sidebar; (tool)'
     assert tool.sidebar is not None
-    assert tool.sidebar.launch_args[-2:] == ('--pane-window', 'neovim')
+    assert tool.sidebar.launch_args[-2:] == ('--pane-window', 'files')
 
 
 def test_namespace_topology_plan_keeps_rich_alias_inside_agent_window() -> None:

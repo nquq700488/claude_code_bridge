@@ -2,6 +2,57 @@
 
 Date: 2026-06-24
 
+## Current Release Track
+
+- F1/R1 and the generalized one-node G1 kernel landed in `0c2f19ef`.
+  Direct evidence is in
+  [history/single-lane-r1-authority-runtime-closure-20260711.md](history/single-lane-r1-authority-runtime-closure-20260711.md).
+- C1 Config V3 and P1 adaptive RolePack projection are integrated in
+  `6c2a15ad`/`fcf07b3a` and `615460ec`/`95d9a409`. Direct evidence is in
+  [history/single-lane-wave1-config-rolepack-closure-20260711.md](history/single-lane-wave1-config-rolepack-closure-20260711.md).
+- Wave 2 R2/T1/E1 is integrated through `c64ab341`; direct evidence is in
+  [history/single-lane-wave2-git-topology-evidence-closure-20260711.md](history/single-lane-wave2-git-topology-evidence-closure-20260711.md).
+- Wave 3 G3 is integrated through `94ea6d73`; direct evidence is in
+  [history/single-lane-wave3-g3-scheduler-closure-20260711.md](history/single-lane-wave3-g3-scheduler-closure-20260711.md).
+- G5 direct source/fake acceptance is integrated through `b42ec3b2`; direct
+  evidence is in
+  [history/single-lane-g5-source-fake-acceptance-20260711.md](history/single-lane-g5-source-fake-acceptance-20260711.md).
+- Decision 027 replaces controller-relayed Reviewer/rework messages with one
+  restricted Worker-owned review chain while preserving controller-owned
+  authority and integration.
+- Decision 027 and its visible two-workgroup Codex baseline now pass. Evidence
+  is in
+  [history/g6-worker-owned-review-chain-real-provider-20260712.md](history/g6-worker-owned-review-chain-real-provider-20260712.md).
+- Decision 028 replaces Controller-observed Frontdesk replies with one
+  Frontdesk-authored `ask --silence` to Planner. Controller retains only
+  schema/idempotency/activation/runner mechanics. The source boundary and a
+  fresh visible two-workgroup real-provider run now pass, including genuine
+  bounded Reviewer rework in both groups. A follow-up long-root run also
+  proves no successful-silence caller delivery, mounted-lease socket authority,
+  project-root authority refs for isolated Workers, compact inline round
+  evidence, and zero final dynamic residue. Evidence is in
+  [history/decision028-frontdesk-direct-handoff-real-provider-20260712.md](history/decision028-frontdesk-direct-handoff-real-provider-20260712.md).
+- Decision 029 implementation is integrated through `d941fa2e`: Detailer
+  returns macro drift directly to Planner through one restricted silent ask;
+  script-owned task-set authority aggregates final child outcomes; Planner
+  updates Roadmap/Brief/TODO under revision fencing and sends one completion
+  status to Frontdesk. P5 direct acceptance remains active. See
+  [decisions/029-planner-feedback-and-task-set-closure.md](decisions/029-planner-feedback-and-task-set-closure.md)
+  and
+  [topics/planner-feedback-and-task-set-closure-plan.md](topics/planner-feedback-and-task-set-closure-plan.md).
+- Current-main source acceptance is complete at `2c936a48`. The first fresh
+  Codex/Claude lanes then exposed a production Phase2 service-wiring defect;
+  the minimal repair landed as `62753d63`, and its pinned short-path regression
+  gate passed all 83 Phase2 tests with zero residue. Evidence is in
+  [history/g6d-phase2-wiring-real-provider-diagnostic-20260714.md](history/g6d-phase2-wiring-real-provider-diagnostic-20260714.md).
+  The same rejected lanes exposed a P0 Planner permission defect: the readless
+  RolePack retained file-backed skills and both providers exposed forbidden
+  tools. Provider hard enforcement, strict reply parsing, RolePack refreeze,
+  and zero-tool behavior tests now precede fresh C1/C2/C3. See
+  [history/g6e-planner-readless-provider-projection-diagnostic-20260714.md](history/g6e-planner-readless-provider-projection-diagnostic-20260714.md).
+  Exact weaker-model repetition and G7 installed-candidate gates follow only
+  after those fresh lanes pass.
+
 ## Done
 
 - Accepted the product direction that `frontdesk` should be reduced to user
@@ -27,8 +78,11 @@ Date: 2026-06-24
   while short-lived `agentroles.ccb_task_detailer` performs source-backed task
   refinement only when orchestrator triage returns `needs_detail`. It owns
   task-local clarification and hands a detailed execution packet back to
-  orchestrator. `ccb_frontdesk` or the frontend only notifies the user where
-  to clarify; V1 does not need a separate task-local clarification role. See
+  orchestrator. The Decision 022 target additionally requires every detail
+  pass to emit a compact global-impact result so local readiness cannot bypass
+  planner-owned architecture, dependency, invariant, or acceptance checks.
+  `ccb_frontdesk` or the frontend only notifies the user where to clarify; V1
+  does not need a separate task-local clarification role. See
   [topics/task-detailer-role-design.md](topics/task-detailer-role-design.md)
   and
   [decisions/015-task-detailer-owns-task-refinement-and-clarification.md](decisions/015-task-detailer-owns-task-refinement-and-clarification.md).
@@ -55,7 +109,7 @@ Date: 2026-06-24
   [decisions/018-planner-uses-plan-brief.md](decisions/018-planner-uses-plan-brief.md).
 - Accepted the orchestrator-triage boundary: planner hands macro task packets
   to orchestrator, orchestrator chooses `direct_execution`, `needs_detail`,
-  `macro_adjustment_blocked`, or `blocked`, and `task_detailer` is only
+  `macro_adjustment_request`, or `blocked`, and `task_detailer` is only
   activated for `needs_detail`. See
   [decisions/019-orchestrator-triage-before-task-detailer.md](decisions/019-orchestrator-triage-before-task-detailer.md).
 - Accepted the non-goal that CCB should not copy Trellis' implicit subagent
@@ -91,10 +145,70 @@ Date: 2026-06-24
   `docs/plantree/plans/<plan-slug>/tasks/<task-id>/`, runtime loop lists live
   under `.ccb/runtime/loops/`, and scripts own all authoritative status,
   index, phase, owner, node, branch, ask, and round writes.
-- Accepted the orchestrator boundary: it is an ask-activated semantic
-  dispatcher that analyzes task complexity, chooses 1-4 nodes, slices work,
-  constrains `ask` dispatch, requests runtime capacity, and aggregates results.
-  It must not directly reload, unload, kill, or write runtime authority.
+- Accepted the post-V1 parallel roadmap direction: Plan Tree should represent
+  serial dependencies, parallel branches, scope conflicts, priorities, joins,
+  and integration gates in a script-validated Roadmap Graph. Workflow Lane is
+  the concurrent execution unit. One global planner remains the default graph
+  writer; multiple planners are deferred until measured planning throughput
+  requires disjoint plan-root or lane-scoped writers. Code changes use isolated
+  lane worktrees and join through combined verification, while Plan Tree stays
+  one durable control plane. See
+  [topics/parallel-roadmap-lanes-and-planner-authority.md](topics/parallel-roadmap-lanes-and-planner-authority.md)
+  and
+  [decisions/023-roadmap-graph-and-workflow-lanes.md](decisions/023-roadmap-graph-and-workflow-lanes.md).
+- Accepted the cross-worktree Plan Tree consistency refinement: one repository
+  control domain uses committed portfolio identity, local repository identity,
+  one explicit locator, and one generation/fenced holder to publish a serialized
+  authority target ref. Lane worktrees use immutable typed authority closures
+  and revision-fenced proposals. Code plus an explicit Plan Tree
+  `promotion_pending` record first form one hidden candidate; target promotion,
+  final Plan Tree completion, and event publication then advance through a
+  recoverable saga. Shared lane runtime is projected into Markdown only at
+  stable checkpoints. See
+  [decisions/031-global-plan-tree-authority-across-worktrees.md](decisions/031-global-plan-tree-authority-across-worktrees.md)
+  and
+  [topics/global-plan-tree-authority-and-cross-worktree-control.md](topics/global-plan-tree-authority-and-cross-worktree-control.md).
+  Canonical task and typed Planner projection cutover is isolated in
+  [topics/global-plan-tree-storage-and-projection-migration.md](topics/global-plan-tree-storage-and-projection-migration.md).
+  Fault-injection acceptance is frozen in
+  [topics/global-plan-tree-cross-worktree-acceptance-matrix.md](topics/global-plan-tree-cross-worktree-acceptance-matrix.md).
+  The requested Claude coworker review accepted the architecture with small
+  clarifications; all findings are incorporated and dispositioned in
+  [history/global-plan-tree-claude-coworker-review-20260715.md](history/global-plan-tree-claude-coworker-review-20260715.md).
+- Accepted a CCB-only Plan Tree skill boundary for Config V3 workflows. The
+  public skill remains unchanged outside the workflow. Only the exact
+  `version=3` / `agentic-loop` / `agentic_loop_v1` Planner Role receives a
+  complete specialized `plan-tree` replacement in its managed provider home.
+  The replacement is proposal-only, digest-bound to the Planner Role and
+  permission surface, and cannot activate deferred Roadmap Graph/lane fields
+  without a controller capability envelope. See
+  [topics/ccb-workflow-plan-tree-skill-overlay.md](topics/ccb-workflow-plan-tree-skill-overlay.md).
+- Accepted the single-lane Planner feedback and task-set closure boundary:
+  local Detailer results return to Orchestrator, macro-impact findings return
+  directly to Planner, decomposition is not macro completion, mixed child
+  outcomes aggregate deterministically, and one revision-fenced Planner
+  backfill precedes Frontdesk/user completion reporting. See
+  [decisions/029-planner-feedback-and-task-set-closure.md](decisions/029-planner-feedback-and-task-set-closure.md).
+- Accepted the topology ownership and sequencing refinement: each future Lane
+  owns independent immaculate orchestrator activation and desired/observed
+  topology state, while one deterministic project Topology Controller owns
+  shared capacity, concrete agent binding, layout, reconcile, and safe
+  lane-scoped release. This is not authorization to implement parallel Lanes;
+  the immediate gate remains one complete, repeatable, visible real-provider
+  single-lane workflow. See
+  [decisions/024-project-topology-controller-and-single-lane-first.md](decisions/024-project-topology-controller-and-single-lane-first.md).
+- Accepted the orchestrator boundary: it is an ask-activated immaculate
+  semantic planner that keeps work slicing, dependencies, logical role
+  assignment, complete task packets, review/integration intent, and bounded
+  rework policy together in one orchestration bundle. It does not perform
+  physical `ask` submission, concrete agent binding, topology mutation, or
+  runtime authority writes; those exact-once side effects belong to the
+  controller. A future deterministic single-unit template may bypass an
+  orchestrator provider call after explicit planner selection and validation.
+  See
+  [topics/semantic-orchestration-and-controller-boundary.md](topics/semantic-orchestration-and-controller-boundary.md)
+  and
+  [decisions/022-semantic-orchestration-bundle-and-controller-execution.md](decisions/022-semantic-orchestration-bundle-and-controller-execution.md).
 - Reviewed the `mother` role's orchestrator RolePack blueprint and accepted it
   as the V1 content plan for `agentroles.ccb_orchestrator`: single role,
   default local name `orchestrator`, six generic skills, seven templates,
@@ -108,12 +222,18 @@ Date: 2026-06-24
   ensure/status/release` by profile and count.
 - Accepted the dynamic runtime layout direction: CCB should maintain logical
   tmux windows and panes for dynamic agents through a runtime layout manager.
-  V1 keeps four resident visible workflow panes:
-  `ccb_frontdesk + ccb_task_detailer` in `ccb-user` and
-  `ccb_planner + ccb_orchestrator` in `ccb-plan`. `ccb_round_reviewer` is
-  still placed in `ccb-plan` when round verification is requested. Active
+  V1 keeps only `ccb_frontdesk` in `ccb-user` and `ccb_planner` in `ccb-plan`
+  as resident workflow panes. `ccb_task_detailer`, `ccb_orchestrator`, and
+  `ccb_round_reviewer` are immaculate dynamic roles placed in those windows
+  only while their task/round stage is active. Active
   `coder + code_reviewer` work units pack into `ccb-exec` pages at six panes
   per window; diagnostics live in `runtime`.
+- Verified the current dynamic layout in an opened real-provider project with
+  three sequential direct-execution loops. Each round created fresh
+  orchestrator/round-reviewer/coder/code-reviewer panes, created and removed
+  `ccb-exec`, released `4/0`, and returned to the two resident panes. The run
+  also exposed and fixed Claude session rotation after `/clear`. See
+  [history/visible-three-round-dynamic-window-e2e-20260710.md](history/visible-three-round-dynamic-window-e2e-20260710.md).
 - Landed the first deterministic pane-growth slice in the current worktree:
   `ccb layout plan` reports 1->6 pane layouts and overflow windows, while
   `ccb layout smoke` creates placeholder panes in an isolated tmux session.
@@ -155,6 +275,9 @@ Date: 2026-06-24
   [topics/runtime-workflow-graph-and-reconciler.md](topics/runtime-workflow-graph-and-reconciler.md)
   and
   [decisions/014-runtime-workflow-graph-reconciler.md](decisions/014-runtime-workflow-graph-reconciler.md).
+  Decision 020 later narrows the preferred future contract to mount topology
+  plus ask-first collaboration; keep this item as landed historical substrate,
+  not the current communication-flow direction.
 - Landed the first topology desired-state controller slice:
   `ccb loop topology propose/validate/commit/reconcile/status/release`
   imports orchestrator graph proposals, validates profile/capacity/edge
@@ -178,6 +301,20 @@ Date: 2026-06-24
   `coder`/`code_reviewer` to Window 3+ packed `ccb-exec` pages. Source tests
   prove four coder/reviewer work units overflow to `ccb-exec-2`, then compact
   back to one execution window after a middle pair is released.
+- Accepted the simplified topology/communication split: topology should be
+  narrowed to mount state for agents, windows, panes, providers, and
+  lifecycle. Normal worker/reviewer/detailer/orchestrator collaboration should
+  use `ask`; only task packet, execution contract, mount topology,
+  orchestration notes, and round summary become durable anchors. See
+  [topics/mount-topology-and-ask-first-orchestration.md](topics/mount-topology-and-ask-first-orchestration.md)
+  and
+  [decisions/020-mount-topology-and-ask-first-orchestration.md](decisions/020-mount-topology-and-ask-first-orchestration.md).
+- Passed the Phase 1 local worktree gate for the mount-topology split:
+  `agent_mount_topology.*` writes, legacy `agent_topology.*` reads, mount
+  schema validation for windows/agents/provider/lifecycle, default rejection
+  of `edges/gates/artifacts`, explicit legacy graph dispatch compatibility,
+  targeted pytest, adjacent lifecycle/layout regression, and a lightweight
+  source-wrapper `ccb_test` smoke.
 - Landed the first continuous dynamic layout smoke in the current worktree:
   `ccb layout dynamic-smoke` grows fake-agent panes in one isolated tmux session
   and then shrinks them. Verified from `/home/bfly/yunwei/test_ccb2` with
@@ -336,6 +473,28 @@ Date: 2026-06-24
 
 ## In Progress
 
+- The current release target is now the single-lane multi-workgroup closure in
+  [goals/single-lane-multi-workgroup-release-goal.md](goals/single-lane-multi-workgroup-release-goal.md):
+  one task, one orchestration bundle, one to four Git-isolated
+  `Worker + Reviewer` workgroups, exact-once event-driven execution,
+  controller-owned integration, project-root verification/rollback, visible
+  dynamic lifecycle, Config V3, V2 compatibility, and package/install/release
+  gates. Multi-lane Roadmap Graph execution remains deferred.
+- Phase 1-6 acceptance coordination is now in final packaging closeout. Phase
+  6A is accepted for the fake-provider, single-round program-matrix scope, and
+  Phase 6B is accepted for initial real-provider, single-round capability after
+  L0 repeat6, L1-L4 repeat12, L5 partial repeat4, and `talk2` final
+  aggregation. The current dated final report is
+  [history/phase1-6-acceptance-report-20260705.md](history/phase1-6-acceptance-report-20260705.md);
+  [history/phase1-6-acceptance-report-20260704.md](history/phase1-6-acceptance-report-20260704.md)
+  remains the historical Phase 6A-only report. Remaining work is
+  source-control packaging hygiene and separate follow-up goals for
+  production/default enablement, post-detail execution, reviewer-rework
+  observation, and multi-round stability. See
+  [implementation-status.md](implementation-status.md),
+  [topics/phase6a-fake-provider-matrix-closure-runbook.md](topics/phase6a-fake-provider-matrix-closure-runbook.md),
+  and
+  [topics/phase1-6-module-level-audit-worksheet.md](topics/phase1-6-module-level-audit-worksheet.md).
 - Shape the first architecture contract for a state-machine-driven agentic
   loop that separates user-facing interaction, planning, orchestration,
   execution, monitoring, recovery, and plan-tree maintenance.
@@ -347,6 +506,20 @@ Date: 2026-06-24
 - First config slice is implemented in the current worktree: project config can
   parse, validate, record, and render `loop.capacity` and
   `loop.role_profiles`; focused config-loader tests pass.
+- Config v3 is an implementation dependency of the current release goal: keep
+  `version = 2` for static manual layouts; add opt-in `version = 3` with
+  resident frontdesk/planner, immaculate dynamic detailer/orchestrator/coder/
+  code-reviewer/round-reviewer profiles, provider/model settings, explicit
+  workgroup and physical-agent limits, required RolePack validation, migration
+  dry-run, control-panel-ready JSON contracts, and visible opened-project
+  runtime proof. See
+  [topics/config-v3-dynamic-workflow.md](topics/config-v3-dynamic-workflow.md).
+- Config v2 static control panel is now shaped as a separate companion UI
+  lane: keep `version = 2` `[windows]` as static topology authority, but make
+  common edits through a visual split builder, template picker, pane inspector,
+  folded overlays, compact preview, and digest-aware validate/dry-run/apply
+  flow. See
+  [topics/config-v2-static-control-panel.md](topics/config-v2-static-control-panel.md).
 - First command/state slice is implemented in the current worktree:
   `ccb loop capacity ensure/status/release --json` writes and reads
   deterministic loop capacity state under `.ccb/runtime/loops` through the
@@ -1082,6 +1255,10 @@ Date: 2026-06-24
 
 Status: controlled candidate gate, not default production mode.
 
+This snapshot is retained as historical one-workgroup baseline evidence. The
+active release target is the stricter
+[single-lane multi-workgroup goal](goals/single-lane-multi-workgroup-release-goal.md).
+
 The narrow candidate is defined in
 [goals/minimum-production-candidate-goal.md](goals/minimum-production-candidate-goal.md).
 It promotes the existing fake-provider workflow closure smoke into the first
@@ -1128,51 +1305,134 @@ Still outside the candidate:
 
 ## Next
 
-1. Decide whether to promote the minimum production-candidate gate from
-   [goals/minimum-production-candidate-goal.md](goals/minimum-production-candidate-goal.md)
-   into the regular pre-release workflow smoke, then define the opt-in
-   Codex/Claude real-provider second gate.
-2. Continue richer live reflow beyond the proven same-window continuous,
-   single-agent-window, multi-window add/remove, and explicit-window-class
-   middle-removal cases, especially cases that require manual move planning or
-   dynamic visibility changes rather than pure reflow.
-3. Extend `ccb agent move` beyond the bounded single-agent cycle: Codex and
-   Claude opt-in real-provider movement are proven, and shared-source
-   single-agent movement is proven with fake providers; the low-level kernel
-   and user-facing command now move multiple source-window agents in one
-   transaction, including newly materialized target windows and emptied source
-   window removal. Batch `--window-class` placement is now proven for
-   capacity-based split targets, and batch execution-node placement is proven
-   for `--loop-id/--node-id`; next evaluate transactions that mix moved panes
-   with newly created agents in one target.
-4. Extend the shrink/release proof from single-agent and batch fake-provider
-   source-wrapper/CI smokes to opt-in real-provider tolerance where useful.
-5. Define the minimum `ccb loop`, `ccb plan`, and `ccb question` command
-   surface for creating tasks, transitioning phases, recording artifacts,
-   blocking, finishing, and syncing to plan-tree.
-6. Extend `loop runner --once` so it can consume committed topology before
-   round dispatch, execute validated ask edges in order, import edge artifacts,
-   and call topology release/reconcile after evidence writeback.
-7. Define the v1 team spec format for planner group, orchestrator, execution
-   node, recovery node, and monitor behavior.
-8. Define context-purity budgets for each role, including what may enter
-   `frontdesk`, planner group, orchestrator, execution nodes, monitor, runtime
-   artifacts, and long-term plan-tree.
-9. Define the v1 clarification command surface and artifact schema for
-   candidate questions, broker review, user display, raw answers, normalized
-   answers, deferred questions, and planner wakeup.
-10. Define the v1 `task_detailer` detail packet schema and import bridge:
-   `detail-packet.manifest.json`, `detail-readiness.json`, source-evidence
-   entries, clarification sidecars, and detail review handoff fields.
-11. Define the v1 execution-node and round-verification artifact schemas,
-   including node check plans, non-convergence reports, branch freeze records,
-   partial loop reports, verification contracts, and round verification plans.
-12. Map the design to existing CCB communication primitives: `ask`,
-   `--callback`, `--silence`, message bureau records, dispatcher jobs,
-   completion state, and queue/trace diagnostics.
-13. Identify the first implementation slice that can run with one planner, one
-   orchestrator, one execution node, and deterministic monitoring before
-   enabling dynamic multi-node fanout.
+Sequencing gate: Decisions 022-025 authorize the single-lane release target,
+not concurrent roadmap lanes. Complete these items in order; do not start
+multi-lane scheduler source changes in parallel.
+
+2026-07-10 checkpoint: item 1 planning/contracts are frozen by `ce4f7590`.
+Item 2 foundation is landed by `34027943`, including strict bundle import and
+validation, canonical work packets, deterministic one-node compatibility
+evidence, and a multi-node pre-bind pause. See
+[history/single-lane-multi-workgroup-g1-foundation-20260710.md](history/single-lane-multi-workgroup-g1-foundation-20260710.md).
+
+2026-07-11 F1 checkpoint: Decision 026 freezes task revision, effective
+capacity snapshots, semantic bundle/provenance boundaries, adaptive one-to-four
+selection, node state, exact-once intent, and result ownership. R1 landed in
+`0c2f19ef` and closes item 2 with sole node-map one-group execution,
+node-keyed intent/recovery, strict immaculate freshness, and no normal
+post-worker orchestrator call. C1/P1 are integrated. See
+[history/single-lane-r1-authority-runtime-closure-20260711.md](history/single-lane-r1-authority-runtime-closure-20260711.md).
+
+2026-07-11 Wave 2 checkpoint: item 3 and the physical topology/evidence parts
+of items 5-6 are landed through `c64ab341`. R2 exact Git transactions, T1
+one-to-four-workgroup placement/capacity, and E1 strict evidence classification
+passed `249` combined tests. At that checkpoint, real multi-workgroup
+execution remained gated on item 4/G3 and direct source/fake acceptance. See
+[history/single-lane-wave2-git-topology-evidence-closure-20260711.md](history/single-lane-wave2-git-topology-evidence-closure-20260711.md).
+
+2026-07-11 Wave 3 checkpoint: item 4 and the scheduler-facing portions of item
+5 are landed through `bca51abd`; test-runtime and accelerator ownership are
+hardened through `94ea6d73`. The integrated non-provider-blackbox gate passed
+`4210` tests with zero current-run command-line or cwd-owned runtime residue.
+Item 7/G5 was still active at this checkpoint. See
+[history/single-lane-wave3-g3-scheduler-closure-20260711.md](history/single-lane-wave3-g3-scheduler-closure-20260711.md).
+
+2026-07-11 G5 checkpoint: direct source/fake acceptance is landed through
+`b42ec3b2`. The ten-scenario campaign covers one-to-four workgroups, restart,
+rework, partial, blocked, integration/root verification failure, round blocked,
+release, cleanup, and B7 normalization. G6 visible real-provider acceptance is
+now active. See
+[history/single-lane-g5-source-fake-acceptance-20260711.md](history/single-lane-g5-source-fake-acceptance-20260711.md).
+
+2026-07-12 Decision 027 checkpoint: a visible two-workgroup mixed-DAG Codex
+task passed Worker-owned Reviewer chains, controller-owned Git integration,
+root verification, Round Reviewer, release, cleanup, and zero dynamic residue.
+G6 remains active for three/four groups, restart, rework, busy-retain, and
+provider qualification. See
+[history/g6-worker-owned-review-chain-real-provider-20260712.md](history/g6-worker-owned-review-chain-real-provider-20260712.md).
+
+2026-07-12 G6C checkpoint: Decision 029 P0-P4 implementation is integrated
+through `d941fa2e`. Root8 passed L1/L2 and both L4 route outcomes but was
+rejected when L3 repeated after an affirmative Detailer stop contract was not
+recognized. The shared fail-closed matcher and task-lock reconciliation repair
+passes the `280`-test focused gate. Independent review, current-HEAD full source
+tests, and a fresh root9 opened-project run are required before P5 acceptance.
+See
+[history/g6c-decision029-integration-and-root8-diagnostic-20260712.md](history/g6c-decision029-integration-and-root8-diagnostic-20260712.md).
+
+2026-07-13 G6C root13 checkpoint: the Git-capability RolePack and harness
+repairs passed the real Frontdesk-to-Planner handoff, and L1/L2 plus both L4
+routes reached their expected terminals. Root13 was rejected when the
+post-detail Planner importer ignored `status_recommendation=detail_ready` and
+reopened L3 as `ready_for_orchestration`, preventing task-set closure. The
+generic activation-scoped, digest-backed terminal constraint, fail-closed
+settlement, Planner contract, closure chain, strict B7 evidence, and
+restart/idempotence coverage have now landed through `77c54a98`. At
+`82a3a622`, the current full source suite passed `4792` tests with `2` skipped;
+root14 then passed Frontdesk/Planner/L1 but was rejected when the L2
+Orchestrator used the bundle schema as its fence language and the importer
+correctly required literal fenced JSON. A harness read-only observation replay
+defect was found during recovery. The next gate is to land both bounded
+repairs and rerun the full source gate before a fresh root15. Those repairs
+landed through `3a4b41da`, after which two complete single-lane smoke runs
+exposed the Worker-rework parent-authority race and cleanup leak. The source
+blockers are now closed through `b14c66ef`: strict review-chain and RolePack
+contracts pass focused gates, the final source suite passes `4674` tests with
+`2` skipped, and the post-run audit reports zero related live processes or
+listening sockets. Root15 is admitted as the next gate. See
+[history/g6c-root13-planner-terminal-constraint-diagnostic-20260713.md](history/g6c-root13-planner-terminal-constraint-diagnostic-20260713.md).
+See also
+[history/g6c-root14-orchestrator-fence-diagnostic-20260713.md](history/g6c-root14-orchestrator-fence-diagnostic-20260713.md).
+
+2026-07-14 G6C source checkpoint: the accepted source/fake head is
+`b14c66ef`. A rejected wrong-environment full run was isolated from acceptance;
+its exact 46 failures passed under the corrected environment, followed by one
+clean full run and external residue audit. The next target is a fresh visible
+root15 full five-route run. Remaining G6 three/four-workgroup, restart,
+busy-retain/sidebar, and exact provider/model weak-model repeat rows remain
+separate acceptance work. See
+[history/g6c-source-gate-and-root15-readiness-20260714.md](history/g6c-source-gate-and-root15-readiness-20260714.md).
+
+2026-07-14 current-main source checkpoint: the candidate integrates current
+main `ccac2034` through accepted code head `2c936a48`. Focused and historical
+failure gates passed `222` and `26` tests. A five-failure full run was rejected
+because its unexpanded `{RANDOM}` basetemp changed `shlex.quote` formatting;
+the exact five nodes then passed under a safe path. The final clean serial run
+passed `4992` tests with `2` skipped, and fourteen test-owned runtime projects
+were force-unmounted with zero post-cleanup process/listener/socket residue.
+Visible current-candidate provider qualification and G7 installed-candidate
+acceptance remain active. See
+[history/g6c-current-main-source-acceptance-20260714.md](history/g6c-current-main-source-acceptance-20260714.md).
+
+1. Freeze the current one-workgroup and Config V2 source/test baselines and
+   land the orchestration-bundle/node-state/evidence contracts from
+   [topics/single-lane-multi-workgroup-modification-and-test-plan.md](topics/single-lane-multi-workgroup-modification-and-test-plan.md).
+2. Add script-owned `ccb.loop.orchestration_bundle.v1` import/validation and a
+   deterministic one-node bundle, then move the current direct path onto a
+   node-map state machine without changing one-node external behavior.
+3. Implement clean-Git preflight, node-scoped worker/reviewer worktrees,
+   reviewed-tree digest, controller-owned node commit, integration worktree,
+   deterministic merge/test, project-root promotion, and rollback.
+4. Add ready-frontier scheduling for two to four workgroups, per-node exact-once
+   submission intent, callback/persisted-terminal recovery, bounded rework,
+   dependency unblocking, and structured partial/replan/block behavior.
+5. Generalize mount-only topology, capacity, pane placement, busy retain,
+   release, and B7 evidence for 1-4 pairs plus dynamic immaculate control roles.
+6. Implement Config V3 version dispatch, resident/dynamic role models,
+   provider/model/RolePack validation, explicit workgroup/physical capacity,
+   effective-config JSON, migration dry-run, and V2 regression protection.
+7. Run direct unit/integration/full source tests and fake-provider one-, two-,
+   three-, and four-workgroup flows, including restart and failure injection.
+8. Run `talk2`-owned visible opened-project Codex/Claude acceptance from fresh
+   roots under `/home/bfly/yunwei/test_ccb2`, with ordinary frontdesk prompts,
+   real 2/3/4-workgroup tasks, overlap/Git/UI evidence, restart, failure,
+   busy-retain, and zero-residue checks.
+9. Freeze one clean release commit, select the next unused npm feature version,
+   build/dry-run/inspect/install the candidate, test V2/V3 and update/rollback,
+   then repeat one visible installed-candidate workflow.
+10. Publish and tag only after package/version/registry/artifact/commit intent is
+    explicit; verify npm metadata, fresh install, CLI entrypoints, downloaded
+    payload, release notes, and rollback instructions.
 
 ## V1 Readiness Blockers
 
@@ -1196,12 +1456,22 @@ Still outside the candidate:
 
 ## Deferred
 
-- Fully dynamic multi-node execution fanout.
+- Concurrent multi-lane Roadmap Graph execution and arbitration. Its accepted
+  prerequisite is the repository-global Plan Tree control domain, explicit
+  election/fencing, canonical task migration, typed authority closure,
+  transactional target-ref stream, shared lane registry, immutable snapshot,
+  and integration saga in
+  [Decision 031](decisions/031-global-plan-tree-authority-across-worktrees.md).
+  Every pre-concurrency and two-lane row in the
+  [acceptance matrix](topics/global-plan-tree-cross-worktree-acceptance-matrix.md)
+  must pass.
+  Multi-node fanout inside the current single lane is no longer deferred; it is
+  the active release goal.
 - Full multi-round loop-runner-mediated dynamic agent load/unload beyond the
   bounded `run-once` smoke.
 - Long-running loop runner daemon.
-- Automatic planner activation and clarification routing before the one-shot
-  runner bridge is proven.
+- Rich clarification brokerage beyond the accepted Frontdesk direct Planner
+  silence handoff and dynamic task-detailer route.
 - User-defined arbitrary window classes and interactive drag/drop layout.
 - Exact tmux geometry restoration across restarts.
 - Multi-orchestrator arbitration.

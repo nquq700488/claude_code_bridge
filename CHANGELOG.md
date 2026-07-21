@@ -1,5 +1,219 @@
 # Changelog
 
+## v8.2.1 (2026-07-17)
+
+### Startup And Lifecycle Reliability
+
+- **Startup Generations Are Fenced End To End**: keeper, daemon, socket,
+  lifecycle, lease, and mounted publication now carry one verified startup
+  identity, preventing stale or overlapping attempts from publishing authority.
+- **Readiness Is Proven Before Mount Publication**: ccbd opens a bounded
+  bootstrap probe and validates socket ownership, serving identity, namespace,
+  pane topology, and runtime authority before the project becomes mounted.
+- **Startup Diagnostics Are Actionable**: operation counts, process and I/O
+  samples, readiness timelines, exact T1 attribution, and phase checkpoints are
+  available through the performance and diagnostics tooling without weakening
+  lifecycle checks.
+- **CLI-Only Cost Has An Isolated S0 Baseline**: the benchmark primes one
+  healthy project, measures the version introspection fast path without opening
+  another startup transaction, and proves daemon, namespace, runtime, and
+  startup-report authority remained unchanged before teardown.
+
+### Recovery And Communication
+
+- **Revoked Provider Authentication Stops Restart Loops**: unrecoverable auth
+  failures become a durable blocked runtime state, remain queued instead of
+  respawning, and expose the required login action through ping, project view,
+  and the sidebar. This completes Issue #251 option 2 while retaining supported
+  in-place credential refresh.
+- **Reload And Shutdown Preserve Authority Boundaries**: additive topology
+  reloads validate session and namespace-epoch pane identity, and an accepted
+  shutdown request remains idempotent while the server is already stopping.
+- **Runtime Imports Are Order Independent**: the app runtime package now loads
+  public exports lazily, eliminating a handler/bootstrap circular import that
+  could break isolated diagnostics and test collection.
+
+### Mobile And Gateway
+
+- **Android Can Keep A User-Enabled Background Connection**: the Mobile app
+  exposes Android background-access status, foreground-service controls, and
+  battery-restriction guidance while preserving explicit opt-in behavior.
+- **Conversation Progress Stays Agent Scoped**: each agent retains one working
+  reply indicator, so background refreshes and agent switching cannot duplicate
+  or transfer an in-progress reply.
+- **Push Support Remains Optional**: FCM authentication dependencies stay
+  optional and fail closed when deployment-owned Firebase configuration is not
+  present.
+
+### Planning And Release Surface
+
+- **Parallel PlanTree Work Has A Global Authority Design**: the workflow plan
+  documents cross-worktree roots, global roadmap control, lane ownership,
+  evidence projection, migration, and acceptance gates for future v3 rollout.
+- **Release Versions Are Synchronized**: CLI, npm, Linux, macOS, Android,
+  localized badges, workflow defaults, download links, and checksums target
+  8.2.1.
+
+## v8.2.0 (2026-07-16)
+
+### Startup Performance
+
+- **Cold And Warm Starts Do Less Repeated Work**: ccbd reuses validated pane,
+  topology, provider-profile, storage, and identity evidence across the startup
+  critical path while preserving lifecycle and ownership checks.
+- **Tmux And Storage Operations Are Bounded**: startup snapshots and atomic
+  storage helpers avoid repeated subprocess and filesystem work without adding
+  an always-on polling loop or changing per-agent launch ordering.
+- **Copied Or Moved Projects Recover Safely**: an unmounted lease left by a
+  different project anchor is treated as residue and replaced with a fresh
+  generation, while a mounted foreign lease still fails closed; reattached
+  runtime records adopt the current project identity.
+
+### Communication Reliability
+
+- **Codex Delivery Stays Session-Bound**: managed asks bind delivery and reply
+  collection to the intended request anchor and durable session identity,
+  including after a provider context clear.
+- **Accepted Transport Acknowledgements Cannot Loop**: an accepted empty
+  reply-delivery acknowledgement is consumed as transport completion instead
+  of being requeued as an empty provider answer.
+
+### Provider And Configuration Reliability
+
+- **Grok Fullscreen Overrides Minimal Mode**: explicit `--fullscreen` startup
+  arguments suppress CCB's default `--minimal`, while default and unrelated
+  argument launches keep minimal mode. This resolves Issue #255.
+- **Claude Authentication Kind Is Preserved**: managed Claude homes retain the
+  inherited credential type instead of rewriting it into an incompatible
+  login form.
+- **Config Choices Remain Explicit**: model and thinking selections stay bound
+  to the selected agent across multi-window overlays instead of reverting to
+  inherited values after save.
+
+### Mobile And Gateway Reliability
+
+- **Recovery And Conversation Refresh Are Stable**: foreground recovery,
+  retained chat state, active selection, and working indicators converge
+  without refresh flicker or stale outcomes replacing current state.
+- **Attachments Cover Real Mobile Work**: image, document, and video selection,
+  Tab-based attachment queueing, linked host-file download, and attachment
+  progress/error states are supported through the authenticated gateway.
+- **Terminal And Conversation Interaction Is Smoother**: terminal input opens
+  from the latest output, expanded bubbles hand scrolling back predictably,
+  and background refreshes preserve the visible timeline.
+- **Opt-In Push Delivery Is Hardened**: device-bound FCM registration,
+  deduplication, and foreground/background lifecycle handling are available to
+  deployment-configured builds; the signed public APK keeps Firebase disabled
+  by default and fails closed without operator-owned configuration.
+
+### Release Surface
+
+- **Desktop, npm, And Android Versions Are Synchronized**: Linux and macOS
+  artifacts, `@seemseam/ccb`, CLI metadata, Mobile version code, APK download
+  links, checksums, and localized version badges all target 8.2.0.
+- **Community Asset Packaging Is Current**: the updated PNG community image is
+  included and verified by the release builder.
+- **Fresh Installs Preserve The Python Launcher**: release installs keep the
+  shared interpreter resolver intact when the executable directory is inside
+  the install prefix, preventing recursive launcher invocation during smoke
+  checks and custom-prefix installs.
+
+## v8.1.6 (2026-07-14) — Withdrawn
+
+- Superseded by later releases. Detailed notes are intentionally omitted.
+
+## v8.1.5 (2026-07-14) — Withdrawn
+
+- Withdrawn and superseded. Detailed notes are intentionally omitted.
+
+## v8.1.4 (2026-07-13)
+
+### Mobile Connection Recovery
+
+- **Gateway Recovery Is Centrally Supervised**: foreground resume, route
+  activation, repository probes, terminal transport, and task notifications
+  now report through one bounded connection state machine instead of starting
+  competing recovery loops.
+- **Stale Outcomes Cannot Replace Current State**: generation fencing and
+  atomic route verification discard late probe, activation, and reconnect
+  results after profile or route changes.
+- **Background Notifications Release Their Sockets**: notification streams
+  suspend with the app lifecycle, close their active connections, and resume
+  through serialized subscriptions without duplicate listeners.
+- **Authentication Failures Stay Actionable**: authorization failures are
+  classified separately from transient transport failures so reconnect policy
+  cannot hide a required re-pair operation.
+
+### Codex Native Subagent Isolation
+
+- **Child Rollouts Cannot Capture CCB Requests**: managed Codex session
+  discovery, watchdog recovery, and persisted binding updates now reject native
+  subagent rollouts and recover the authoritative top-level session.
+- **Parent Turn Binding Stays Immutable**: once a CCB request is anchored to its
+  parent Codex turn, child task identifiers cannot replace that binding or
+  finalize the request.
+- **Child Collaboration Output Stays Private**: native subagent activity,
+  messages, and foreign-turn completion events are excluded from CCB reply
+  collection in both the Python runtime and Rust accelerator.
+- **Real Provider Path Verified**: an authenticated managed Codex test using the
+  built-in `spawn_agent` path confirmed that the caller receives only the
+  parent agent's final result.
+
+### Grok Native CCB Skills
+
+- **Ask And Clear Skills Projected Per Agent**: managed Grok homes now receive
+  independently owned native `ask` and `ccb-clear` skills when skill
+  inheritance is enabled, without replacing conflicting user-owned skills.
+- **Normal Starts Use Native Maximum Permission**: managed Grok now starts with
+  `--permission-mode bypassPermissions`, aligned with other auto-permission
+  providers. Safe `ccb -s` starts omit both bypass mode and the CCB skill allow
+  rules; skill inheritance still controls only the two projected command rules.
+- **System Login Is Refreshed Into Managed Homes**: Grok startup refreshes
+  inherited auth/config state from the user-owned Grok home before the managed
+  visible session launches.
+- **Ask Uses The Visible Native Session**: incoming CCB requests are delivered
+  to the target Grok pane and complete only from that prompt's native
+  `turn_completed/end_turn` event; reply delivery returns to the caller's
+  visible Grok pane instead of disappearing into a detached headless session.
+- **Real Cross-Agent Path Verified**: a two-Grok authenticated source-runtime
+  test passed visible Grok-to-Grok ask and result recovery, native `EndTurn`
+  completion, named `ccb clear grok2`, and post-clear isolation checks.
+
+### Sidebar Config Entry Reliability
+
+- **Current Helper Replaces Stale Panes In Place**: managed sidebar panes record
+  the installed helper content identity, and both daemon topology refresh and
+  foreground startup repair stale helpers without restarting agent panes.
+- **Release Installs Replace Runnable Old Helpers**: installation now compares
+  bundled helper content and rebuilds live-source helpers when Rust inputs are
+  newer, rather than treating any runnable binary as current.
+- **Settings Launch Is Observable**: the gear action resolves the CCB executable
+  from the same install tree, accepts the full two-cell hit area, and reports
+  opening state, the local URL, or the concrete startup error in the sidebar.
+
+### Claude Legacy Hook Migration
+
+- **Old Project Hooks Self-Heal**: managed Claude preparation removes only the
+  legacy CCB commands that run extensionless finish/activity Bash launchers
+  through Python, while preserving user hooks, valid Python scripts, current
+  direct launchers, and every unrelated project setting.
+
+### Config Control Agent Removal
+
+- **Selected Agents Can Be Removed Visually**: the V1/V2 config editor removes
+  the selected Agent leaf, collapses its binary split by promoting the sibling
+  subtree, cleans the stale Agent overlay, and supports undo before activation.
+- **Hot Removal Preserves Unrelated Sessions**: guarded hot reload delegates to
+  the existing `remove_agent` transaction, reflows only the affected Window,
+  realizes the target binary topology, preserves other Agent panes, and reports
+  busy Agent drain as saved pending work instead of a generic failure.
+
+### Release Surface
+
+- **Release Metadata Synchronized**: VERSION, source CLI metadata,
+  `package.json`, Mobile app metadata and download links, workflow dispatch
+  defaults, README variants, and release notes are aligned for 8.1.4.
+
 ## v8.1.3 (2026-07-13)
 
 ### Mobile Interaction Reliability

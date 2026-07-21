@@ -33,6 +33,7 @@ def translate_agent_role_manifest(
     translated['tools'] = _translate_tools(adapter=adapter)
     translated['permissions'] = _translate_permissions(translated, adapter=adapter)
     translated['activation'] = _translate_activation(translated, adapter=adapter)
+    translated['adapters'] = _translate_adapters(translated, adapter=adapter)
     translated['source_schema'] = str(manifest.get('schema') or '')
     return translated
 
@@ -107,6 +108,18 @@ def _translate_activation(manifest: dict[str, Any], *, adapter: dict[str, Any]) 
     if workspace_mode:
         activation.setdefault('recommended_workspace_mode', workspace_mode)
     return activation
+
+
+def _translate_adapters(manifest: dict[str, Any], *, adapter: dict[str, Any]) -> dict[str, Any]:
+    adapters = dict(manifest.get('adapters') or {})
+    ccb = dict(adapters.get('ccb') or {})
+    for key in ('display_name', 'command_surface'):
+        value = str(adapter.get(key) or '').strip()
+        if value:
+            ccb[key] = value
+    if ccb:
+        adapters['ccb'] = ccb
+    return adapters
 
 
 def _table(mapping: dict[str, Any], key: str) -> dict[str, Any]:

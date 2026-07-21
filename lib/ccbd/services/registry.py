@@ -153,6 +153,8 @@ class AgentRegistry:
         self.spec_for(runtime.agent_name)
         current = existing if existing is not None else self._get_locked(runtime.agent_name)
         changed_fields = _changed_runtime_fields(current, runtime)
+        if current is not None and not changed_fields:
+            return current
         if current is not None and changed_fields == ('last_seen_at',):
             self._cache[runtime.agent_name] = runtime
             return runtime

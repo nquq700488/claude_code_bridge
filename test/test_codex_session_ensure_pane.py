@@ -67,6 +67,16 @@ class FakeTmuxBackend:
         return described
 
 
+class RevokedAuthTmuxBackend(FakeTmuxBackend):
+    def save_crash_log(self, pane_id: str, crash_log_path: str, *, lines: int = 1000) -> None:
+        super().save_crash_log(pane_id, crash_log_path, lines=lines)
+        Path(crash_log_path).write_text(
+            "Your access token could not be refreshed because your refresh token was revoked. "
+            "Please log out and sign in again.\n",
+            encoding="utf-8",
+        )
+
+
 def test_codex_ensure_pane_respawns_dead_pane(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """When pane is dead, ensure_pane should respawn it and update session file."""
     session_path = tmp_path / ".codex-session"
@@ -103,6 +113,173 @@ def test_codex_ensure_pane_respawns_dead_pane(tmp_path: Path, monkeypatch: pytes
         (name, value)
         for _pane_id, name, value in backend.options
     ]
+
+
+def test_codex_ensure_pane_refreshes_rotated_inherited_auth_before_respawn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    source_home = source_root / ".codex"
+    isolated_home = tmp_path / "isolated-home"
+    runtime_dir = tmp_path / "runtime"
+    source_home.mkdir(parents=True)
+    isolated_home.mkdir()
+    runtime_dir.mkdir()
+    (source_home / "auth.json").write_text('{"tokens":{"refresh_token":"fresh"}}\n', encoding="utf-8")
+    (isolated_home / "auth.json").write_text('{"tokens":{"refresh_token":"revoked"}}\n', encoding="utf-8")
+    session_path = tmp_path / ".codex-session"
+    session_path.write_text(
+        json.dumps(
+            {
+                "ccb_session_id": "test-session",
+                "terminal": "tmux",
+                "pane_id": "%1",
+                "runtime_dir": str(runtime_dir),
+                "work_dir": str(tmp_path),
+                "codex_home": str(isolated_home),
+                "active": True,
+                "start_cmd": f"export CODEX_HOME={isolated_home}; codex resume deadbeef",
+            }
+        ),
+        encoding="utf-8",
+    )
+    backend = RevokedAuthTmuxBackend()
+    backend.alive = {"%1": False}
+    backend.exists = {"%1": True}
+    monkeypatch.setenv("CCB_SOURCE_HOME", str(source_root))
+    monkeypatch.setattr(codex_session, "get_backend_for_session", lambda data: backend)
+    monkeypatch.setattr(codex_session, "find_project_session_file", lambda work_dir, instance=None: session_path)
+
+    sess = codex_session.load_project_session(tmp_path)
+    assert sess is not None
+    ok, pane = sess.ensure_pane()
+
+    assert (ok, pane) == (True, "%1")
+    assert backend.respawned == ["%1"]
+    assert backend.created == []
+    assert (isolated_home / "auth.json").read_text(encoding="utf-8") == '{"tokens":{"refresh_token":"fresh"}}\n'
+
+
+def test_codex_ensure_pane_blocks_revoked_auth_respawn_when_source_did_not_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    source_home = source_root / ".codex"
+    isolated_home = tmp_path / "isolated-home"
+    runtime_dir = tmp_path / "runtime"
+    source_home.mkdir(parents=True)
+    isolated_home.mkdir()
+    runtime_dir.mkdir()
+    auth_text = '{"tokens":{"refresh_token":"still-revoked"}}\n'
+    (source_home / "auth.json").write_text(auth_text, encoding="utf-8")
+    (isolated_home / "auth.json").write_text(auth_text, encoding="utf-8")
+    session_path = tmp_path / ".codex-session"
+    session_path.write_text(
+        json.dumps(
+            {
+                "ccb_session_id": "test-session",
+                "terminal": "tmux",
+                "pane_id": "%1",
+                "runtime_dir": str(runtime_dir),
+                "work_dir": str(tmp_path),
+                "codex_home": str(isolated_home),
+                "active": True,
+                "start_cmd": f"export CODEX_HOME={isolated_home}; codex resume deadbeef",
+            }
+        ),
+        encoding="utf-8",
+    )
+    backend = RevokedAuthTmuxBackend()
+    backend.alive = {"%1": False}
+    backend.exists = {"%1": True}
+    monkeypatch.setenv("CCB_SOURCE_HOME", str(source_root))
+    monkeypatch.setattr(codex_session, "get_backend_for_session", lambda data: backend)
+    monkeypatch.setattr(codex_session, "find_project_session_file", lambda work_dir, instance=None: session_path)
+
+    sess = codex_session.load_project_session(tmp_path)
+    assert sess is not None
+    ok, message = sess.ensure_pane()
+
+    assert ok is False
+    assert "authentication" in message.lower()
+    assert "unchanged" in message.lower()
+    assert backend.respawned == []
+    assert backend.created == []
+    crash_log_count = len(backend.crash_logs)
+
+    ok_again, message_again = sess.ensure_pane()
+
+    assert ok_again is False
+    assert message_again == message
+    assert len(backend.crash_logs) == crash_log_count
+    persisted = json.loads(session_path.read_text(encoding="utf-8"))
+    assert persisted["pane_recovery_block"]["reason"] == "provider_auth_revoked"
+    assert persisted["pane_recovery_block"]["pane_id"] == "%1"
+
+    backend.alive["%1"] = True
+    ok_live, live_pane = sess.ensure_pane()
+
+    assert (ok_live, live_pane) == (True, "%1")
+    persisted = json.loads(session_path.read_text(encoding="utf-8"))
+    assert "pane_recovery_block" not in persisted
+
+
+def test_codex_ensure_pane_preserves_local_auth_when_inheritance_is_disabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source_root = tmp_path / "source"
+    source_home = source_root / ".codex"
+    isolated_home = tmp_path / "isolated-home"
+    runtime_dir = tmp_path / "runtime"
+    source_home.mkdir(parents=True)
+    isolated_home.mkdir()
+    runtime_dir.mkdir()
+    (source_home / "auth.json").write_text('{"tokens":{"refresh_token":"shared"}}\n', encoding="utf-8")
+    local_auth = '{"tokens":{"refresh_token":"local"}}\n'
+    (isolated_home / "auth.json").write_text(local_auth, encoding="utf-8")
+    (runtime_dir / "provider-profile.json").write_text(
+        json.dumps(
+            {
+                "provider": "codex",
+                "agent_name": "agent1",
+                "mode": "inherit",
+                "inherit_auth": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    session_path = tmp_path / ".codex-session"
+    session_path.write_text(
+        json.dumps(
+            {
+                "ccb_session_id": "test-session",
+                "terminal": "tmux",
+                "pane_id": "%1",
+                "runtime_dir": str(runtime_dir),
+                "work_dir": str(tmp_path),
+                "codex_home": str(isolated_home),
+                "active": True,
+                "start_cmd": f"export CODEX_HOME={isolated_home}; codex resume deadbeef",
+            }
+        ),
+        encoding="utf-8",
+    )
+    backend = RevokedAuthTmuxBackend()
+    backend.alive = {"%1": False}
+    backend.exists = {"%1": True}
+    monkeypatch.setenv("CCB_SOURCE_HOME", str(source_root))
+    monkeypatch.setattr(codex_session, "get_backend_for_session", lambda data: backend)
+    monkeypatch.setattr(codex_session, "find_project_session_file", lambda work_dir, instance=None: session_path)
+
+    sess = codex_session.load_project_session(tmp_path)
+    assert sess is not None
+    ok, message = sess.ensure_pane()
+
+    assert ok is False
+    assert "inherit_auth" in message
+    assert backend.respawned == []
+    assert backend.created == []
+    assert (isolated_home / "auth.json").read_text(encoding="utf-8") == local_auth
 
 
 def test_codex_ensure_pane_prefers_full_start_cmd_when_legacy_codex_resume_cmd_is_bare(

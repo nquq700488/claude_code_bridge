@@ -1981,6 +1981,8 @@ is_python_entrypoint() {
 is_ccb_launcher_entrypoint() {
   local source_path="$1"
   [[ -f "$source_path" ]] || return 1
+  [[ "$(basename "$source_path")" != "_ccb-python" ]] || return 1
+  [[ -f "$source_path.py" ]] || return 1
   local first_line=""
   IFS= read -r first_line < "$source_path" || true
   [[ "$first_line" == '#!'*bash* ]] || return 1
@@ -2033,6 +2035,14 @@ install_entrypoint_executable() {
     absolute_source="$(cd "$(dirname "$source_path")" && pwd)/$(basename "$source_path")"
   fi
 
+  local source_identity destination_identity
+  source_identity="$(canonical_existing_parent_path "$absolute_source")"
+  destination_identity="$(canonical_existing_parent_path "$destination_path")"
+  if [[ "$source_identity" == "$destination_identity" ]]; then
+    chmod +x "$absolute_source" 2>/dev/null || true
+    return 0
+  fi
+
   # New-form launchers (bash, exec _ccb-python <name>.py): under live source we
   # symlink straight back so the launcher resolves the source tree itself; under
   # release install we emit a wrapper pinned to INSTALL_PREFIX paths.
@@ -2079,6 +2089,14 @@ sidebar_helper_runs_on_this_host() {
     0|2) return 0 ;;
     *) return 1 ;;
   esac
+}
+
+sidebar_helper_source_is_newer() {
+  local binary="$1"
+  local crate_dir="$2"
+  [[ -e "$binary" ]] || return 0
+  find "$crate_dir/src" "$crate_dir/Cargo.toml" "$crate_dir/Cargo.lock" \
+    -type f -newer "$binary" -print -quit 2>/dev/null | grep -q .
 }
 
 require_sidebar_rust_toolchain() {
@@ -2258,7 +2276,9 @@ build_sidebar_helper_if_possible() {
   fi
 
   if install_uses_live_source; then
-    if [[ -x "$binary" ]] && sidebar_helper_runs_on_this_host "$binary"; then
+    if [[ -x "$binary" ]] \
+      && sidebar_helper_runs_on_this_host "$binary" \
+      && ! sidebar_helper_source_is_newer "$binary" "$crate_dir"; then
       return
     fi
     require_sidebar_rust_toolchain
@@ -2271,11 +2291,16 @@ build_sidebar_helper_if_possible() {
   fi
 
   mkdir -p "$asset_root/bin"
-  if [[ -x "$target" ]] && ! is_sidebar_wrapper "$target" && sidebar_helper_runs_on_this_host "$target"; then
-    return
+  if [[ -x "$binary" ]]; then
+    if [[ ! -x "$target" ]] || is_sidebar_wrapper "$target" || ! cmp -s "$binary" "$target"; then
+      if install_prebuilt_sidebar_helper "$binary" "$target"; then
+        return
+      fi
+    elif sidebar_helper_runs_on_this_host "$target"; then
+      return
+    fi
   fi
-
-  if [[ -x "$binary" ]] && install_prebuilt_sidebar_helper "$binary" "$target"; then
+  if [[ -x "$target" ]] && ! is_sidebar_wrapper "$target" && sidebar_helper_runs_on_this_host "$target"; then
     return
   fi
 

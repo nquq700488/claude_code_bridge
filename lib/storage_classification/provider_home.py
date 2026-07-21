@@ -20,7 +20,7 @@ _GEMINI_PROJECTED_NAMES = {'settings.json', 'trustedFolders.json'}
 _CODEX_PROJECTED_NAMES = {'config.toml'}
 _OPENCODE_PROJECTED_NAMES = {'opencode.json'}
 _MIMO_PROJECTED_NAMES = {'mimocode.json'}
-_NATIVE_CLI_PROVIDERS = {'qwen', 'cursor', 'copilot', 'crush', 'grok', 'kiro', 'pi', 'zai'}
+_NATIVE_CLI_PROVIDERS = {'qwen', 'cursor', 'copilot', 'crush', 'grok', 'kiro', 'pi', 'omp', 'zai'}
 _NATIVE_CLI_PROJECTED_ROOTS = {'inherited-skills', 'role-skills', 'overlay-skills'}
 _NATIVE_CLI_CACHE_ROOTS = {'.cache', '.npm', '.tmp', 'cache', 'node_modules', 'tmp'}
 _NATIVE_CLI_SESSION_ROOTS = {
@@ -308,6 +308,13 @@ def _classify_native_cli_home(
     root_kind: str,
 ) -> StorageEntry:
     name = remainder[-1]
+    if (
+        provider == 'grok'
+        and len(remainder) >= 3
+        and remainder[:2] == ('.grok', 'skills')
+        and remainder[2] in {'ask', 'ccb-clear'}
+    ):
+        return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
     if remainder[0] in _NATIVE_CLI_PROJECTED_ROOTS:
         return _entry(path, relative_path, StorageClass.PROJECTED_CONFIG, size, provider=provider, agent=agent, root_kind=root_kind)
     if remainder[0] in _NATIVE_CLI_CACHE_ROOTS:

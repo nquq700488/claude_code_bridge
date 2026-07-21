@@ -5,8 +5,9 @@ Date: 2026-07-11
 ## Goal
 
 Give every CCB-managed Grok instance native, instance-local `ask` and
-`ccb-clear` skills that work in visible TUI and headless ask execution without
-sharing another provider's home or granting broad terminal permission.
+`ccb-clear` skills that work in visible TUI and managed ask execution without
+sharing another provider's home. Normal CCB startup follows the shared
+auto-permission policy; safe startup remains interactive.
 
 The design covers skill content, projection ownership, caller identity,
 permission policy, failure behavior, and acceptance. It does not change Grok's
@@ -157,28 +158,28 @@ policy separate from skill content.
 
 Normal start with auto permission enabled:
 
-- When `inherit_skills = true`, add only Grok CLI allow rules matching the
-  exact skill command prefixes:
+- Add Grok CLI `--permission-mode bypassPermissions`, matching the native
+  highest-permission startup used for other auto-permission providers.
+- When `inherit_skills = true`, also add allow rules matching the exact skill
+  command prefixes:
   - `Bash(command ask *)`
   - `Bash(command ccb clear*)`
-- Apply the same narrow rules to the visible Grok command and per-job headless
-  Grok command.
 - Persist the effective skill-command permission bit in the Grok session
-  payload so later jobs and daemon recovery use the same start policy.
+  payload, together with the auto-permission bit, so daemon recovery retains
+  the same start policy.
 
 Safe start with auto permission disabled:
 
-- Do not append either allow rule.
+- Do not append bypass mode or either allow rule.
 - Visible TUI asks the user for approval.
-- Headless tool execution may end as native `Cancelled`; CCB reports
-  incomplete and must not pretend the skill command ran.
+- Tool execution may be cancelled; CCB must not pretend the skill command ran.
 
 Additional rules:
 
-- `inherit_skills = false` disables both projection and CCB-added allow rules.
+- `inherit_skills = false` disables projection and CCB-added allow rules, but
+  does not override the normal auto-permission startup policy.
 - User/enterprise deny rules and hooks always win.
-- Never add `--always-approve`, `bypassPermissions`, a general `Bash` allow, or
-  permission-file rewrites for these skills.
+- Do not add a general `Bash` allow or rewrite permission files.
 - Skill instructions cannot override permission policy.
 
 ## Runtime And Completion Behavior
@@ -226,9 +227,10 @@ Projection and storage:
 
 Launcher and execution:
 
-- Normal start adds each narrow allow rule exactly once to visible and headless
-  commands.
-- Safe start and `inherit_skills = false` add no rules.
+- Normal start adds bypass mode exactly once and each skill allow rule exactly
+  once when projection is enabled.
+- Safe start adds neither bypass mode nor skill rules; `inherit_skills = false`
+  suppresses the skill rules without suppressing normal bypass mode.
 - Headless env binds the correct agent, runtime, project, session, and
   source-test PATH.
 - `grok1` and `grok2` never share skill paths, caller identity, or completion
@@ -252,7 +254,7 @@ Real acceptance in `/home/bfly/yunwei/test_ccb2`:
 
 - Do not create a combined `ccb` skill.
 - Do not expose diagnostics polling as normal ask behavior.
-- Do not broaden Grok terminal permissions beyond the two CCB commands.
+- Do not let skill content toggle or rewrite Grok permission policy.
 - Do not use global Claude/Codex skill compatibility as Grok's CCB skill
   source.
 - Do not change Grok provider-native result collection or turn-end authority.

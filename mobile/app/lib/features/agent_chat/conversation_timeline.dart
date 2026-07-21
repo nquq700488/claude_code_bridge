@@ -75,7 +75,8 @@ class ConversationTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final contentById = {for (final item in contentItems) item.id: item};
-    final loadingOffset = isLoading ? 1 : 0;
+    final showLoadingIndicator = isLoading && items.isEmpty;
+    final loadingOffset = showLoadingIndicator ? 1 : 0;
     return NotificationListener<ScrollNotification>(
       onNotification: (notification) {
         final userDriven = isUserDrivenScrollNotification(notification);
@@ -115,7 +116,7 @@ class ConversationTimeline extends StatelessWidget {
             itemCount: items.length + loadingOffset,
             separatorBuilder: (context, index) => const SizedBox(height: 8),
             itemBuilder: (context, index) {
-              if (isLoading && index == 0) {
+              if (showLoadingIndicator && index == 0) {
                 return const LinearProgressIndicator(
                   key: ValueKey('agent-conversation-loading'),
                 );
@@ -129,6 +130,7 @@ class ConversationTimeline extends StatelessWidget {
                   item: item,
                   timelineViewportHeight: constraints.maxHeight,
                   timelineScrollController: controller,
+                  onUserScrollDirectionChanged: onUserScrollDirectionChanged,
                   content:
                       item.contentId == null
                           ? null
@@ -164,6 +166,7 @@ class _ConversationTimelineItem extends StatelessWidget {
     required this.item,
     required this.timelineViewportHeight,
     required this.timelineScrollController,
+    required this.onUserScrollDirectionChanged,
     required this.content,
     required this.repository,
     required this.view,
@@ -184,6 +187,7 @@ class _ConversationTimelineItem extends StatelessWidget {
   final CcbConversationItem item;
   final double timelineViewportHeight;
   final ScrollController timelineScrollController;
+  final ValueChanged<ScrollDirection> onUserScrollDirectionChanged;
   final CcbContentItem? content;
   final MobileCcbRepository repository;
   final CcbProjectView view;
@@ -207,6 +211,7 @@ class _ConversationTimelineItem extends StatelessWidget {
         expanded: expanded,
         timelineViewportHeight: timelineViewportHeight,
         timelineScrollController: timelineScrollController,
+        onUserScrollDirectionChanged: onUserScrollDirectionChanged,
         isWorking: isWorking,
         onToggleExpanded: onToggleExpanded,
         child: AgentReadableHistoryLoader(
@@ -229,6 +234,7 @@ class _ConversationTimelineItem extends StatelessWidget {
         expanded: expanded,
         timelineViewportHeight: timelineViewportHeight,
         timelineScrollController: timelineScrollController,
+        onUserScrollDirectionChanged: onUserScrollDirectionChanged,
         isWorking: isWorking,
         onToggleExpanded: onToggleExpanded,
         child: AgentContentReader(items: [contentItem]),
@@ -243,6 +249,7 @@ class _ConversationTimelineItem extends StatelessWidget {
       expanded: expanded,
       timelineViewportHeight: timelineViewportHeight,
       timelineScrollController: timelineScrollController,
+      onUserScrollDirectionChanged: onUserScrollDirectionChanged,
       isWorking: isWorking,
       onToggleExpanded: onToggleExpanded,
       onRetry:

@@ -8,7 +8,7 @@ description = "User-facing intake and reporting boundary for CCB workflows."
 license = "Apache-2.0"
 
 [catalog]
-level = "draft"
+level = "experimental"
 
 [identity]
 default_name = "frontdesk"
@@ -17,7 +17,7 @@ responsibilities = [
   "Discuss macro intent with the user",
   "Send macro task packets to planner",
   "Present broker-curated clarification questions",
-  "Report final summaries and unrecoverable escalations"
+  "Render validated Planner-authored workflow status envelopes without reinterpretation"
 ]
 non_goals = [
   "Implementation work",
@@ -34,7 +34,7 @@ skills = ["skills/frontdesk-intake"]
 
 [permissions]
 read_files = true
-write_files = true
+write_files = false
 network = false
 secrets = "none"
 

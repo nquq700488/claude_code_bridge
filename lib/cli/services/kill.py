@@ -34,6 +34,8 @@ from cli.services.kill_runtime.reporting import (
     summary_from_stop_all_payload as _summary_from_stop_all_payload_impl,
 )
 from cli.kill_runtime.processes import is_pid_alive, terminate_pid_tree
+from runtime_accelerator.config import accelerator_socket_path
+from runtime_accelerator.ownership import recover_corrupt_runtime_accelerator_owner
 from cli.models import ParsedKillCommand
 from ccbd.models import LeaseHealth
 
@@ -80,6 +82,7 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
         force=command.force,
         preparation=preparation,
     )
+    accelerator_recovery = _recover_corrupt_accelerator_owner(context, force=command.force)
     final_summary = _finalize_kill(
         context,
         force=command.force,
@@ -87,6 +90,19 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
         remote_summary=remote_summary,
         summary=summary,
     )
+    runtime_actions = ()
+    if accelerator_recovery.status == 'recovered':
+        runtime_actions = (
+            'recover_corrupt_runtime_accelerator_owner:'
+            + ','.join(str(pid) for pid in accelerator_recovery.reclaimed_pids),
+        )
+    runtime_warnings = (accelerator_recovery.warning,) if accelerator_recovery.warning else ()
+    if runtime_actions or runtime_warnings:
+        final_summary = replace(
+            final_summary,
+            runtime_actions=runtime_actions,
+            runtime_warnings=runtime_warnings,
+        )
     if command.force:
         try:
             prune_missing_worktrees_under(context.project.project_root, context.paths.workspaces_dir)
@@ -96,6 +112,17 @@ def kill_project(context: CliContext, command: ParsedKillCommand):
     if not guard_summary.warnings:
         return final_summary
     return replace(final_summary, worktree_warnings=tuple(guard_summary.warnings))
+
+
+def _recover_corrupt_accelerator_owner(context: CliContext, *, force: bool):
+    socket_path = accelerator_socket_path(context.project.project_root)
+    if socket_path is None:
+        raise CcbdServiceError('runtime accelerator socket path is unavailable during kill')
+    return recover_corrupt_runtime_accelerator_owner(
+        context.project.project_root,
+        socket_path=socket_path,
+        force=force,
+    )
 
 
 def _request_remote_stop(context: CliContext, *, force: bool) -> KillSummary | None:

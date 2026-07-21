@@ -15,7 +15,12 @@ from agents.models import (
     parse_layout_spec,
 )
 
-from ..common import ALLOWED_TOP_LEVEL_KEYS, CONFIG_FILENAME, ConfigValidationError
+from ..common import (
+    ALLOWED_TOP_LEVEL_KEYS,
+    CONFIG_FILENAME,
+    ConfigValidationError,
+    StructuredConfigValidationError,
+)
 from .agent_specs import parse_agents
 from .expectations import expect_bool, expect_mapping, expect_string, expect_string_list
 from .loop_capacity import parse_loop_capacity
@@ -42,9 +47,33 @@ def validate_project_config(
     source_path: Path | None = None,
     project_root: Path | None = None,
 ) -> ProjectConfig:
+    resolved_project_root = (
+        Path(project_root).expanduser().resolve() if project_root is not None else _project_root_from_source_path(source_path)
+    )
+    version = document.get('version')
+    if version == 3:
+        from .workflow_v3 import validate_v3_project_config
+
+        try:
+            return validate_v3_project_config(
+                document,
+                source_path=source_path,
+                project_root=resolved_project_root,
+                maintenance_heartbeat=_parse_maintenance_heartbeat(document),
+            )
+        except StructuredConfigValidationError:
+            raise
+        except (ConfigValidationError, AgentValidationError, ValueError) as exc:
+            raise StructuredConfigValidationError(
+                code='v3_validation_invalid',
+                path='config',
+                message=str(exc),
+            ) from exc
+    if version != 2:
+        raise ConfigValidationError('version must be 2 or 3')
     document = _expand_role_id_shorthand(
         document,
-        project_root=Path(project_root).expanduser().resolve() if project_root is not None else _project_root_from_source_path(source_path),
+        project_root=resolved_project_root,
     )
     _validate_document_shape(document)
     windows = parse_topology_windows(document.get('windows'))
@@ -61,7 +90,7 @@ def validate_project_config(
     sidebar = parse_sidebar(document.get('ui'))
     sidebar_view = parse_sidebar_view(document.get('ui'))
     maintenance_heartbeat = _parse_maintenance_heartbeat(document)
-    loop_capacity = parse_loop_capacity(document.get('loop'))
+    loop_capacity = parse_loop_capacity(document.get('loop'), project_root=resolved_project_root)
     entry_window = _parse_entry_window(document)
     _validate_legacy_and_windows_fields(document, windows=windows, tool_windows=tool_windows)
     return _build_project_config(

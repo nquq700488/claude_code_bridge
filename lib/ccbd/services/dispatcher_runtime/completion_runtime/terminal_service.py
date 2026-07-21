@@ -9,8 +9,15 @@ def merge_terminal_decision(job_id: str, decision: CompletionDecision, *, comple
     tracked = completion_tracker.current(job_id) if completion_tracker is not None else None
     prior_state = prior_snapshot.state if prior_snapshot is not None else None
     tracked_state = tracked.state if tracked is not None else None
+    diagnostics = dict(decision.diagnostics or {})
+    if bool(diagnostics.pop('suppress_completion_state_merge', False)):
+        tracked = None
+        prior_snapshot = None
+        prior_state = None
+        tracked_state = None
     return replace(
         decision,
+        diagnostics=diagnostics,
         reply=decision.reply or _tracked_reply(tracked) or _prior_reply(prior_snapshot),
         anchor_seen=_flag(decision.anchor_seen, tracked_state, prior_state, 'anchor_seen'),
         reply_started=_flag(decision.reply_started, tracked_state, prior_state, 'reply_started'),

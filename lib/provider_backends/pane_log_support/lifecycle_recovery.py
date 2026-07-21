@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 from provider_core.tmux_ownership import (
@@ -29,7 +30,7 @@ def tmux_rebound_pane(
     if not start_cmd or (not callable(respawn) and not callable(create_pane)):
         return None
 
-    last_err = respawn_existing_pane(
+    outcome = _respawn_existing_pane(
         session,
         backend,
         pane_id,
@@ -38,8 +39,10 @@ def tmux_rebound_pane(
         now_str_fn=now_str_fn,
         attach_pane_log_fn=attach_pane_log_fn,
     )
-    if last_err is None:
+    if outcome.error is None:
         return True, str(pane_id)
+    if not outcome.allow_replacement:
+        return False, outcome.error
 
     created = create_replacement_pane(
         session,
@@ -51,7 +54,7 @@ def tmux_rebound_pane(
     )
     if created is not None:
         return True, created
-    return False, f'Pane not alive and respawn failed: {last_err}'
+    return False, f'Pane not alive and respawn failed: {outcome.error}'
 
 
 def respawn_existing_pane(
@@ -64,18 +67,52 @@ def respawn_existing_pane(
     now_str_fn: Callable[[], str],
     attach_pane_log_fn: Callable[[object, object, str], None],
 ) -> str | None:
+    return _respawn_existing_pane(
+        session,
+        backend,
+        pane_id,
+        start_cmd=start_cmd,
+        respawn=respawn,
+        now_str_fn=now_str_fn,
+        attach_pane_log_fn=attach_pane_log_fn,
+    ).error
+
+
+def _respawn_existing_pane(
+    session,
+    backend: object,
+    pane_id: str,
+    *,
+    start_cmd: str,
+    respawn,
+    now_str_fn: Callable[[], str],
+    attach_pane_log_fn: Callable[[object, object, str], None],
+) -> '_RespawnOutcome':
     if not callable(respawn) or not pane_id or not str(pane_id).startswith('%'):
-        return 'respawn unavailable'
+        return _RespawnOutcome('respawn unavailable')
     if not pane_exists(backend, str(pane_id)):
-        return 'pane target no longer exists'
+        return _RespawnOutcome('pane target no longer exists')
     ownership = inspect_tmux_pane_ownership(session, backend, str(pane_id))
     if not ownership.is_owned and not can_reclaim_project_slot_pane(session, backend, str(pane_id)):
-        return ownership_error_text(ownership, pane_id=str(pane_id))
+        return _RespawnOutcome(ownership_error_text(ownership, pane_id=str(pane_id)))
+    blocked_detail = _stored_recovery_block(session, str(pane_id))
+    if blocked_detail is not None:
+        return _RespawnOutcome(blocked_detail, allow_replacement=False)
     try:
-        persist_crash_log(session, backend, str(pane_id))
+        reason = persist_crash_log(session, backend, str(pane_id))
+        recovery = _prepare_crash_recovery(session, reason)
+        if recovery is not None and not recovery[0]:
+            _record_recovery_block(
+                session,
+                pane_id=str(pane_id),
+                reason=str(reason or 'provider_recovery_blocked'),
+                detail=recovery[1],
+                blocked_at=now_str_fn(),
+            )
+            return _RespawnOutcome(recovery[1], allow_replacement=False)
         respawn(str(pane_id), cmd=start_cmd, cwd=session.work_dir, remain_on_exit=True)
         if not backend.is_alive(str(pane_id)):
-            return 'respawn did not revive pane'
+            return _RespawnOutcome('respawn did not revive pane')
         activate_rebound_pane(
             session,
             backend,
@@ -83,9 +120,79 @@ def respawn_existing_pane(
             now_str_fn=now_str_fn,
             attach_pane_log_fn=attach_pane_log_fn,
         )
-        return None
+        clear_recovery_block(session)
+        return _RespawnOutcome(None)
     except Exception as exc:
-        return f'{exc}'
+        return _RespawnOutcome(f'{exc}')
+
+
+def _prepare_crash_recovery(session, reason: str | None) -> tuple[bool, str] | None:
+    if reason is None:
+        return None
+    handler = getattr(session, 'prepare_crash_recovery', None)
+    if not callable(handler):
+        return None
+    try:
+        result = handler(reason)
+    except Exception as exc:
+        return False, f'Pane recovery blocked after {reason}: {exc}'
+    if result is None:
+        return None
+    recovered, detail = result
+    return bool(recovered), str(detail or f'Pane recovery blocked: {reason}')
+
+
+@dataclass(frozen=True)
+class _RespawnOutcome:
+    error: str | None
+    allow_replacement: bool = True
+
+
+def _stored_recovery_block(session, pane_id: str) -> str | None:
+    data = getattr(session, 'data', None)
+    if not isinstance(data, dict):
+        return None
+    block = data.get('pane_recovery_block')
+    if not isinstance(block, dict) or str(block.get('pane_id') or '') != str(pane_id):
+        return None
+    return str(block.get('detail') or 'Pane recovery is blocked; remount after repairing provider authentication')
+
+
+def _record_recovery_block(
+    session,
+    *,
+    pane_id: str,
+    reason: str,
+    detail: str,
+    blocked_at: str,
+) -> None:
+    data = getattr(session, 'data', None)
+    if not isinstance(data, dict):
+        return
+    data['pane_recovery_block'] = {
+        'reason': reason,
+        'detail': detail,
+        'pane_id': pane_id,
+        'blocked_at': blocked_at,
+    }
+    _write_session_best_effort(session)
+
+
+def clear_recovery_block(session) -> None:
+    data = getattr(session, 'data', None)
+    if not isinstance(data, dict) or data.pop('pane_recovery_block', None) is None:
+        return
+    _write_session_best_effort(session)
+
+
+def _write_session_best_effort(session) -> None:
+    writer = getattr(session, '_write_back', None)
+    if not callable(writer):
+        return
+    try:
+        writer()
+    except Exception:
+        return
 
 
 def can_reclaim_project_slot_pane(session, backend: object, pane_id: str) -> bool:
@@ -133,6 +240,7 @@ def create_replacement_pane(
 
 
 __all__ = [
+    'clear_recovery_block',
     'create_replacement_pane',
     'respawn_existing_pane',
     'tmux_rebound_pane',

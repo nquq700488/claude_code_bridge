@@ -6,7 +6,7 @@
 **Coordene Codex, Claude, Gemini e outros agentes CLI em fluxos visíveis e controláveis que você pode assumir diretamente**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.1.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.2.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -180,9 +180,9 @@ Esse comando orienta a instalação e a configuração.
 <details>
 <summary><b>Detalhes do Mobile App, limite de segurança e fonte</b></summary>
 
-O CCB 8.1.3 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
+O CCB 8.2.1 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
 
-- [Baixar CCB Mobile v8.1.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.1.3/ccb-mobile-v8.1.3.apk)
+- [Baixar CCB Mobile v8.2.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.2.1/ccb-mobile-v8.2.1.apk)
 - Fonte do app: [`mobile/app`](../mobile/app)
 - Fonte do gateway servidor: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -245,7 +245,7 @@ Para a configuração normal do projeto, use o painel **⚙ Configurações**. P
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.jpg" alt="Grupo WeChat" width="240">
+  <img src="../assets/weixin.png" alt="Grupo WeChat" width="240">
 </p>
 
 <a id="community"></a>
@@ -259,6 +259,25 @@ Obrigado ao [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 
 <a id="release-notes"></a>
 
 ## Notas de versão
+
+<details open>
+<summary><b>v8.2.1</b> - Inicialização determinística, recuperação de autenticação acionável e conexão Android em segundo plano</summary>
+
+- Adiciona cercas de geração de inicialização, prova limitada de prontidão e diagnósticos de operações e linha do tempo.
+- Interrompe ciclos de reinício sem saída por autenticação do provider e mostra a ação de login necessária.
+- Adiciona conexão Android em segundo plano opcional e um único estado de resposta ativa por Agent.
+- Sincroniza os artefatos Linux, macOS, npm e Android assinado com 8.2.1.
+
+</details>
+
+<details>
+<summary><b>v8.2.0</b> - Inicialização mais rápida, correções de providers e Mobile confiável</summary>
+
+- Reduz trabalho repetido na inicialização do ccbd sem enfraquecer verificações de lifecycle e ownership.
+- Corrige o fullscreen do Grok, preserva o tipo de credencial Claude, estabiliza escolhas de model/thinking e reforça a entrega ask/reply do Codex.
+- Melhora recovery, chat, terminal, anexos, downloads e FCM no Mobile; sincroniza artifacts Linux, macOS, npm e Android assinado com 8.2.0.
+
+</details>
 
 <details open>
 <summary><b>v8.0.14</b> - Organização do diretório README e superfície mobile</summary>

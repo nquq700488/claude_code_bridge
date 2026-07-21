@@ -25,11 +25,27 @@ from ccbd.app_runtime import (
 )
 from ccbd.services.start_policy import recovery_start_options
 from ccbd.system import utc_now
+from runtime_observability import collect_startup_operations
 
 
 class CcbdApp:
-    def __init__(self, project_root: str | Path, *, clock=utc_now, pid: int | None = None) -> None:
-        initialize_app(self, project_root, clock=clock, pid=pid)
+    def __init__(
+        self,
+        project_root: str | Path,
+        *,
+        clock=utc_now,
+        pid: int | None = None,
+        expected_startup_fence=None,
+        keeper_startup_checkpoint=None,
+    ) -> None:
+        initialize_app(
+            self,
+            project_root,
+            clock=clock,
+            pid=pid,
+            expected_startup_fence=expected_startup_fence,
+            keeper_startup_checkpoint=keeper_startup_checkpoint,
+        )
 
     def _register_handlers(self) -> None:
         from ccbd.app_runtime.handlers import register_handlers
@@ -43,7 +59,8 @@ class CcbdApp:
         return publish_service_graph_impl(self, graph)
 
     def start(self):
-        return start_impl(self)
+        with collect_startup_operations():
+            return start_impl(self)
 
     def heartbeat(self):
         return heartbeat_impl(self)
@@ -152,8 +169,19 @@ class CcbdApp:
             failure_reason=failure_reason,
         )
 
-    def persist_start_policy(self, *, auto_permission: bool, source: str = 'start_command') -> None:
-        persist_start_policy_impl(self, auto_permission=auto_permission, source=source)
+    def persist_start_policy(
+        self,
+        *,
+        auto_permission: bool,
+        recovery_restore: bool = True,
+        source: str = 'start_command',
+    ) -> None:
+        persist_start_policy_impl(
+            self,
+            auto_permission=auto_permission,
+            recovery_restore=recovery_restore,
+            source=source,
+        )
 
     def recovery_start_options(self) -> tuple[bool, bool]:
         return recovery_start_options_impl(self)

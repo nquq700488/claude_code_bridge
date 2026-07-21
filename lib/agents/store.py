@@ -36,7 +36,7 @@ class AgentSpecStore:
 
     def save(self, spec: AgentSpec) -> Path:
         path = self._layout.agent_spec_path(spec.name)
-        self._store.save(path, spec, serializer=lambda value: value.to_record())
+        self._store.save_if_changed(path, spec, serializer=lambda value: value.to_record())
         return path
 
 
@@ -54,8 +54,9 @@ class AgentRuntimeStore:
 
     def save(self, runtime: AgentRuntime) -> Path:
         path = self._layout.agent_runtime_path(runtime.agent_name)
-        self._store.save(path, runtime, serializer=lambda value: value.to_record())
-        self.save_count += 1
+        changed = self._store.save_if_changed(path, runtime, serializer=lambda value: value.to_record())
+        if changed:
+            self.save_count += 1
         return path
 
     def load_best_effort(self, agent_name: str) -> AgentRuntime | None:

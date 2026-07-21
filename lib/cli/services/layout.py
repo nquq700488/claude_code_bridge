@@ -21,7 +21,6 @@ from ccbd.services.project_namespace_runtime.backend import (
     ensure_server_policy,
     kill_server,
     kill_window,
-    prepare_server,
     session_alive,
     session_window_target,
     split_pane,
@@ -540,7 +539,6 @@ def _run_layout_smoke(context, command, windows) -> dict[str, object]:
     kill_server(backend)
     observed: list[dict[str, object]] = []
     try:
-        prepare_server(backend)
         for index, window in enumerate(windows):
             if index == 0:
                 create_session(
@@ -605,7 +603,6 @@ def _run_layout_dynamic_smoke(context, command, names: tuple[str, ...]) -> dict[
     events: list[dict[str, object]] = []
     pane_by_name: dict[str, str] = {}
     try:
-        prepare_server(backend)
         first_window = _current_windows(names[:1], window_prefix=command.window_prefix)[0]
         create_session(
             backend,

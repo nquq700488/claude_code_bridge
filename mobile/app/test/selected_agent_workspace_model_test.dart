@@ -565,6 +565,146 @@ void main() {
     },
   );
 
+  test('moves working presentation identity to the newest reply turn', () {
+    final chatController = AgentChatController();
+    final view = _view();
+    final agent = _agent(
+      activityState: 'active',
+      activitySource: 'codex_runtime',
+      activityReason: 'codex_working_status_line',
+    );
+    final presentationId = syntheticAgentWorkingConversationItemId(agent.name);
+
+    chatController.applyRemoteConversation(
+      agentName: agent.name,
+      shouldScroll: true,
+      conversation: CcbAgentConversation(
+        projectId: view.project.id,
+        agentName: agent.name,
+        namespaceEpoch: view.namespaceEpoch!,
+        items: [
+          CcbConversationItem(
+            id: 'user-1',
+            agentName: agent.name,
+            kind: CcbConversationItemKind.userMessage,
+            title: 'You',
+            body: 'first request',
+            sentAt: DateTime.utc(2026, 7, 16, 8),
+          ),
+          CcbConversationItem(
+            id: 'reply-1',
+            agentName: agent.name,
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'first visible reply',
+            source: 'provider_native/codex',
+            startedAt: DateTime.utc(2026, 7, 16, 8, 0, 1),
+            completedAt: DateTime.utc(2026, 7, 16, 8, 0, 2),
+          ),
+        ],
+        generatedAt: DateTime.utc(2026, 7, 16, 8, 0, 2),
+      ),
+    );
+    final firstTurn = selectedAgentWorkspaceModel(
+      view: _view(agent: agent),
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+    expect(firstTurn.timelineItems.last.id, presentationId);
+
+    chatController.applyRemoteConversation(
+      agentName: agent.name,
+      shouldScroll: true,
+      conversation: CcbAgentConversation(
+        projectId: view.project.id,
+        agentName: agent.name,
+        namespaceEpoch: view.namespaceEpoch!,
+        items: [
+          ...chatController.remoteConversationFor(agent.name)!.items,
+          CcbConversationItem(
+            id: 'user-2',
+            agentName: agent.name,
+            kind: CcbConversationItemKind.userMessage,
+            title: 'You',
+            body: 'second request',
+            sentAt: DateTime.utc(2026, 7, 16, 8, 1),
+          ),
+        ],
+        generatedAt: DateTime.utc(2026, 7, 16, 8, 1),
+      ),
+    );
+
+    final secondTurnPlaceholder = selectedAgentWorkspaceModel(
+      view: _view(agent: agent),
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+    expect(
+      secondTurnPlaceholder.timelineItems.where(
+        (item) => item.id == presentationId,
+      ),
+      hasLength(1),
+    );
+    expect(secondTurnPlaceholder.timelineItems.last.body, 'Working...');
+    expect(
+      secondTurnPlaceholder.timelineItems
+          .singleWhere((item) => item.body == 'first visible reply')
+          .id,
+      'reply-1',
+    );
+
+    chatController.applyRemoteConversation(
+      agentName: agent.name,
+      shouldScroll: true,
+      conversation: CcbAgentConversation(
+        projectId: view.project.id,
+        agentName: agent.name,
+        namespaceEpoch: view.namespaceEpoch!,
+        items: [
+          ...chatController.remoteConversationFor(agent.name)!.items,
+          CcbConversationItem(
+            id: 'reply-2',
+            agentName: agent.name,
+            kind: CcbConversationItemKind.agentReply,
+            title: 'Agent reply',
+            body: 'second visible reply',
+            source: 'provider_native/codex',
+            startedAt: DateTime.utc(2026, 7, 16, 8, 1, 1),
+            completedAt: DateTime.utc(2026, 7, 16, 8, 1, 2),
+          ),
+        ],
+        generatedAt: DateTime.utc(2026, 7, 16, 8, 1, 2),
+      ),
+    );
+
+    final secondTurn = selectedAgentWorkspaceModel(
+      view: _view(agent: agent),
+      agent: agent,
+      chatController: chatController,
+      isAwaitingAgentResponse: false,
+    );
+
+    expect(secondTurn.workingReplyItemId, presentationId);
+    expect(
+      secondTurn.timelineItems.where((item) => item.id == presentationId),
+      hasLength(1),
+    );
+    expect(
+      secondTurn.timelineItems
+          .singleWhere((item) => item.body == 'first visible reply')
+          .id,
+      'reply-1',
+    );
+    expect(
+      secondTurn.timelineItems
+          .singleWhere((item) => item.id == presentationId)
+          .body,
+      'second visible reply',
+    );
+  });
+
   test(
     'keeps working element identity from placeholder through completion',
     () {

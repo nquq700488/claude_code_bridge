@@ -104,6 +104,7 @@ def process_active_job(
             job_id=job_id,
             items=result.items,
             decision=result.decision,
+            submission=result.submission,
         )
     )
     if terminal_pending_decision(result.decision) is not None:

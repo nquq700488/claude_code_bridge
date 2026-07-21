@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
+
+import ccbd.services.dispatcher_runtime.frontdesk_direct_handoff as direct_handoff
 
 from agents.models import (
     AgentRuntime,
@@ -15,18 +20,32 @@ from agents.models import (
     RuntimeMode,
     WorkspaceMode,
 )
-from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope, TargetKind
+from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope
 from ccbd.reload_drain import DrainIntent, DrainQueueStore
 from ccbd.services.dispatcher import JobDispatcher
+from ccbd.services.dispatcher_runtime.frontdesk_direct_handoff import (
+    recover_frontdesk_direct_handoffs,
+    submit_frontdesk_direct_handoff,
+)
 from ccbd.services.runtime import RuntimeService
 from ccbd.services.registry import AgentRegistry
 from completion.tracker import CompletionTrackerService
-from completion.models import CompletionConfidence, CompletionCursor, CompletionDecision, CompletionSourceKind, CompletionState, CompletionStatus
+from completion.models import (
+    CompletionConfidence,
+    CompletionCursor,
+    CompletionDecision,
+    CompletionItem,
+    CompletionItemKind,
+    CompletionSourceKind,
+    CompletionState,
+    CompletionStatus,
+)
 from completion.tracker import CompletionTrackerView
 from project.ids import compute_project_id
 from project.resolver import ProjectContext
 from provider_core.contracts import ProviderSessionBinding
 from provider_core.catalog import build_default_provider_catalog
+from provider_execution.base import ProviderSubmission
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionRestoreResult, ExecutionService
 from provider_execution.service_runtime.models import ExecutionUpdate
@@ -113,6 +132,63 @@ def _provider_config(*providers: str, dispatch_disabled: set[str] | None = None)
     return ProjectConfig(version=2, default_agents=tuple(providers), agents=agents)
 
 
+def _frontdesk_config() -> ProjectConfig:
+    spec = AgentSpec(
+        name='frontdesk',
+        provider='fake',
+        target='.',
+        workspace_mode=WorkspaceMode.GIT_WORKTREE,
+        workspace_root=None,
+        runtime_mode=RuntimeMode.PANE_BACKED,
+        restore_default=RestoreMode.AUTO,
+        permission_default=PermissionMode.MANUAL,
+        queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+    )
+    return ProjectConfig(version=2, default_agents=('frontdesk',), agents={'frontdesk': spec})
+
+
+def _frontdesk_planner_config() -> ProjectConfig:
+    specs = {}
+    for name in ('frontdesk', 'planner'):
+        specs[name] = AgentSpec(
+            name=name,
+            provider='fake',
+            target='.',
+            workspace_mode=WorkspaceMode.GIT_WORKTREE,
+            workspace_root=None,
+            runtime_mode=RuntimeMode.PANE_BACKED,
+            restore_default=RestoreMode.AUTO,
+            permission_default=PermissionMode.MANUAL,
+            queue_policy=QueuePolicy.SERIAL_PER_AGENT,
+        )
+    return ProjectConfig(version=2, default_agents=('frontdesk', 'planner'), agents=specs)
+
+
+def _frontdesk_intake_reply() -> str:
+    return """**Intake Evidence**
+
+CCB_REQ_ID: `frontdesk-auto-1`
+
+Macro request: Build a tiny standard-library CLI.
+
+Scope:
+- tool.py
+- test_tool.py
+
+Required behavior:
+- Parse one file path and print line and word counts.
+
+Constraints:
+- Use only the Python standard library.
+"""
+
+
+def _create_plan_root(project_root: Path, slug: str = 'demo-plan') -> Path:
+    plan_root = project_root / 'docs' / 'plantree' / 'plans' / slug
+    plan_root.mkdir(parents=True, exist_ok=True)
+    return plan_root
+
+
 class RecoveringBindingSession:
     def __init__(
         self,
@@ -171,6 +247,12 @@ class RecordingExecutionService:
         return ()
 
 
+class FailingStartExecutionService(RecordingExecutionService):
+    def start(self, job, *, runtime_context=None) -> None:
+        self.calls.append((job, runtime_context))
+        raise RuntimeError('provider bootstrap exploded')
+
+
 class FailingRestoreExecutionService(RecordingExecutionService):
     def restore(self, job, *, runtime_context=None):
         del runtime_context
@@ -182,6 +264,94 @@ class FailingRestoreExecutionService(RecordingExecutionService):
             reason='provider_resume_unsupported',
             resume_capable=False,
         )
+
+
+class RestartedRuntimeRestoreExecutionService(RecordingExecutionService):
+    def restore(self, job, *, runtime_context=None):
+        del runtime_context
+        return ExecutionRestoreResult(
+            job_id=job.job_id,
+            agent_name=job.agent_name,
+            provider=job.provider,
+            status='abandoned',
+            reason='provider_runtime_restarted_without_pending_replay',
+            resume_capable=True,
+        )
+
+
+class ScriptedTerminalExecutionService:
+    def __init__(
+        self,
+        *,
+        runtime_state: dict[str, object],
+        items: tuple[CompletionItem, ...],
+        provider: str = 'codex',
+    ) -> None:
+        self._runtime_state = dict(runtime_state)
+        self._items = items
+        self._provider = provider
+        self._job = None
+        self._emitted = False
+        self.finished: list[str] = []
+
+    def start(self, job, *, runtime_context=None):
+        del runtime_context
+        self._job = job
+        return self._submission(job)
+
+    def cancel(self, job_id: str) -> None:
+        del job_id
+
+    def finish(self, job_id: str) -> None:
+        self.finished.append(job_id)
+
+    def acknowledge(self, job_id: str) -> None:
+        del job_id
+
+    def acknowledge_item(self, job_id: str, *, event_seq: int | None) -> None:
+        del job_id, event_seq
+
+    def poll(self):
+        if self._job is None or self._emitted:
+            return ()
+        self._emitted = True
+        return (
+            ExecutionUpdate(
+                job_id=self._job.job_id,
+                items=self._items,
+                decision=None,
+                submission=self._submission(self._job),
+            ),
+        )
+
+    def _submission(self, job) -> ProviderSubmission:
+        return ProviderSubmission(
+            job_id=job.job_id,
+            agent_name=job.agent_name,
+            provider=self._provider,
+            accepted_at='2026-03-18T00:00:00Z',
+            ready_at='2026-03-18T00:00:00Z',
+            source_kind=CompletionSourceKind.PROTOCOL_EVENT_STREAM,
+            reply='',
+            runtime_state=dict(self._runtime_state),
+        )
+
+
+def _completion_item(kind: CompletionItemKind, seq: int, *, payload: dict[str, object] | None = None) -> CompletionItem:
+    ts = f'2026-03-18T00:00:0{seq}Z'
+    return CompletionItem(
+        kind=kind,
+        timestamp=ts,
+        cursor=CompletionCursor(
+            source_kind=CompletionSourceKind.PROTOCOL_EVENT_STREAM,
+            event_seq=seq,
+            updated_at=ts,
+        ),
+        provider='codex',
+        agent_name='codex',
+        req_id='job-hard-gate',
+        payload=payload or {},
+    )
 
 
 class LateUpdateExecutionService:
@@ -337,6 +507,911 @@ def test_dispatcher_submit_tick_complete_roundtrip(tmp_path: Path) -> None:
     assert runtime.binding_generation == binding_generation
     assert runtime.runtime_generation == runtime_generation
     assert runtime.daemon_generation == daemon_generation
+
+
+def _dispatcher_with_scripted_execution(
+    tmp_path: Path,
+    *,
+    runtime_state: dict[str, object],
+    items: tuple[CompletionItem, ...],
+) -> tuple[JobDispatcher, str, ScriptedTerminalExecutionService]:
+    project_root = tmp_path / 'repo-hard-gate'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    provider_catalog = build_default_provider_catalog()
+    execution_service = ScriptedTerminalExecutionService(runtime_state=runtime_state, items=items)
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        completion_tracker=CompletionTrackerService(config, provider_catalog),
+        provider_catalog=provider_catalog,
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='hello',
+            task_id='task-hard-gate',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    return dispatcher, job_id, execution_service
+
+
+def test_dispatcher_hard_gate_rejects_terminal_before_provider_acceptance(tmp_path: Path) -> None:
+    dispatcher, job_id, _execution_service = _dispatcher_with_scripted_execution(
+        tmp_path,
+        runtime_state={
+            'mode': 'active',
+            'delivery_state': 'pending_anchor',
+            'anchor_seen': False,
+            'no_wrap': False,
+        },
+        items=(
+            _completion_item(CompletionItemKind.ASSISTANT_CHUNK, 1, payload={'text': 'stale reply'}),
+            _completion_item(
+                CompletionItemKind.TURN_BOUNDARY,
+                2,
+                payload={'reason': 'task_complete', 'last_agent_message': 'stale reply'},
+            ),
+        ),
+    )
+
+    completed = dispatcher.poll_completions()
+
+    assert len(completed) == 1
+    assert completed[0].status is JobStatus.INCOMPLETE
+    terminal = dispatcher.get_snapshot(job_id).latest_decision
+    assert terminal.status is CompletionStatus.INCOMPLETE
+    assert terminal.reason == 'terminal_before_provider_acceptance'
+    assert terminal.reply == ''
+    assert terminal.anchor_seen is False
+    assert terminal.diagnostics['completion_gate'] == 'provider_acceptance'
+    assert 'suppress_completion_state_merge' not in terminal.diagnostics
+
+
+def test_dispatcher_hard_gate_rejects_terminal_after_rotate_without_fresh_anchor(tmp_path: Path) -> None:
+    dispatcher, job_id, _execution_service = _dispatcher_with_scripted_execution(
+        tmp_path,
+        runtime_state={
+            'mode': 'active',
+            'delivery_state': 'accepted',
+            'anchor_seen': False,
+            'no_wrap': False,
+            'session_path': '/tmp/rotated-session.jsonl',
+        },
+        items=(
+            _completion_item(
+                CompletionItemKind.SESSION_ROTATE,
+                1,
+                payload={'session_path': '/tmp/rotated-session.jsonl'},
+            ),
+            _completion_item(CompletionItemKind.ASSISTANT_CHUNK, 2, payload={'text': 'rotated stale reply'}),
+            _completion_item(
+                CompletionItemKind.TURN_BOUNDARY,
+                3,
+                payload={'reason': 'task_complete', 'last_agent_message': 'rotated stale reply'},
+            ),
+        ),
+    )
+
+    completed = dispatcher.poll_completions()
+
+    assert len(completed) == 1
+    assert completed[0].status is JobStatus.INCOMPLETE
+    terminal = dispatcher.get_snapshot(job_id).latest_decision
+    assert terminal.status is CompletionStatus.INCOMPLETE
+    assert terminal.reason == 'terminal_after_session_rotate_without_anchor'
+    assert terminal.reply == ''
+    assert terminal.anchor_seen is False
+    assert 'suppress_completion_state_merge' not in terminal.diagnostics
+
+
+def test_dispatcher_hard_gate_allows_accepted_anchor_terminal(tmp_path: Path) -> None:
+    dispatcher, job_id, _execution_service = _dispatcher_with_scripted_execution(
+        tmp_path,
+        runtime_state={
+            'mode': 'active',
+            'delivery_state': 'accepted',
+            'anchor_seen': True,
+            'no_wrap': False,
+        },
+        items=(
+            _completion_item(CompletionItemKind.ASSISTANT_CHUNK, 1, payload={'text': 'accepted reply'}),
+            _completion_item(
+                CompletionItemKind.TURN_BOUNDARY,
+                2,
+                payload={'reason': 'task_complete', 'last_agent_message': 'accepted reply'},
+            ),
+        ),
+    )
+
+    completed = dispatcher.poll_completions()
+
+    assert len(completed) == 1
+    assert completed[0].status is JobStatus.COMPLETED
+    terminal = dispatcher.get_snapshot(job_id).latest_decision
+    assert terminal.status is CompletionStatus.COMPLETED
+    assert terminal.reply == 'accepted reply'
+
+
+def test_dispatcher_hard_gate_allows_no_wrap_terminal(tmp_path: Path) -> None:
+    dispatcher, job_id, _execution_service = _dispatcher_with_scripted_execution(
+        tmp_path,
+        runtime_state={
+            'mode': 'active',
+            'delivery_state': 'not_required',
+            'anchor_seen': True,
+            'no_wrap': True,
+        },
+        items=(
+            _completion_item(CompletionItemKind.ASSISTANT_CHUNK, 1, payload={'text': 'no wrap reply'}),
+            _completion_item(
+                CompletionItemKind.TURN_BOUNDARY,
+                2,
+                payload={'reason': 'task_complete', 'last_agent_message': 'no wrap reply'},
+            ),
+        ),
+    )
+
+    completed = dispatcher.poll_completions()
+
+    assert len(completed) == 1
+    assert completed[0].status is JobStatus.COMPLETED
+    terminal = dispatcher.get_snapshot(job_id).latest_decision
+    assert terminal.status is CompletionStatus.COMPLETED
+    assert terminal.reply == 'no wrap reply'
+
+
+def test_dispatcher_frontdesk_direct_silence_ask_records_activation_without_rewriting_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-handoff'
+    ctx = _bootstrap_test_project(project_root)
+    _create_plan_root(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    runner_calls = []
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: runner_calls.append(
+            (Path(context.project.project_root), activation_id, wait_job_id)
+        ) or {'status': 'started', 'pid': 4242},
+    )
+    body = _frontdesk_intake_reply() + '\nScope includes a bounded route-mix task set.\n'
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='planner',
+            from_actor='frontdesk',
+            body=body,
+            task_id='act-frontdesk-frontdesk-auto-1',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            silence_on_success=True,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    stored = dispatcher.get(job_id)
+    assert stored is not None
+    assert stored.request.body == body
+    assert stored.request.from_actor == 'frontdesk'
+    assert stored.request.to_agent == 'planner'
+    assert stored.request.silence_on_success is True
+    activation_path = project_root / '.ccb' / 'runtime' / 'loops' / 'activations' / 'act-frontdesk-frontdesk-auto-1.json'
+    activation = json.loads(activation_path.read_text(encoding='utf-8'))
+    assert activation['source'] == 'frontdesk_direct_silence_ask'
+    assert activation['source_job']['job_id'] == 'frontdesk-auto-1'
+    assert activation['source_task_id'] == 'frontdesk-auto-1'
+    assert activation['source_request']['source_job_id'] == 'frontdesk-auto-1'
+    assert activation['source_request']['bytes'] == len(body.encode('utf-8'))
+    assert activation['source_request']['sha256'] == hashlib.sha256(body.encode('utf-8')).hexdigest()
+    assert activation['direct_ask']['controller_rewrote_body'] is False
+    assert activation['ask']['job_id'] == job_id
+    assert activation['ask']['target'] == 'planner'
+    assert activation['ask']['silence'] is True
+    assert runner_calls == [(project_root, 'act-frontdesk-frontdesk-auto-1', job_id)]
+    transaction_path = activation_path.with_name(
+        'act-frontdesk-frontdesk-auto-1.direct-handoff.transaction.json'
+    )
+    transaction = json.loads(transaction_path.read_text(encoding='utf-8'))
+    assert transaction['schema'] == 'ccb.frontdesk.direct_handoff_admission_transaction.v1'
+    assert transaction['status'] == 'committed'
+    assert transaction['request'] == stored.request.to_record()
+    assert transaction['source_task_id'] == 'frontdesk-auto-1'
+    assert transaction['body_bytes'] == len(body.encode('utf-8'))
+    assert transaction['body_sha256'] == hashlib.sha256(body.encode('utf-8')).hexdigest()
+    assert transaction['transaction_digest'].startswith('sha256:')
+    source = json.loads(
+        (project_root / 'docs' / 'plantree' / 'plans' / 'demo-plan' / 'tasks' / 'index.json').read_text(
+            encoding='utf-8'
+        )
+    )
+    source_task = next(task for task in source['tasks'] if task['task_id'] == 'frontdesk-auto-1')
+    assert source_task['status'] == 'draft'
+    assert not (project_root / '.ccb' / 'runtime' / 'frontdesk-handoff').exists()
+
+
+def test_dispatcher_frontdesk_direct_silence_ask_is_idempotent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-handoff-no-plan'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    runner_calls = []
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: runner_calls.append(wait_job_id) or {'status': 'started'},
+    )
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply(),
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+    first = dispatcher.submit(request)
+    second = dispatcher.submit(request)
+    assert second.jobs[0].job_id == first.jobs[0].job_id
+    assert len({job.job_id for job in dispatcher._job_store.list_agent('planner')}) == 1
+    assert runner_calls == [first.jobs[0].job_id, first.jobs[0].job_id]
+    plan_root = project_root / 'docs' / 'plantree' / 'plans' / 'frontdesk-intake'
+    assert (plan_root / 'README.md').exists()
+    assert (plan_root / 'brief.md').exists()
+
+
+def test_dispatcher_rejects_frontdesk_asks_outside_exact_planner_silence_surface(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-no-handoff'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    for request in (
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='planner',
+            from_actor='frontdesk',
+            body=_frontdesk_intake_reply(),
+            task_id='act-frontdesk-frontdesk-auto-1',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            silence_on_success=False,
+        ),
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='planner',
+            from_actor='frontdesk',
+            body=_frontdesk_intake_reply().replace('frontdesk-auto-1', 'different-id'),
+            task_id='act-frontdesk-frontdesk-auto-1',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            silence_on_success=True,
+        ),
+    ):
+        with pytest.raises(RuntimeError):
+            dispatcher.submit(request)
+    assert dispatcher._job_store.list_agent('planner') == []
+
+
+def test_dispatcher_does_not_relay_completed_frontdesk_reply_to_planner(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-frontdesk-no-controller-relay'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='frontdesk',
+            from_actor='user',
+            body='please build the CLI',
+            task_id='task-frontdesk-user-turn',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    dispatcher.tick()
+    dispatcher.complete(
+        receipt.jobs[0].job_id,
+        CompletionDecision(
+            terminal=True,
+            status=CompletionStatus.COMPLETED,
+            reason='task_complete',
+            confidence=CompletionConfidence.EXACT,
+            reply=_frontdesk_intake_reply(),
+            anchor_seen=True,
+            reply_started=True,
+            reply_stable=True,
+            provider_turn_ref='turn-1',
+            source_cursor=None,
+            finished_at='2026-03-18T00:00:10Z',
+            diagnostics={},
+        ),
+    )
+    assert dispatcher._job_store.list_agent('planner') == []
+    assert not (project_root / '.ccb' / 'runtime' / 'frontdesk-handoff').exists()
+
+
+def test_dispatcher_frontdesk_retry_recovers_runner_start_without_duplicate_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-runner-recovery'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    calls = []
+
+    def flaky_runner(context, *, activation_id, wait_job_id):
+        del context, activation_id
+        calls.append(wait_job_id)
+        if len(calls) == 1:
+            raise RuntimeError('simulated runner crash window')
+        return {'status': 'started', 'pid': 4343}
+
+    monkeypatch.setattr('cli.services.frontdesk_intake._start_auto_runner', flaky_runner)
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply(),
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+    with pytest.raises(RuntimeError, match='simulated runner crash window'):
+        dispatcher.submit(request)
+    planner_jobs = {job.job_id for job in dispatcher._job_store.list_agent('planner')}
+    assert len(planner_jobs) == 1
+
+    recovered = dispatcher.submit(request)
+    assert recovered.jobs[0].job_id in planner_jobs
+    assert len({job.job_id for job in dispatcher._job_store.list_agent('planner')}) == 1
+    activation_path = project_root / '.ccb' / 'runtime' / 'loops' / 'activations' / 'act-frontdesk-frontdesk-auto-1.json'
+    activation = json.loads(activation_path.read_text(encoding='utf-8'))
+    assert activation['status'] == 'planner_submitted'
+    assert activation['auto_runner']['pid'] == 4343
+    assert calls == [recovered.jobs[0].job_id, recovered.jobs[0].job_id]
+
+
+def test_dispatcher_startup_recovery_rebuilds_missing_frontdesk_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-startup-recovery'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    calls = []
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: calls.append(wait_job_id) or {'status': 'started'},
+    )
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply(),
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+    receipt = dispatcher.submit(request)
+    activation_path = project_root / '.ccb' / 'runtime' / 'loops' / 'activations' / 'act-frontdesk-frontdesk-auto-1.json'
+    activation_path.unlink()
+    transaction_path = activation_path.with_name(
+        'act-frontdesk-frontdesk-auto-1.direct-handoff.transaction.json'
+    )
+    transaction = json.loads(transaction_path.read_text(encoding='utf-8'))
+    transaction['status'] = 'prepared'
+    transaction.pop('committed_at', None)
+    transaction_path.write_text(json.dumps(transaction), encoding='utf-8')
+    from cli.services.plan_tasks import find_first_actionable_task
+
+    assert find_first_actionable_task(direct_handoff._context(dispatcher), task_id='frontdesk-auto-1') is None
+    calls.clear()
+
+    recovered = recover_frontdesk_direct_handoffs(dispatcher)
+
+    assert recovered == (receipt.jobs[0].job_id,)
+    activation = json.loads(activation_path.read_text(encoding='utf-8'))
+    assert activation['ask']['job_id'] == receipt.jobs[0].job_id
+    assert activation['source'] == 'frontdesk_direct_silence_ask'
+    assert calls == [receipt.jobs[0].job_id]
+    assert json.loads(transaction_path.read_text(encoding='utf-8'))['status'] == 'committed'
+
+
+def test_dispatcher_frontdesk_prepared_interrupt_recovers_without_source_or_activation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-prepared-interrupt'
+    ctx = _bootstrap_test_project(project_root)
+    _create_plan_root(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: {'status': 'started'},
+    )
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply() + '\nScope includes a bounded route-mix task set.\n',
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+    real_atomic_write_json = direct_handoff.atomic_write_json
+    real_ensure = direct_handoff.ensure_durable_directory
+    real_lock = direct_handoff.file_lock
+    durability_events: list[str] = []
+
+    def tracking_ensure(path):
+        durability_events.append('durable-directory')
+        return real_ensure(path)
+
+    @contextmanager
+    def tracking_lock(path):
+        durability_events.append('lock')
+        with real_lock(path):
+            yield
+
+    def interrupt_after_prepared(path, payload):
+        real_atomic_write_json(path, payload)
+        if payload.get('schema') == direct_handoff._TRANSACTION_SCHEMA and payload.get('status') == 'prepared':
+            raise KeyboardInterrupt('simulated process interruption')
+
+    monkeypatch.setattr(direct_handoff, 'atomic_write_json', interrupt_after_prepared)
+    monkeypatch.setattr(direct_handoff, 'ensure_durable_directory', tracking_ensure)
+    monkeypatch.setattr(direct_handoff, 'file_lock', tracking_lock)
+    with pytest.raises(KeyboardInterrupt, match='simulated process interruption'):
+        dispatcher.submit(request)
+    assert durability_events[:2] == ['durable-directory', 'lock']
+    activation_path = project_root / '.ccb/runtime/loops/activations/act-frontdesk-frontdesk-auto-1.json'
+    transaction_path = activation_path.with_name(
+        'act-frontdesk-frontdesk-auto-1.direct-handoff.transaction.json'
+    )
+    assert json.loads(transaction_path.read_text(encoding='utf-8'))['status'] == 'prepared'
+    assert not activation_path.exists()
+    assert not any(
+        task.get('task_id') == 'frontdesk-auto-1'
+        for index_path in project_root.glob('docs/plantree/plans/*/tasks/index.json')
+        for task in json.loads(index_path.read_text(encoding='utf-8')).get('tasks', [])
+    )
+
+    monkeypatch.setattr(direct_handoff, 'atomic_write_json', real_atomic_write_json)
+    recovered = recover_frontdesk_direct_handoffs(dispatcher)
+
+    assert len(recovered) == 1
+    assert activation_path.exists()
+    assert len({job.job_id for job in dispatcher._job_store.list_agent('planner')}) == 1
+
+
+def test_dispatcher_startup_recovery_submits_committed_frontdesk_journal_without_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-committed-no-job'
+    ctx = _bootstrap_test_project(project_root)
+    _create_plan_root(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: {'status': 'started', 'job_id': wait_job_id},
+    )
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply(),
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+
+    with pytest.raises(RuntimeError, match='submit crash window'):
+        submit_frontdesk_direct_handoff(
+            dispatcher,
+            request,
+            accepted_at='2026-03-18T00:00:00Z',
+            submit=lambda: (_ for _ in ()).throw(RuntimeError('submit crash window')),
+        )
+    assert dispatcher._job_store.list_agent('planner') == []
+
+    recovered = recover_frontdesk_direct_handoffs(dispatcher)
+
+    assert len(recovered) == 1
+    jobs = {job.job_id: job for job in dispatcher._job_store.list_agent('planner')}
+    assert set(jobs) == set(recovered)
+    assert jobs[recovered[0]].request.to_record() == request.to_record()
+
+
+@pytest.mark.parametrize('tamper_kind', ('activation', 'source_task'))
+def test_dispatcher_frontdesk_authority_conflict_fails_journal_without_duplicate_job(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper_kind: str,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-activation-conflict'
+    ctx = _bootstrap_test_project(project_root)
+    _create_plan_root(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: {'status': 'started'},
+    )
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply() + '\nScope includes a bounded route-mix task set.\n',
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+    receipt = dispatcher.submit(request)
+    activation_path = project_root / '.ccb/runtime/loops/activations/act-frontdesk-frontdesk-auto-1.json'
+    if tamper_kind == 'activation':
+        activation = json.loads(activation_path.read_text(encoding='utf-8'))
+        activation['plan_slug'] = 'conflicting-plan'
+        activation_path.write_text(json.dumps(activation), encoding='utf-8')
+        error = 'activation identity conflict'
+    else:
+        index_path = project_root / 'docs/plantree/plans/demo-plan/tasks/index.json'
+        index = json.loads(index_path.read_text(encoding='utf-8'))
+        source_task = next(task for task in index['tasks'] if task['task_id'] == 'frontdesk-auto-1')
+        source_task['status'] = 'ready_for_orchestration'
+        source_task['owner'] = 'loop_runner'
+        source_task['next_owner'] = 'orchestrator'
+        index_path.write_text(json.dumps(index), encoding='utf-8')
+        error = 'source task must remain draft'
+
+    with pytest.raises((RuntimeError, ValueError), match=error):
+        dispatcher.submit(request)
+
+    transaction_path = activation_path.with_name(
+        'act-frontdesk-frontdesk-auto-1.direct-handoff.transaction.json'
+    )
+    transaction = json.loads(transaction_path.read_text(encoding='utf-8'))
+    assert transaction['status'] == 'failed'
+    assert transaction['plan_slug'] == 'demo-plan'
+    assert len({job.job_id for job in dispatcher._job_store.list_agent('planner')}) == 1
+    assert receipt.jobs[0].job_id in {job.job_id for job in dispatcher._job_store.list_agent('planner')}
+
+
+def test_frontdesk_activation_digest_excludes_time_status_and_submit_results() -> None:
+    first = {
+        'activation_id': 'act-frontdesk-request-1',
+        'project_id': 'project-1',
+        'status': 'direct_ask_pending',
+        'created_at': '2026-03-18T00:00:00Z',
+        'source_job': {
+            'job_id': 'request-1',
+            'agent_name': 'frontdesk',
+            'terminal_status': 'forwarded',
+            'finished_at': None,
+            'reply_sha256': 'abc',
+        },
+        'source_request': {'status': 'ok', 'text': 'exact intake'},
+    }
+    second = {
+        **first,
+        'status': 'planner_submitted',
+        'created_at': '2030-01-01T00:00:00Z',
+        'source_job': {**first['source_job'], 'terminal_status': 'completed', 'finished_at': '2030-01-01T00:00:00Z'},
+        'source_request': {'status': 'settled', 'text': 'exact intake'},
+        'ask': {'job_id': 'job-1', 'status': 'running'},
+        'auto_runner': {'status': 'started', 'pid': 42},
+    }
+
+    assert direct_handoff._activation_digest(first) == direct_handoff._activation_digest(second)
+
+
+@pytest.mark.parametrize('tamper_kind', ('body', 'plan', 'contract', 'source_task', 'activation_record'))
+def test_dispatcher_frontdesk_tampered_journal_cannot_self_certify_transaction(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    tamper_kind: str,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-contract-conflict'
+    ctx = _bootstrap_test_project(project_root)
+    _create_plan_root(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: {'status': 'started'},
+    )
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply() + '\nScope includes a bounded route-mix task set.\n',
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+    dispatcher.submit(request)
+    transaction_path = project_root / (
+        '.ccb/runtime/loops/activations/'
+        'act-frontdesk-frontdesk-auto-1.direct-handoff.transaction.json'
+    )
+    transaction = json.loads(transaction_path.read_text(encoding='utf-8'))
+    if tamper_kind == 'body':
+        transaction['request']['body'] += '\ntampered journal body\n'
+    elif tamper_kind == 'plan':
+        transaction['plan_slug'] = 'tampered-plan'
+    elif tamper_kind == 'contract':
+        transaction['planner_contract'] = 'single_task'
+        transaction['source_task_id'] = None
+    elif tamper_kind == 'source_task':
+        transaction['source_task_id'] = 'different-source-task'
+    else:
+        transaction['activation_record']['direct_ask']['body_sha256'] = 'tampered'
+        transaction['activation_digest'] = direct_handoff._activation_digest(transaction['activation_record'])
+    authority_keys = (
+        'project_id', 'activation_id', 'request_id', 'plan_slug', 'request', 'body_bytes',
+        'body_sha256', 'planner_contract', 'source_task_id', 'activation_digest',
+    )
+    transaction['transaction_digest'] = direct_handoff._canonical_digest(
+        {key: transaction[key] for key in authority_keys}
+    )
+    transaction_path.write_text(json.dumps(transaction), encoding='utf-8')
+
+    with pytest.raises(RuntimeError, match='conflict'):
+        dispatcher.submit(request)
+    assert json.loads(transaction_path.read_text(encoding='utf-8'))['status'] == 'failed'
+
+
+@pytest.mark.parametrize('escape_kind', ('parent', 'journal', 'activation', 'lock'))
+def test_dispatcher_frontdesk_rejects_symlink_authority_paths(
+    tmp_path: Path,
+    escape_kind: str,
+) -> None:
+    project_root = tmp_path / f'repo-frontdesk-symlink-{escape_kind}'
+    outside = tmp_path / f'outside-{escape_kind}'
+    outside.mkdir()
+    ctx = _bootstrap_test_project(project_root)
+    _create_plan_root(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    activations = project_root / '.ccb/runtime/loops/activations'
+    if escape_kind == 'parent':
+        (project_root / '.ccb/runtime').mkdir()
+        (project_root / '.ccb/runtime/loops').symlink_to(outside, target_is_directory=True)
+    else:
+        activations.mkdir(parents=True)
+        target = {
+            'journal': activations / 'act-frontdesk-frontdesk-auto-1.direct-handoff.transaction.json',
+            'activation': activations / 'act-frontdesk-frontdesk-auto-1.json',
+            'lock': activations / 'act-frontdesk-frontdesk-auto-1.lock',
+        }[escape_kind]
+        target.symlink_to(outside / 'authority')
+    request = MessageEnvelope(
+        project_id=ctx.project_id,
+        to_agent='planner',
+        from_actor='frontdesk',
+        body=_frontdesk_intake_reply(),
+        task_id='act-frontdesk-frontdesk-auto-1',
+        reply_to=None,
+        message_type='ask',
+        delivery_scope=DeliveryScope.SINGLE,
+        silence_on_success=True,
+    )
+
+    with pytest.raises((RuntimeError, ValueError), match='symlink'):
+        dispatcher.submit(request)
+    assert list(outside.iterdir()) == []
+
+
+def test_dispatcher_frontdesk_implementation_reply_fails_boundary_guard(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-boundary'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='frontdesk',
+            from_actor='user',
+            body='Create docs/runtime-retest-a.md with a small runtime retest note.',
+            task_id='task-frontdesk-direct-implementation',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+
+    terminal = dispatcher.complete(
+        job_id,
+        CompletionDecision(
+            terminal=True,
+            status=CompletionStatus.COMPLETED,
+            reason='task_complete',
+            confidence=CompletionConfidence.EXACT,
+            reply='Created docs/runtime-retest-a.md and verified the file content.',
+            anchor_seen=True,
+            reply_started=True,
+            reply_stable=True,
+            provider_turn_ref='turn-1',
+            source_cursor=None,
+            finished_at='2026-03-18T00:00:10Z',
+            diagnostics={},
+        ),
+    )
+
+    assert terminal.status is JobStatus.FAILED
+    decision = dispatcher.get_snapshot(job_id).latest_decision
+    assert decision.status is CompletionStatus.FAILED
+    assert decision.reason == 'frontdesk_direct_implementation_boundary_violation'
+    assert decision.diagnostics['frontdesk_boundary_violation'] is True
+    marker_path = project_root / '.ccb' / 'runtime' / 'frontdesk-boundary' / f'{job_id}.json'
+    marker = json.loads(marker_path.read_text(encoding='utf-8'))
+    assert marker['reason'] == 'frontdesk_direct_implementation_boundary_violation'
+    assert marker['required_action'] == 'return_intake_evidence_for_planner_handoff'
+    assert not (project_root / '.ccb' / 'runtime' / 'frontdesk-handoff').exists()
+
+
+def test_dispatcher_frontdesk_short_receipt_completes_after_persisted_direct_handoff(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / 'repo-frontdesk-direct-handoff-completion'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _frontdesk_planner_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('frontdesk', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('planner', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-18T00:00:00Z')
+    monkeypatch.setattr(
+        'cli.services.frontdesk_intake._start_auto_runner',
+        lambda context, *, activation_id, wait_job_id: {
+            'status': 'started',
+            'activation_id': activation_id,
+            'wait_job_id': wait_job_id,
+        },
+    )
+    frontdesk_receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='frontdesk',
+            from_actor='user',
+            body='Create docs and tests for the inventory library.',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    frontdesk_job_id = frontdesk_receipt.jobs[0].job_id
+    dispatcher.tick()
+    intake = _frontdesk_intake_reply().replace('frontdesk-auto-1', frontdesk_job_id)
+    dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='planner',
+            from_actor='frontdesk',
+            body=intake,
+            task_id=f'act-frontdesk-{frontdesk_job_id}',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            silence_on_success=True,
+        )
+    )
+
+    terminal = dispatcher.complete(
+        frontdesk_job_id,
+        CompletionDecision(
+            terminal=True,
+            status=CompletionStatus.COMPLETED,
+            reason='task_complete',
+            confidence=CompletionConfidence.EXACT,
+            reply='Forwarded the intake to Planner.',
+            anchor_seen=True,
+            reply_started=True,
+            reply_stable=True,
+            provider_turn_ref='turn-direct-handoff',
+            source_cursor=None,
+            finished_at='2026-03-18T00:00:10Z',
+            diagnostics={},
+        ),
+    )
+
+    assert terminal.status is JobStatus.COMPLETED
+    decision = dispatcher.get_snapshot(frontdesk_job_id).latest_decision
+    assert decision.status is CompletionStatus.COMPLETED
+    assert not (project_root / '.ccb' / 'runtime' / 'frontdesk-boundary').exists()
 
 
 def test_dispatcher_allows_non_mailbox_email_sender(tmp_path: Path) -> None:
@@ -720,13 +1795,18 @@ def test_dispatcher_passes_runtime_context_to_execution_service(tmp_path: Path) 
     dispatcher.tick()
 
     assert len(execution_service.calls) == 1
-    _, runtime_context = execution_service.calls[0]
+    execution_job, runtime_context = execution_service.calls[0]
     assert runtime_context is not None
     assert runtime_context.agent_name == 'codex'
     assert runtime_context.workspace_path == str(layout.workspace_path('codex'))
     assert runtime_context.runtime_ref == 'codex-runtime'
     assert runtime_context.session_ref == 'codex-session'
     assert runtime_context.runtime_pid == 101
+    expected_flag = layout.agent_dir('codex') / 'cancel_flags' / f'{execution_job.job_id}.cancel'
+    assert f'`{expected_flag}`' in execution_job.request.body
+    stored_job = dispatcher.get(execution_job.job_id)
+    assert stored_job is not None
+    assert stored_job.request.body == 'hello'
 
 
 def test_dispatcher_uses_latest_attached_binding_refs(tmp_path: Path) -> None:
@@ -984,6 +2064,56 @@ def test_dispatcher_tick_runs_jobs_in_parallel_across_agents_but_serializes_per_
     assert first_state is not None and first_state.status is JobStatus.RUNNING
     assert second_state is not None and second_state.status is JobStatus.QUEUED
     assert claude_state is not None and claude_state.status is JobStatus.RUNNING
+
+
+def test_dispatcher_provider_start_exception_fails_job_and_releases_agent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-dispatch-provider-start-failure'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    execution_service = FailingStartExecutionService()
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=StepClock(
+            '2026-03-18T00:00:00Z',
+            '2026-03-18T00:00:01Z',
+            '2026-03-18T00:00:02Z',
+        ),
+    )
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='fail visibly during provider start',
+            task_id=None,
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+
+    started = dispatcher.tick()
+
+    assert len(started) == 1
+    terminal = dispatcher.get(receipt.jobs[0].job_id)
+    assert terminal is not None
+    assert terminal.status is JobStatus.FAILED
+    assert terminal.terminal_decision is not None
+    assert terminal.terminal_decision['reason'] == 'provider_start_failed'
+    assert terminal.terminal_decision['diagnostics'] == {
+        'error_type': 'RuntimeError',
+        'provider': 'codex',
+        'provider_start_error': 'provider bootstrap exploded',
+    }
+    runtime = registry.get('codex')
+    assert runtime is not None
+    assert runtime.state is AgentState.IDLE
 
 
 def test_dispatcher_tick_starts_healthy_agent_when_other_agent_binding_recovery_fails(tmp_path: Path) -> None:
@@ -1428,6 +2558,63 @@ def test_dispatcher_restore_running_jobs_marks_unrecoverable_execution_incomplet
     event_types = [event['type'] for event in watched['events']]
     assert 'execution_restore_failed' in event_types
     assert watched['terminal'] is True
+
+
+def test_dispatcher_restore_running_jobs_marks_restarted_runtime_retryable_failure(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-restore-restarted-runtime'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _fake_config()
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('demo', project_id=ctx.project_id, layout=layout, pid=201))
+    execution_service = ExecutionService(
+        build_default_execution_registry(),
+        clock=lambda: '2026-03-18T00:00:00Z',
+        state_store=ExecutionStateStore(layout),
+    )
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=execution_service,
+        clock=lambda: '2026-03-18T00:00:00Z',
+    )
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='demo',
+            from_actor='user',
+            body='restore me',
+            task_id='fake;latency_ms=1500',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+    dispatcher.tick()
+    running = dispatcher.get(job_id)
+    assert running is not None
+    assert running.status is JobStatus.RUNNING
+
+    restarted = JobDispatcher(
+        layout,
+        config,
+        registry,
+        execution_service=RestartedRuntimeRestoreExecutionService(),
+        clock=lambda: '2026-03-18T00:00:05Z',
+    )
+    completed = restarted.restore_running_jobs()
+
+    assert len(completed) == 1
+    terminal = restarted.get(job_id)
+    assert terminal is not None
+    assert terminal.status is JobStatus.FAILED
+    assert terminal.terminal_decision is not None
+    assert terminal.terminal_decision['reason'] == 'runtime_unavailable'
+    assert terminal.terminal_decision['diagnostics']['delivery_retryable'] is True
+    assert terminal.terminal_decision['diagnostics']['no_reply_reason'] == 'provider_runtime_restarted_without_pending_replay'
 
 
 def test_dispatcher_terminate_nonterminal_jobs_prevents_retry_and_restart_restore(tmp_path: Path) -> None:

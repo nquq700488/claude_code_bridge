@@ -713,6 +713,102 @@ void main() {
     },
   );
 
+  testWidgets(
+    'file picker accepts an extension-only MP4 and submits uploaded video',
+    (tester) async {
+      final originalPicker = FilePickerPlatform.instance;
+      final tempDir = Directory.systemTemp.createTempSync(
+        'ccb-mobile-picker-video-',
+      );
+      final video = File('${tempDir.path}/picked-video-cache');
+      video.writeAsBytesSync([0x00, 0x00, 0x00, 0x18, 0x66, 0x74, 0x79, 0x70]);
+      addTearDown(() {
+        FilePickerPlatform.instance = originalPicker;
+        tempDir.deleteSync(recursive: true);
+      });
+      final picker = _FakeFilePicker([
+        FilePickerResult([
+          PlatformFile(
+            name: 'phone-clip.mp4',
+            path: video.path,
+            size: video.lengthSync(),
+          ),
+        ]),
+      ]);
+      FilePickerPlatform.instance = picker;
+      final repository = ImageUploadGatewayRepository();
+      final agent = const CcbAgent(
+        name: 'mobile',
+        provider: 'codex',
+        window: 'main',
+        order: 0,
+        active: true,
+        queueDepth: 0,
+        paneId: '%2',
+      );
+      final view = _workspaceView(agent);
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SelectedAgentWorkspace(
+              repository: repository,
+              terminalTransport: null,
+              usePaneInputForMessages: false,
+              view: view,
+              agent: agent,
+              enableComposerCollapse: true,
+              onRefreshView: () async => view,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      await tester.tap(find.byKey(const ValueKey('agent-attachment-button')));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.byKey(const ValueKey('agent-attachment-pick-file')),
+      );
+      await tester.pumpAndSettle();
+
+      expect(picker.requestedTypes, [FileType.any]);
+      expect(
+        find.byKey(const ValueKey('agent-attachment-chip-draft-mobile-0')),
+        findsOneWidget,
+      );
+      expect(
+        find.text('phone-clip.mp4 is not a supported attachment type'),
+        findsNothing,
+      );
+
+      await tester.enterText(
+        find.byKey(const ValueKey('agent-message-composer')),
+        'please inspect this video',
+      );
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      for (
+        var attempt = 0;
+        attempt < 20 && repository.pathUploads.isEmpty;
+        attempt += 1
+      ) {
+        await tester.pump(const Duration(milliseconds: 50));
+      }
+
+      expect(repository.pathUploads.single.mimeType, 'video/mp4');
+      expect(repository.pathUploads.single.fileName, 'phone-clip.mp4');
+      final submittedAttachment =
+          repository.submittedMessages.single.attachments.single;
+      expect(submittedAttachment.fileName, 'phone-clip.mp4');
+      expect(submittedAttachment.mimeType, 'video/mp4');
+      expect(
+        submittedAttachment.effectiveKind,
+        CcbMessageAttachmentKind.document,
+      );
+      expect(find.text('Failed'), findsNothing);
+    },
+  );
+
   testWidgets('pane image echo merges into one attachment message', (
     tester,
   ) async {
@@ -1427,7 +1523,7 @@ void main() {
     tester,
   ) async {
     final repository = DownloadGateRepository(
-      attachmentSizeBytes: agentMessageMaxAttachmentBytes + 1,
+      attachmentSizeBytes: agentMessageMaxDownloadBytes + 1,
     );
     await tester.pumpWidget(
       MaterialApp(home: ProjectHomeScreen(repository: repository)),
@@ -1456,10 +1552,52 @@ void main() {
     await tester.pump();
 
     expect(repository.downloadCalls, 0);
-    expect(find.text('gateway-notes.txt is larger than 25 MB'), findsOneWidget);
+    expect(
+      find.text('gateway-notes.txt is larger than 128 MB'),
+      findsOneWidget,
+    );
     expect(
       find.byKey(const ValueKey('agent-attachment-progress-gateway-file')),
       findsNothing,
+    );
+  });
+
+  testWidgets('release sized gateway attachment can start download', (
+    tester,
+  ) async {
+    final repository = DownloadGateRepository(
+      attachmentSizeBytes: 74 * 1024 * 1024,
+    );
+    await tester.pumpWidget(
+      MaterialApp(home: ProjectHomeScreen(repository: repository)),
+    );
+    await tester.pumpAndSettle();
+    await openCurrentProject(tester);
+
+    await dragUntilVisible(
+      tester,
+      const ValueKey('conversation-attachment-chip-gateway-file'),
+      const Offset(0, -700),
+    );
+    tester
+        .widget<InkWell>(
+          find.byKey(
+            const ValueKey('conversation-attachment-chip-gateway-file'),
+          ),
+        )
+        .onTap!();
+    await tester.pumpAndSettle();
+    await tester.tap(
+      find.byKey(
+        const ValueKey('conversation-attachment-action-download-gateway-file'),
+      ),
+    );
+    await tester.pump();
+
+    expect(repository.downloadCalls, 1);
+    expect(
+      find.byKey(const ValueKey('agent-attachment-progress-gateway-file')),
+      findsOneWidget,
     );
   });
 
@@ -2517,7 +2655,7 @@ void main() {
     expect(find.text('Credits remaining: 42%'), findsOneWidget);
   });
 
-  testWidgets('paired Tab quick key types draft into pane without Enter', (
+  testWidgets('paired Tab quick key keeps a visible queued user bubble', (
     tester,
   ) async {
     await setTestSurfaceSize(tester, const Size(390, 844));
@@ -2572,6 +2710,7 @@ void main() {
     expect(terminalTransport.sessions.single.written, [
       [9],
     ]);
+    expect(find.text('draft before tab'), findsOneWidget);
     expect(
       tester
           .widget<TextField>(
@@ -2581,6 +2720,105 @@ void main() {
           .text,
       isEmpty,
     );
+  });
+
+  testWidgets('paired Tab quick key uploads and queues image attachment', (
+    tester,
+  ) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+
+    final originalPicker = FilePickerPlatform.instance;
+    final tempDir = Directory.systemTemp.createTempSync(
+      'ccb-mobile-tab-image-',
+    );
+    final image = File('${tempDir.path}/picked-image-cache');
+    image.writeAsBytesSync([0xff, 0xd8, 0xff, 0xd9]);
+    addTearDown(() {
+      FilePickerPlatform.instance = originalPicker;
+      tempDir.deleteSync(recursive: true);
+    });
+    FilePickerPlatform.instance = _FakeFilePicker([
+      FilePickerResult([
+        PlatformFile(
+          name: 'queued-photo.jpg',
+          path: image.path,
+          size: image.lengthSync(),
+        ),
+      ]),
+    ]);
+
+    final secureStore = MemorySecureStore();
+    final profileStore = GatewayHostProfileStore(secureStore: secureStore);
+    final host = GatewayPairedHost(
+      profile: GatewayHostProfile(
+        hostId: 'proj-demo',
+        deviceId: 'dev-tab-image',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: Uri.parse('http://127.0.0.1:8787'),
+        ),
+        scopes: const {'view', 'content', 'focus', 'terminal_input', 'notify'},
+      ),
+      deviceToken: 'device-secret',
+      projectId: 'proj-demo',
+    );
+    await profileStore.save(host);
+    final terminalTransport = RecordingTerminalTransport();
+    final repository = ImageUploadGatewayRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: FakeMobileCcbRepository.demo(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (profile) => repository,
+          gatewayTerminalTransportFactory: (profile) => terminalTransport,
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await activateStoredGatewayProfile(tester);
+
+    await tester.tap(find.byKey(const ValueKey('agent-attachment-button')));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const ValueKey('agent-attachment-pick-image')));
+    await tester.pumpAndSettle();
+    await tester.enterText(
+      find.byKey(const ValueKey('agent-message-composer')),
+      'queue this image',
+    );
+
+    await tester.tap(find.byKey(const ValueKey('agent-quick-key-tab')));
+    for (
+      var attempt = 0;
+      attempt < 20 && repository.pathUploads.isEmpty;
+      attempt += 1
+    ) {
+      await tester.pump(const Duration(milliseconds: 50));
+    }
+    await tester.pumpAndSettle();
+
+    expect(repository.pathUploads.single.fileName, 'queued-photo.jpg');
+    expect(repository.pathUploads.single.mimeType, 'image/jpeg');
+    expect(
+      terminalTransport.sessions.single.pasted.single,
+      contains('queue this image'),
+    );
+    expect(
+      terminalTransport.sessions.single.pasted.single,
+      contains('queued-photo.jpg'),
+    );
+    expect(terminalTransport.sessions.single.written, [
+      [9],
+    ]);
+    expect(find.text('queue this image'), findsOneWidget);
+    expect(
+      find.byKey(
+        const ValueKey('conversation-attachment-chip-uploaded-image-1'),
+      ),
+      findsOneWidget,
+    );
+    expect(find.byKey(const ValueKey('agent-attachment-tray')), findsNothing);
   });
 
   testWidgets(
@@ -2731,6 +2969,7 @@ class _FakeFilePicker extends FilePickerPlatform {
   _FakeFilePicker(this.results);
 
   final List<FilePickerResult?> results;
+  final requestedTypes = <FileType>[];
   var _index = 0;
 
   @override
@@ -2748,6 +2987,7 @@ class _FakeFilePicker extends FilePickerPlatform {
     bool readSequential = false,
     bool cancelUploadOnWindowBlur = true,
   }) async {
+    requestedTypes.add(type);
     if (_index >= results.length) {
       return null;
     }

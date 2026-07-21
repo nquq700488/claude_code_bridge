@@ -70,6 +70,11 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
   reusable long-running goal prompt for optimizing selected-agent conversation
   latency, live output smoothness, transcript reconciliation, and strict local
   Android Emulator evidence after pane-backed chat lands.
+- [goal-paseo-inspired-runtime-hardening.md](goal-paseo-inspired-runtime-hardening.md)
+  is the implementation-driving goal for keeping the current Flutter/CCB
+  architecture while adopting Paseo-inspired host persistence, unified
+  reconnect, cursor catch-up, Push, presence, and optional foreground-service
+  behavior with strict emulator and physical-phone evidence.
 - [roadmap.md](roadmap.md) tracks likely implementation phases.
 - [implementation-status.md](implementation-status.md) is the current
   execution handoff for the active landing phase.
@@ -126,6 +131,14 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
 - [topics/relay-route-provider-spike.md](topics/relay-route-provider-spike.md)
   defines the first relay route-provider contract and emulator-only fake/local
   acceptance gates before a public relay exists.
+- [topics/public-relay-invitation-and-aliyun-deployment.md](topics/public-relay-invitation-and-aliyun-deployment.md)
+  defines the hosted relay, one-time applicant invitation, minimal metadata,
+  end-to-end encryption, abuse controls, Alibaba Cloud deployment, and inputs
+  required from the operator.
+- [topics/public-relay-android-emulator-acceptance.md](topics/public-relay-android-emulator-acceptance.md)
+  defines the strict public WSS Android Emulator, one-time invitation,
+  confidentiality, real-project workflow, recovery, capacity, and no-storage
+  acceptance gates.
 - [topics/emulator-only-acceptance-checklist.md](topics/emulator-only-acceptance-checklist.md)
   consolidates the current emulator-only completion gates, local proof, AVD
   smoke commands, accepted deferrals, and final audit surface.
@@ -271,6 +284,12 @@ Relevant implementation anchors in `/home/bfly/yunwei/ccb_source`:
   records that P0 task-completion phone notifications are app-lifetime local
   notifications fed by a server-wide low-sensitive gateway event stream, with
   push/foreground-service reliability deferred.
+- [decisions/022-device-bound-push-delivery.md](decisions/022-device-bound-push-delivery.md)
+  records the gateway's device-bound push-token, payload, authorization,
+  migration, and external-provider boundary.
+- [decisions/023-one-time-public-relay-admission.md](decisions/023-one-time-public-relay-admission.md)
+  records that each hosted-relay applicant receives a one-use invitation that
+  activates one host key, while reusable CCB phone pairing remains separate.
 
 ## Current Direction
 

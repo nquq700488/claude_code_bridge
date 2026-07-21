@@ -244,6 +244,33 @@ def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
     assert stderr.getvalue() == ""
 
 
+def test_run_cli_entrypoint_prints_version_before_dispatch(monkeypatch) -> None:
+    stdout = StringIO()
+    stderr = StringIO()
+
+    def fail_if_dispatched(*_args, **_kwargs):
+        raise AssertionError("--print-version must return before CLI dispatch")
+
+    monkeypatch.setattr(
+        entrypoint_runtime,
+        "maybe_handle_sidebar_click_command",
+        fail_if_dispatched,
+    )
+
+    result = entrypoint_runtime.run_cli_entrypoint(
+        ["--print-version"],
+        version="8.2.1",
+        script_root=Path("/tmp/ccb"),
+        cwd=Path("/tmp/project"),
+        stdout=stdout,
+        stderr=stderr,
+    )
+
+    assert result == 0
+    assert stdout.getvalue() == "v8.2.1\n"
+    assert stderr.getvalue() == ""
+
+
 def test_run_cli_entrypoint_rejects_removed_rich_install() -> None:
     stdout = StringIO()
     stderr = StringIO()
@@ -1394,13 +1421,14 @@ def test_run_cli_entrypoint_prints_ask_help() -> None:
     assert result == 0
     assert "Usage:" in stdout.getvalue()
     assert (
-        "ccb ask [--compact] [--silence] [--chain] [--artifact-request] [--artifact-reply] <target> [--] <message...>"
+        "ccb ask [--compact] [--silence] [--chain] [--artifact-request] [--inline-request] [--artifact-reply] <target> [--] <message...>"
         in stdout.getvalue()
     )
     assert "--compact request a distilled reply that preserves key information" in stdout.getvalue()
     assert "--silence request silent-on-success delivery; failures/blockers still surface" in stdout.getvalue()
     assert "--chain mark this ask as part of the current active task chain" in stdout.getvalue()
     assert "--artifact-request force the request body into a CCB text artifact" in stdout.getvalue()
+    assert "--inline-request keep the request body inline and disable automatic artifact spill" in stdout.getvalue()
     assert "--artifact-reply force the final reply into a CCB text artifact" in stdout.getvalue()
     assert "--artifact-io enable both --artifact-request and --artifact-reply" in stdout.getvalue()
     assert "ccb ask --compact agent1 review latest diff" in stdout.getvalue()

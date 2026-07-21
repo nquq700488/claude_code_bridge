@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from project.discovery import load_workspace_binding
-from storage.atomic import atomic_write_json
+from storage.atomic import atomic_write_json, atomic_write_json_if_changed
 from workspace.models import WorkspaceBinding, WorkspacePlan
 
 
@@ -36,5 +36,30 @@ class WorkspaceBindingStore:
             workspace_path=str(plan.workspace_path),
             branch_name=plan.branch_name,
         )
-        atomic_write_json(plan.binding_path, binding.to_record())
+        atomic_write_json_if_changed(plan.binding_path, binding.to_record())
         return plan.binding_path
+
+    def bind_controller_worktree(
+        self,
+        path: Path,
+        *,
+        target_project: Path,
+        project_id: str,
+        workspace_group: str,
+        workspace_path: Path,
+        branch_name: str,
+    ) -> Path:
+        from agents.models import WorkspaceMode
+
+        binding = WorkspaceBinding(
+            target_project=str(Path(target_project).resolve()),
+            project_id=str(project_id),
+            agent_name=str(workspace_group),
+            workspace_mode=WorkspaceMode.GIT_WORKTREE,
+            workspace_path=str(Path(workspace_path).resolve()),
+            branch_name=str(branch_name),
+        )
+        record = binding.to_record()
+        atomic_write_json(path, record)
+        atomic_write_json(Path(workspace_path).resolve() / '.ccb-workspace.json', record)
+        return path

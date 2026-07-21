@@ -25,7 +25,10 @@ class GatewayHttpException implements Exception {
 }
 
 class HttpGatewayTransport
-    implements GatewayTransport, GatewayFilePathUploader {
+    implements
+        GatewayTransport,
+        GatewayFilePathUploader,
+        GatewayPresenceTransport {
   HttpGatewayTransport({
     required this.profile,
     String? deviceToken,
@@ -68,9 +71,28 @@ class HttpGatewayTransport
   }
 
   @override
+  Future<void> reportPresence({
+    required bool visible,
+    String? focusedProjectId,
+    String? focusedAgent,
+    String? terminalId,
+    bool userActivity = false,
+  }) async {
+    await _postJson('/v1/devices/me/presence', {
+      'visible': visible,
+      if (_hasText(focusedProjectId))
+        'focused_project_id': focusedProjectId!.trim(),
+      if (_hasText(focusedAgent)) 'focused_agent': focusedAgent!.trim(),
+      if (_hasText(terminalId)) 'terminal_id': terminalId!.trim(),
+      'user_activity': userActivity,
+    });
+  }
+
+  @override
   Future<List<CcbProject>> listProjects() async {
-    final attempts =
-        _projectListWarmupMaxAttempts < 1 ? 1 : _projectListWarmupMaxAttempts;
+    final attempts = _projectListWarmupMaxAttempts < 1
+        ? 1
+        : _projectListWarmupMaxAttempts;
     for (var attempt = 0; attempt < attempts; attempt += 1) {
       final json = await _getJson('/v1/projects');
       final projects = json['projects'];
@@ -139,14 +161,13 @@ class HttpGatewayTransport
     int maxLines = 200,
   }) async {
     final encoded = Uri.encodeComponent(projectId);
-    final query =
-        Uri(
-          queryParameters: {
-            'agent': agent,
-            'namespace_epoch': namespaceEpoch.toString(),
-            'max_lines': maxLines.toString(),
-          },
-        ).query;
+    final query = Uri(
+      queryParameters: {
+        'agent': agent,
+        'namespace_epoch': namespaceEpoch.toString(),
+        'max_lines': maxLines.toString(),
+      },
+    ).query;
     final json = await _getJson(
       '/v1/projects/$encoded/terminal-history?$query',
     );
@@ -164,14 +185,13 @@ class HttpGatewayTransport
   }) async {
     final encodedProject = Uri.encodeComponent(projectId);
     final encodedAgent = Uri.encodeComponent(agent);
-    final query =
-        Uri(
-          queryParameters: {
-            'namespace_epoch': namespaceEpoch.toString(),
-            'limit': limit.toString(),
-            if (_hasText(cursor)) 'cursor': cursor!,
-          },
-        ).query;
+    final query = Uri(
+      queryParameters: {
+        'namespace_epoch': namespaceEpoch.toString(),
+        'limit': limit.toString(),
+        if (_hasText(cursor)) 'cursor': cursor!,
+      },
+    ).query;
     final json = await _getJson(
       '/v1/projects/$encodedProject/agents/$encodedAgent/conversation?$query',
     );
@@ -550,10 +570,9 @@ GatewayTerminalFrame _terminalFrameFromMessage(Object? message) {
   final text = switch (message) {
     final String value => value,
     final List<int> value => utf8.decode(value),
-    _ =>
-      throw FormatException(
-        'gateway terminal WebSocket sent unsupported message',
-      ),
+    _ => throw FormatException(
+      'gateway terminal WebSocket sent unsupported message',
+    ),
   };
   final decoded = jsonDecode(text);
   if (decoded is Map) {

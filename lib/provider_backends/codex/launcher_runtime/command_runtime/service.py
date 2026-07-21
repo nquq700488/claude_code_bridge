@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable
 
 from agents.policy import should_restore_provider_history
+from cli.services.role_command_policy import role_command_policy_for_spec, role_command_policy_requires_enforcement
 from provider_core.caller_env import caller_context_env, provider_user_session_env
 from provider_core.runtime_shared import apply_provider_command_template
 from provider_backends.codex.runtime_artifacts import codex_runtime_artifact_layout
@@ -87,7 +88,9 @@ def _path_or_none(value: object) -> Path | None:
 def _codex_args(command, spec, runtime_dir: Path, *, profile, provider_start_parts_fn, load_resume_session_id_fn) -> list[str]:
     codex_args = provider_start_parts_fn('codex')
     codex_args.extend(['-c', 'disable_paste_burst=true'])
-    if command.auto_permission:
+    if role_command_policy_requires_enforcement(role_command_policy_for_spec(spec)):
+        codex_args.extend(['--ask-for-approval', 'never', '--sandbox', 'read-only'])
+    elif command.auto_permission:
         codex_args.extend(
             [
                 '--ask-for-approval',

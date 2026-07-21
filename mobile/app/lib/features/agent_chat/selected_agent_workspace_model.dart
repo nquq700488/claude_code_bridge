@@ -71,6 +71,13 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
   final workingPresentationId = syntheticAgentWorkingConversationItemId(
     agent.name,
   );
+  if (executionStatus.state == 'working') {
+    chatController.claimRemotePresentationId(
+      agent.name,
+      presentationId: workingPresentationId,
+      remoteItemId: rawWorkingReplyItemId,
+    );
+  }
   final timelineItems = <CcbConversationItem>[];
   String? workingReplyItemId;
   if (remoteConversation != null) {

@@ -83,6 +83,45 @@ def _repeat_last_inspection(inspections):
     return _inspect
 
 
+def _managed_caller_context(
+    monkeypatch: pytest.MonkeyPatch,
+    context: CliContext,
+    *,
+    actor: str = 'agent1',
+) -> CliContext:
+    runtime_dir = context.paths.agents_dir / actor / 'provider-runtime' / 'codex'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CCB_CALLER_ACTOR', actor)
+    monkeypatch.setenv('CCB_CALLER_RUNTIME_DIR', str(runtime_dir))
+    monkeypatch.setenv('CCB_CALLER_PROJECT_ROOT', str(context.project.project_root))
+    monkeypatch.setenv('CCB_CALLER_PROJECT_ID', context.project.project_id)
+    return replace(context, project=replace(context.project, source='caller-runtime'))
+
+
+def _managed_mounted_inspection(context: CliContext):
+    signature = project_config_identity_payload(
+        load_project_config(context.project.project_root).config
+    )['config_signature']
+    return SimpleNamespace(
+        phase='mounted',
+        desired_state='running',
+        health=LeaseHealth.HEALTHY,
+        socket_connectable=True,
+        pid_alive=True,
+        heartbeat_fresh=True,
+        takeover_allowed=False,
+        reason='healthy',
+        lease=SimpleNamespace(
+            project_id=context.project.project_id,
+            socket_path=str(context.paths.ccbd_socket_path),
+            mount_state=MountState.MOUNTED,
+            config_signature=signature,
+        ),
+        lifecycle=SimpleNamespace(config_signature=signature),
+        last_failure_reason=None,
+    )
+
+
 def test_daemon_matches_project_config_treats_signature_drift_as_reload_pending(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-signature'
     ctx = _context(project_root, 'agent1:codex\n')
@@ -589,6 +628,130 @@ def test_connect_mounted_daemon_does_not_restart_when_lifecycle_desired_stopped(
 
     with pytest.raises(daemon_service.CcbdServiceError, match='project ccbd is unmounted; run `ccb` first'):
         daemon_service.connect_mounted_daemon(ctx, allow_restart_stale=True)
+
+
+def test_managed_caller_invocation_bypasses_socket_probe_without_restart(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ctx = _managed_caller_context(
+        monkeypatch,
+        _context(tmp_path / 'repo-managed-caller', 'agent1:codex\n'),
+    )
+    inspection = _managed_mounted_inspection(ctx)
+    inspect_assumptions: list[bool] = []
+    requests: list[str] = []
+
+    class FakeClient:
+        def submit(self, value: str) -> dict[str, str]:
+            requests.append(value)
+            return {'job_id': 'job-managed'}
+
+    def _inspect(context, *, assume_mounted_socket_connectable=False):
+        assert context is ctx
+        inspect_assumptions.append(assume_mounted_socket_connectable)
+        return None, None, inspection
+
+    monkeypatch.setattr(daemon_service, 'inspect_daemon', _inspect)
+    monkeypatch.setattr(daemon_service, '_build_control_plane_client', lambda socket_path: FakeClient())
+    monkeypatch.setattr(
+        daemon_service,
+        'connect_mounted_daemon',
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError('must not use restart-capable connection')),
+    )
+    monkeypatch.setattr(
+        daemon_service,
+        'ensure_daemon_started',
+        lambda context: (_ for _ in ()).throw(AssertionError('must not start daemon')),
+    )
+
+    payload = daemon_service.invoke_mounted_daemon(
+        ctx,
+        allow_restart_stale=True,
+        request_fn=lambda client: client.submit('frontdesk-intake'),
+    )
+
+    assert payload == {'job_id': 'job-managed'}
+    assert inspect_assumptions == [True]
+    assert requests == ['frontdesk-intake']
+
+
+def test_managed_caller_uses_mounted_lease_socket_when_local_placement_differs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ctx = _managed_caller_context(
+        monkeypatch,
+        _context(tmp_path / 'repo-managed-relocated-socket', 'agent1:codex\n'),
+    )
+    inspection = _managed_mounted_inspection(ctx)
+    lease_socket = tmp_path / 'runtime-with-xdg' / 'ccbd.sock'
+    inspection.lease.socket_path = str(lease_socket)
+    captured: list[Path] = []
+
+    class FakeClient:
+        def submit(self, value: str) -> dict[str, str]:
+            assert value == 'frontdesk-intake'
+            return {'job_id': 'job-managed-relocated'}
+
+    monkeypatch.setattr(
+        daemon_service,
+        'inspect_daemon',
+        lambda context, *, assume_mounted_socket_connectable=False: (None, None, inspection),
+    )
+    monkeypatch.setattr(
+        daemon_service,
+        '_build_control_plane_client',
+        lambda socket_path: captured.append(Path(socket_path)) or FakeClient(),
+    )
+
+    payload = daemon_service.invoke_mounted_daemon(
+        ctx,
+        allow_restart_stale=True,
+        request_fn=lambda client: client.submit('frontdesk-intake'),
+    )
+
+    assert payload == {'job_id': 'job-managed-relocated'}
+    assert captured == [lease_socket]
+
+
+def test_managed_caller_ignores_sandboxed_pid_probe_and_uses_rpc(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    ctx = _managed_caller_context(
+        monkeypatch,
+        _context(tmp_path / 'repo-managed-stale', 'agent1:codex\n'),
+    )
+    inspection = _managed_mounted_inspection(ctx)
+    inspection.pid_alive = False
+    requests: list[str] = []
+
+    class FakeClient:
+        def submit(self, value: str) -> dict[str, str]:
+            requests.append(value)
+            return {'job_id': 'job-managed-probe'}
+
+    monkeypatch.setattr(
+        daemon_service,
+        'inspect_daemon',
+        lambda context, *, assume_mounted_socket_connectable=False: (None, None, inspection),
+    )
+    monkeypatch.setattr(daemon_service, '_build_control_plane_client', lambda socket_path: FakeClient())
+    monkeypatch.setattr(
+        daemon_service,
+        'ensure_daemon_started',
+        lambda context: (_ for _ in ()).throw(AssertionError('must not start daemon')),
+    )
+
+    payload = daemon_service.invoke_mounted_daemon(
+        ctx,
+        allow_restart_stale=True,
+        request_fn=lambda client: client.submit('frontdesk-intake'),
+    )
+
+    assert payload == {'job_id': 'job-managed-probe'}
+    assert requests == ['frontdesk-intake']
 
 
 def test_inspect_daemon_prefers_lifecycle_phase_over_lease_mount_state(tmp_path: Path) -> None:

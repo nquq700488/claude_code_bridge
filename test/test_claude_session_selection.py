@@ -46,6 +46,62 @@ def test_latest_session_keeps_explicit_preferred_session_over_newer_candidate(tm
     assert reader.current_session_path() == older
 
 
+def test_active_reader_can_rotate_from_bound_session_after_claude_clear(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / 'claude-root'
+    work_dir = tmp_path / 'project-a'
+    work_dir.mkdir()
+    monkeypatch.setenv('PWD', str(work_dir))
+
+    original = root / _project_key(work_dir) / 'original.jsonl'
+    original.parent.mkdir(parents=True, exist_ok=True)
+    original.write_text(
+        '{"type":"user","isSidechain":false,"message":{"role":"user","content":"old request"}}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"old"}]}}\n',
+        encoding='utf-8',
+    )
+
+    reader = ClaudeLogReader(root=root, work_dir=work_dir, use_sessions_index=False)
+    reader.set_preferred_session(original)
+    state = reader.capture_state()
+    reader.allow_preferred_session_rotation()
+
+    rotated = root / _project_key(work_dir) / 'rotated.jsonl'
+    rotated.write_text(
+        '{"type":"summary","summary":"prior context"}\n'
+        '{"type":"user","isSidechain":false,"message":{"role":"user","content":"new request"}}\n'
+        '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"new"}]}}\n',
+        encoding='utf-8',
+    )
+    os.utime(rotated, (rotated.stat().st_atime, original.stat().st_mtime + 20))
+
+    entries, updated = reader.try_get_entries(state)
+
+    assert reader._preferred_session_locked is False
+    assert reader.current_session_path() == rotated
+    assert updated['session_path'] == rotated
+    assert [entry['text'] for entry in entries if entry['role'] == 'assistant'] == ['new']
+
+
+def test_scan_latest_session_reads_sidechain_flag_after_summary_prelude(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / 'claude-root'
+    work_dir = tmp_path / 'project-a'
+    work_dir.mkdir()
+    monkeypatch.setenv('PWD', str(work_dir))
+
+    session = root / _project_key(work_dir) / 'session.jsonl'
+    session.parent.mkdir(parents=True, exist_ok=True)
+    session.write_text(
+        '{"type":"summary","summary":"prior context"}\n'
+        '{"type":"user","isSidechain":false,"message":{"role":"user","content":"request"}}\n',
+        encoding='utf-8',
+    )
+
+    reader = ClaudeLogReader(root=root, work_dir=work_dir, use_sessions_index=False)
+
+    assert reader._session_is_sidechain(session) is False
+    assert reader._scan_latest_session() == session
+
+
 def test_latest_session_ignores_env_pwd_project_namespace_for_workspace_reader(
     tmp_path: Path,
     monkeypatch,

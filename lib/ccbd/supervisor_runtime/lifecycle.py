@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import replace
+import time
+
+from ccbd.models import CcbdStartupAgentResult
 from ccbd.services import CcbdLifecycleStore
 from ccbd.services.project_namespace_runtime import build_namespace_topology_plan
 
@@ -20,8 +24,13 @@ def start_supervisor(
     reflow_workspace: bool,
     recreate_reason: str | None,
     background_maintenance: bool,
+    startup_run_id: str | None,
+    daemon_started: bool | None,
+    readiness_recorder=None,
     run_start_flow_fn,
 ):
+    supervisor_started_ns = time.monotonic_ns()
+    namespace_started_ns = supervisor_started_ns
     try:
         topology_plan = None
         namespace_layout_signature = None
@@ -51,6 +60,25 @@ def start_supervisor(
             if supervisor._project_namespace is not None
             else None
         )
+        namespace_ms = (time.monotonic_ns() - namespace_started_ns) / 1_000_000
+        if readiness_recorder is not None:
+            if (
+                namespace is not None
+                and bool(getattr(namespace, 'ui_attachable', True))
+                and str(getattr(namespace, 'tmux_session_name', '') or '').strip()
+            ):
+                readiness_recorder.mark(
+                    'T3_namespace_attachable',
+                    source='ccbd_namespace_ensure_current_generation',
+                    now_ns=time.perf_counter_ns(),
+                )
+            else:
+                readiness_recorder.mark(
+                    'T3_namespace_attachable',
+                    status='not_applicable_no_namespace',
+                    source='ccbd_namespace_unavailable',
+                    now_ns=time.perf_counter_ns(),
+                )
         summary = run_start_flow_fn(
             project_root=supervisor._project_root,
             project_id=supervisor._project_id,
@@ -69,10 +97,25 @@ def start_supervisor(
             workspace_window_id=getattr(namespace, 'workspace_window_id', None) if namespace is not None else None,
             workspace_epoch=getattr(namespace, 'workspace_epoch', None) if namespace is not None else None,
             namespace_agent_panes=getattr(supervisor._project_namespace, '_last_materialized_agent_panes', None),
+            namespace_cmd_pane=getattr(supervisor._project_namespace, '_last_materialized_cmd_pane', None),
+            namespace_pane_records=getattr(supervisor._project_namespace, '_last_topology_pane_records', None),
             namespace_active_panes=getattr(supervisor._project_namespace, '_last_topology_active_panes', None),
+            namespace_topology_managed=(
+                topology_plan is not None
+                and hasattr(supervisor._project_namespace, '_last_materialized_cmd_pane')
+            ),
             fresh_namespace=bool(getattr(namespace, 'created_this_call', False)),
             fresh_workspace=bool(getattr(namespace, 'workspace_recreated_this_call', False)),
             clock=supervisor._clock,
+            readiness_recorder=readiness_recorder,
+        )
+        summary = replace(
+            summary,
+            timings_ms={
+                'namespace_ensure': namespace_ms,
+                **dict(getattr(summary, 'timings_ms', {}) or {}),
+                'supervisor_total': (time.monotonic_ns() - supervisor_started_ns) / 1_000_000,
+            },
         )
         _sync_lifecycle_namespace_epoch(supervisor, namespace=namespace)
     except Exception as exc:
@@ -84,8 +127,12 @@ def start_supervisor(
             status='failed',
             actions_taken=('start_flow_failed',),
             cleanup_summaries=(),
-            agent_results=(),
+            agent_results=_failure_agent_results(exc),
             failure_reason=str(exc),
+            timings_ms={'supervisor_total': (time.monotonic_ns() - supervisor_started_ns) / 1_000_000},
+            startup_run_id=startup_run_id,
+            daemon_started=daemon_started,
+            readiness_recorder=readiness_recorder,
         )
         raise
 
@@ -99,6 +146,10 @@ def start_supervisor(
         cleanup_summaries=summary.cleanup_summaries,
         agent_results=summary.agent_results,
         failure_reason=None,
+        timings_ms=summary.timings_ms,
+        startup_run_id=startup_run_id,
+        daemon_started=daemon_started,
+        readiness_recorder=readiness_recorder,
     )
     return summary
 
@@ -123,13 +174,41 @@ def _sync_lifecycle_namespace_epoch(supervisor, *, namespace) -> None:
         return
     if lifecycle.namespace_epoch == int(epoch):
         return
-    lifecycle_store.save(
-        lifecycle.with_updates(namespace_epoch=int(epoch))
-    )
+    with supervisor._ownership_guard.startup_lock():
+        lifecycle = lifecycle_store.load()
+        if lifecycle is None or lifecycle.desired_state != 'running':
+            return
+        inspection = supervisor._ownership_guard.inspect()
+        current_generation = inspection.generation
+        if current_generation is None:
+            return
+        if lifecycle.generation != int(current_generation):
+            return
+        if lifecycle.phase in {'unmounted', 'stopping'}:
+            return
+        if lifecycle.namespace_epoch == int(epoch):
+            return
+        lifecycle_store.save(
+            lifecycle.with_updates(namespace_epoch=int(epoch))
+        )
+
+
+def _failure_agent_results(exc: Exception) -> tuple[CcbdStartupAgentResult, ...]:
+    value = getattr(exc, 'ccb_startup_agent_results', ())
+    if not isinstance(value, (tuple, list)):
+        return ()
+    return tuple(item for item in value if isinstance(item, CcbdStartupAgentResult))
 
 
 def _uses_explicit_windows_topology(config, *, interactive_tmux_layout: bool) -> bool:
-    return bool(interactive_tmux_layout and getattr(config, 'windows_explicit', False))
+    if not interactive_tmux_layout:
+        return False
+    if bool(getattr(config, 'windows_explicit', False)):
+        return True
+    sidebar = getattr(config, 'sidebar', None)
+    if str(getattr(sidebar, 'mode', '') or '').strip() == 'every_window':
+        return True
+    return bool(tuple(getattr(config, 'tool_windows', ()) or ()))
 
 
 def stop_all_supervisor(

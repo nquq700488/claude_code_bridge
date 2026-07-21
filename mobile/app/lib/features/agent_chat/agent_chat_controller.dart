@@ -98,6 +98,25 @@ class AgentChatController {
     return item;
   }
 
+  void claimRemotePresentationId(
+    String agentName, {
+    required String presentationId,
+    String? remoteItemId,
+  }) {
+    final agentPrefix = '$agentName\u0000';
+    final claimedKey =
+        remoteItemId == null ? null : '$agentPrefix$remoteItemId';
+    _remotePresentationIds.removeWhere(
+      (key, value) =>
+          key.startsWith(agentPrefix) &&
+          value == presentationId &&
+          key != claimedKey,
+    );
+    if (claimedKey != null) {
+      _rememberRemotePresentationId(claimedKey, presentationId);
+    }
+  }
+
   void _rememberRemotePresentationId(String key, String presentationId) {
     _remotePresentationIds[key] = presentationId;
     while (_remotePresentationIds.length > 256) {

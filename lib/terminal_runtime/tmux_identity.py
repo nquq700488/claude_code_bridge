@@ -28,6 +28,36 @@ def apply_ccb_pane_identity(
         is_cmd=is_cmd,
         role=role_text,
     )
+    user_options = {
+        '@ccb_label_style': visual.label_style,
+        '@ccb_border_style': visual.border_style,
+        '@ccb_active_border_style': visual.active_border_style,
+        '@ccb_agent': agent_label,
+        '@ccb_role': role_text,
+    }
+    if slot_key:
+        user_options['@ccb_slot'] = slot_key
+    if str(window_name or '').strip():
+        user_options['@ccb_window'] = str(window_name).strip()
+    if str(sidebar_instance or '').strip():
+        user_options['@ccb_sidebar_instance'] = str(sidebar_instance).strip()
+    if str(session_id or '').strip():
+        user_options['@ccb_session_id'] = str(session_id).strip()
+    if namespace_epoch is not None:
+        user_options['@ccb_namespace_epoch'] = str(int(namespace_epoch))
+    if str(managed_by or '').strip():
+        user_options['@ccb_managed_by'] = str(managed_by).strip()
+    user_options['@ccb_project_id'] = project_id
+    batch_setter = getattr(backend, 'set_pane_identity', None)
+    if callable(batch_setter):
+        batch_setter(
+            pane_id,
+            title=title,
+            user_options=user_options,
+            border_style=visual.border_style,
+            active_border_style=visual.active_border_style,
+        )
+        return
     backend.set_pane_title(pane_id, title)
     backend.set_pane_user_option(pane_id, '@ccb_label_style', visual.label_style)
     backend.set_pane_user_option(pane_id, '@ccb_border_style', visual.border_style)

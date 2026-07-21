@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from agents.config_loader import load_project_config
 from ccbd.reload_additive_agents import window_agent_names, window_map
 
 from .agent_window_reflow import reflow_agent_window_fixed
@@ -61,6 +62,11 @@ def remove_agent_panes(
                 window_name=window_name,
                 result=result,
                 timeout_s=timeout_s,
+                prefer_topology_layout=_window_is_static_config_owned(
+                    controller,
+                    topology_plan=new_topology,
+                    window_name=window_name,
+                ),
             )
 
 
@@ -88,12 +94,34 @@ def _kill_window(backend, *, current, window_name: str, result, timeout_s: float
     if find_window(backend, session_name=current.tmux_session_name, window_name=window_name, timeout_s=timeout_s) is None:
         _append_unique(result.removed_windows, window_name)
         return
+    _select_workspace_before_window_removal(backend, current=current, removed_window_name=window_name, timeout_s=timeout_s)
     kill_window(
         backend,
         target=session_window_target(current.tmux_session_name, window_name),
         timeout_s=timeout_s,
     )
     _append_unique(result.removed_windows, window_name)
+
+
+def _select_workspace_before_window_removal(backend, *, current, removed_window_name: str, timeout_s: float | None) -> None:
+    workspace_name = str(getattr(current, 'workspace_window_name', '') or '').strip()
+    if not workspace_name or workspace_name == str(removed_window_name or '').strip():
+        return
+    if find_window(backend, session_name=current.tmux_session_name, window_name=workspace_name, timeout_s=timeout_s) is None:
+        return
+    workspace_ref = str(getattr(current, 'workspace_window_id', '') or '').strip() or workspace_name
+    runner = getattr(backend, '_tmux_run', None)
+    if not callable(runner):
+        return
+    try:
+        runner(
+            ['select-window', '-t', session_window_target(current.tmux_session_name, workspace_ref)],
+            check=False,
+            capture=True,
+            timeout=timeout_s,
+        )
+    except Exception:
+        return
 
 
 def reflow_window_after_agent_change(
@@ -105,6 +133,7 @@ def reflow_window_after_agent_change(
     window_name: str,
     result,
     timeout_s: float | None,
+    prefer_topology_layout: bool = False,
 ) -> None:
     target = _reflow_target(backend, current=current, topology_plan=topology_plan, window_name=window_name, timeout_s=timeout_s)
     runner = getattr(backend, '_tmux_run', None)
@@ -118,6 +147,7 @@ def reflow_window_after_agent_change(
         topology_plan=topology_plan,
         window_name=window_name,
         timeout_s=timeout_s,
+        prefer_topology_layout=prefer_topology_layout,
     )
     if fixed_error is not None:
         result.reflow_errors[window_name] = fixed_error
@@ -161,6 +191,7 @@ def _sync_sidebar_widths(
             session_name=current.tmux_session_name,
             topology_plan=topology_plan,
             timeout_s=timeout_s,
+            namespace_epoch=current.namespace_epoch,
         )
     except Exception as exc:
         result.reflow_errors[window_name] = f'sidebar_width_sync_failed: {exc}'
@@ -189,6 +220,21 @@ def _is_entry_window(topology_plan, window_name: str) -> bool:
     windows = tuple(getattr(topology_plan, 'windows', ()) or ())
     first = str(getattr(windows[0], 'name', '') or '').strip() if windows else ''
     return bool(first and target == first)
+
+
+def _window_is_static_config_owned(controller, *, topology_plan, window_name: str) -> bool:
+    try:
+        configured = set(
+            load_project_config(
+                controller._layout.project_root,
+                include_loop_overlays=False,
+            ).config.agents
+        )
+    except Exception:
+        return False
+    window = window_map(topology_plan).get(str(window_name))
+    names = window_agent_names(window) if window is not None else ()
+    return bool(names) and all(name in configured for name in names)
 
 
 def _kill_pane(backend, pane_id: str, *, timeout_s: float | None) -> None:

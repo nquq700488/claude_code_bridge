@@ -6,7 +6,7 @@ on:
       tag:
         description: "Release tag to build and upload"
         required: true
-        default: "v8.1.3"
+        default: "v8.2.1"
   push:
     tags:
       - "v*"
@@ -61,7 +61,7 @@ jobs:
           python "${{ matrix.script }}" --output-dir dist-release --git-ref HEAD
           test -f "dist-release/${{ matrix.artifact }}"
           tar -tzf "dist-release/${{ matrix.artifact }}" | grep -F BUILD_INFO.json
-          tar -tzf "dist-release/${{ matrix.artifact }}" | grep -F assets/weixin.jpg
+          tar -tzf "dist-release/${{ matrix.artifact }}" | grep -F assets/weixin.png
 
       - name: Verify Rust helpers
         shell: bash

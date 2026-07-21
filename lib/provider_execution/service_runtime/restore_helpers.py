@@ -56,6 +56,62 @@ def terminal_pending_result(job: JobRecord, persisted, pending_items: list) -> E
     return terminal_pending_restore(job, persisted)
 
 
+def restarted_runtime_without_pending_result(
+    service,
+    adapter,
+    job: JobRecord,
+    persisted,
+    pending_items: list,
+    restored_context,
+) -> ExecutionRestoreResult | None:
+    if pending_items or persisted.pending_decision is not None:
+        return None
+    if bool(getattr(adapter, 'restart_resume_supported', False)):
+        return None
+    if not _submission_requires_active_turn(persisted):
+        return None
+    runtime_health = str(getattr(restored_context, 'runtime_health', '') or '').strip().lower()
+    if runtime_health not in {
+        'restored',
+        'pane-dead',
+        'pane-missing',
+        'pane-foreign',
+        'runtime-unavailable',
+        'runtime_unavailable',
+        'stopped',
+        'failed',
+    }:
+        return None
+    if _same_runtime_identity(getattr(persisted, 'runtime_context', None), restored_context):
+        return None
+    return abandon_restore(
+        service,
+        job,
+        reason='provider_runtime_restarted_without_pending_replay',
+        resume_capable=persisted.resume_capable,
+        pending_items_count=0,
+    )
+
+
+def _same_runtime_identity(persisted_context, restored_context) -> bool:
+    if persisted_context is None or restored_context is None:
+        return False
+    persisted_pid = getattr(persisted_context, 'runtime_pid', None)
+    restored_pid = getattr(restored_context, 'runtime_pid', None)
+    try:
+        same_pid = int(persisted_pid or 0) > 0 and int(persisted_pid) == int(restored_pid)
+    except (TypeError, ValueError):
+        return False
+    if not same_pid:
+        return False
+    for field in ('runtime_ref', 'session_ref', 'workspace_path'):
+        persisted_value = str(getattr(persisted_context, field, '') or '').strip()
+        restored_value = str(getattr(restored_context, field, '') or '').strip()
+        if not persisted_value or persisted_value != restored_value:
+            return False
+    return True
+
+
 def resume_or_result(adapter, service, job: JobRecord, persisted, pending_items: list, restored_context):
     resume = getattr(adapter, 'resume', None)
     if not persisted.resume_capable or not callable(resume):
@@ -148,6 +204,17 @@ def terminal_pending_restore(job: JobRecord, persisted) -> ExecutionRestoreResul
         resume_capable=persisted.resume_capable,
         decision=persisted.pending_decision,
     )
+
+
+def _submission_requires_active_turn(persisted) -> bool:
+    state = dict(getattr(persisted.submission, 'runtime_state', {}) or {})
+    if str(state.get('mode') or '').strip().lower() != 'active':
+        return False
+    if bool(state.get('no_wrap')):
+        return False
+    if persisted.submission.status.value != 'incomplete':
+        return False
+    return str(persisted.submission.reason or '').strip() == 'in_progress'
 
 
 def resume_submission(adapter, service, job: JobRecord, persisted, restored_context):

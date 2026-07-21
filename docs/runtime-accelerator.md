@@ -5,6 +5,12 @@ This repository keeps the Python `.ccb` runtime as the owner of public CLI, sock
 Official release artifacts build and include `bin/ccb-runtime-accelerator`.
 Source checkouts can build it with `bin/build-ccb-runtime-accelerator`; when
 the binary is missing, Python falls back to the legacy Codex observation path.
+When ccbd starts the sidecar, it records exact PID, cwd, argv, executable,
+socket, and process-start-token ownership. Linux resolves that evidence through
+`/proc`; macOS uses `ps` plus the executable and cwd mappings reported by
+`lsof` while retaining the same fail-closed identity checks.
+Socket arguments are compared by canonical path so platform aliases such as
+macOS `/tmp` and `/private/tmp` identify the same owned Unix socket.
 
 ## Python/Rust switch controls
 

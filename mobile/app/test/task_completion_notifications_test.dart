@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
 import 'package:ccb_mobile/features/project_home/project_home_task_completion_notifications.dart';
@@ -353,6 +354,45 @@ void main() {
     );
 
     test(
+      'many live events keep connected notification state edge-bounded',
+      () async {
+        final streamClient = _DelayedConnectionTaskCompletionStreamClient();
+        final states = <GatewayInvalidationConnectionState>[];
+        var coreProbeCalls = 0;
+        final controller = TaskCompletionNotificationController(
+          streamClient: streamClient,
+          localNotifications: _FakeTaskCompletionLocalNotifications(),
+          seenStore: TaskCompletionSeenDedupeStore(
+            secureStore: MemorySecureStore(),
+          ),
+          onTap: (_) {},
+          onConnectionStateChanged: (state, _) {
+            states.add(state);
+            if (state == GatewayInvalidationConnectionState.connected) {
+              coreProbeCalls += 1;
+            }
+          },
+        );
+
+        await controller.start(_host(scopes: const {'notify'}));
+        streamClient.markConnected();
+        for (var index = 0; index < 40; index += 1) {
+          streamClient.add(_event(dedupeKey: 'burst-$index'));
+        }
+        await _drain();
+
+        expect(
+          states.where(
+            (state) => state == GatewayInvalidationConnectionState.connected,
+          ),
+          hasLength(1),
+        );
+        expect(coreProbeCalls, 1);
+        await controller.dispose();
+      },
+    );
+
+    test(
       'persists SSE id and resumes it after a normal controller restart',
       () async {
         final secureStore = MemorySecureStore();
@@ -618,6 +658,310 @@ void main() {
     });
 
     test(
+      'canceling an HTTP subscription completes without SSE deadlock',
+      () async {
+        final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+        addTearDown(() => server.close(force: true));
+        final requestSeen = Completer<void>();
+        final connected = Completer<void>();
+        final releaseResponse = Completer<void>();
+        addTearDown(() {
+          if (!releaseResponse.isCompleted) releaseResponse.complete();
+        });
+        unawaited(
+          server.first.then((request) async {
+            request.response
+              ..statusCode = HttpStatus.ok
+              ..headers.contentType = ContentType(
+                'text',
+                'event-stream',
+                charset: 'utf-8',
+              )
+              ..write(': connected\n\n');
+            await request.response.flush();
+            requestSeen.complete();
+            try {
+              await releaseResponse.future;
+              await request.response.close();
+            } on Object {
+              // The client intentionally tears down the long-lived response.
+            }
+          }),
+        );
+        final client = HttpGatewayTaskCompletionNotificationStreamClient(
+          timeout: const Duration(seconds: 2),
+        );
+        addTearDown(client.close);
+        final subscription = client
+            .subscribe(
+              GatewayPairedHost(
+                profile: GatewayHostProfile(
+                  hostId: 'host-demo',
+                  deviceId: 'device-demo',
+                  routeProvider: RouteProvider(
+                    kind: RouteProviderKind.lan,
+                    gatewayUrl: Uri.parse(
+                      'http://${server.address.address}:${server.port}',
+                    ),
+                  ),
+                  scopes: const {'notify'},
+                ),
+                deviceToken: 'device-token',
+                projectId: 'proj-demo',
+              ),
+              null,
+              null,
+              connected.complete,
+            )
+            .listen((_) {});
+
+        await requestSeen.future;
+        await connected.future;
+        await subscription.cancel().timeout(const Duration(milliseconds: 500));
+      },
+    );
+
+    test(
+      'start initialization coalesces watch changes before one cursor resume',
+      () async {
+        final secureStore = _DelayedReadSecureStore();
+        final streamClient = _FakeTaskCompletionStreamClient();
+        final localNotifications = _FakeTaskCompletionLocalNotifications();
+        final liveEvents = <TaskCompletionNotificationEvent>[];
+        final controller = _controller(
+          streamClient: streamClient,
+          localNotifications: localNotifications,
+          cursorStore: GatewayInvalidationCursorStore(secureStore: secureStore),
+          onLiveEvent: liveEvents.add,
+        );
+        final host = _host(scopes: const {'notify'});
+        const initialWatch = GatewayInvalidationWatch(
+          projectId: 'proj-demo',
+          agent: 'mobile',
+          namespaceEpoch: 4,
+        );
+        const latestWatch = GatewayInvalidationWatch(
+          projectId: 'proj-demo',
+          agent: 'lead',
+          namespaceEpoch: 5,
+        );
+
+        final start = controller.start(host, initialWatch);
+        await secureStore.readStarted.future;
+        controller
+          ..updateWatch(latestWatch)
+          ..retryNow();
+        streamClient.add(_event(dedupeKey: 'before-baseline'));
+        await _drain();
+
+        expect(streamClient.subscribeCalls, 0);
+        expect(localNotifications.shown, isEmpty);
+        expect(liveEvents, isEmpty);
+
+        secureStore.completeRead('mnotif_000000000077');
+        await start;
+
+        expect(streamClient.subscribeCalls, 1);
+        expect(streamClient.lastEventIds, ['mnotif_000000000077']);
+        expect(streamClient.watches, [latestWatch]);
+        await controller.dispose();
+      },
+    );
+
+    test(
+      'stale start completion cannot replace a newer subscription',
+      () async {
+        final streamClient = _FakeTaskCompletionStreamClient();
+        final localNotifications =
+            _SequencedPermissionTaskCompletionLocalNotifications();
+        final controller = _controller(
+          streamClient: streamClient,
+          localNotifications: localNotifications,
+        );
+        const firstWatch = GatewayInvalidationWatch(
+          projectId: 'proj-demo',
+          agent: 'mobile',
+          namespaceEpoch: 4,
+        );
+        const latestWatch = GatewayInvalidationWatch(
+          projectId: 'proj-demo',
+          agent: 'lead',
+          namespaceEpoch: 5,
+        );
+
+        final firstStart = controller.start(
+          _host(scopes: const {'notify'}),
+          firstWatch,
+        );
+        await _waitFor(() => localNotifications.requests.length == 1);
+        final latestStart = controller.start(
+          _host(scopes: const {'notify'}),
+          latestWatch,
+        );
+        await _waitFor(() => localNotifications.requests.length == 2);
+
+        localNotifications.requests[1].complete(
+          TaskCompletionLocalNotificationPermissionStatus.granted,
+        );
+        await latestStart;
+        localNotifications.requests[0].complete(
+          TaskCompletionLocalNotificationPermissionStatus.granted,
+        );
+        await firstStart;
+
+        expect(streamClient.subscribeCalls, 1);
+        expect(streamClient.watches, [latestWatch]);
+        await controller.dispose();
+      },
+    );
+
+    test(
+      'HTTP SSE replacement coalesces watch changes and awaits cancellation',
+      () async {
+        final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+        var requestCount = 0;
+        var serverActive = 0;
+        var serverPeak = 0;
+        final sockets = <Socket>[];
+        server.listen((socket) {
+          requestCount += 1;
+          serverActive += 1;
+          serverPeak = serverPeak > serverActive ? serverPeak : serverActive;
+          sockets.add(socket);
+          var responded = false;
+          var closed = false;
+          final requestBytes = BytesBuilder(copy: false);
+          void markClosed() {
+            if (closed) {
+              return;
+            }
+            closed = true;
+            serverActive -= 1;
+          }
+
+          socket.listen(
+            (bytes) {
+              if (responded) {
+                return;
+              }
+              requestBytes.add(bytes);
+              if (!ascii
+                  .decode(requestBytes.toBytes(), allowInvalid: true)
+                  .contains('\r\n\r\n')) {
+                return;
+              }
+              responded = true;
+              socket.add(
+                ascii.encode(
+                  'HTTP/1.1 200 OK\r\n'
+                  'Content-Type: text/event-stream; charset=utf-8\r\n'
+                  'Cache-Control: no-cache\r\n'
+                  'Transfer-Encoding: chunked\r\n'
+                  'Connection: keep-alive\r\n'
+                  '\r\n'
+                  'd\r\n: connected\n\n\r\n',
+                ),
+              );
+            },
+            onDone: markClosed,
+            onError: (_) => markClosed(),
+          );
+        });
+        addTearDown(() async {
+          for (final socket in sockets) {
+            socket.destroy();
+          }
+          await server.close();
+        });
+        final httpClient = HttpGatewayTaskCompletionNotificationStreamClient(
+          timeout: const Duration(seconds: 2),
+        );
+        final streamClient = _CountingTaskCompletionStreamClient(httpClient);
+        final controller = TaskCompletionNotificationController(
+          streamClient: streamClient,
+          localNotifications: _FakeTaskCompletionLocalNotifications(),
+          seenStore: TaskCompletionSeenDedupeStore(
+            secureStore: MemorySecureStore(),
+          ),
+          onTap: (_) {},
+        );
+        final host = GatewayPairedHost(
+          profile: GatewayHostProfile(
+            hostId: 'host-http',
+            deviceId: 'device-http',
+            routeProvider: RouteProvider(
+              kind: RouteProviderKind.lan,
+              gatewayUrl: Uri.parse(
+                'http://${server.address.address}:${server.port}',
+              ),
+            ),
+            scopes: const {'notify'},
+          ),
+          deviceToken: 'device-token',
+          projectId: 'proj-demo',
+        );
+
+        await controller.start(host);
+        await _waitFor(() => requestCount == 1 && streamClient.active == 1);
+        controller
+          ..updateWatch(
+            const GatewayInvalidationWatch(
+              projectId: 'proj-demo',
+              agent: 'mobile',
+              namespaceEpoch: 4,
+            ),
+          )
+          ..updateWatch(
+            const GatewayInvalidationWatch(
+              projectId: 'proj-demo',
+              agent: 'lead',
+              namespaceEpoch: 4,
+            ),
+          )
+          ..retryNow();
+        await _waitFor(
+          () =>
+              requestCount == 2 &&
+              streamClient.active == 1 &&
+              serverActive == 1,
+          description:
+              () =>
+                  'requestCount=$requestCount active=${streamClient.active} peak=${streamClient.peak} serverActive=$serverActive serverPeak=$serverPeak',
+        );
+        expect(streamClient.peak, lessThanOrEqualTo(1));
+        expect(serverPeak, lessThanOrEqualTo(1));
+
+        controller.updateWatch(
+          const GatewayInvalidationWatch(
+            projectId: 'proj-demo',
+            agent: 'lead',
+            namespaceEpoch: 4,
+          ),
+        );
+        await Future<void>.delayed(const Duration(milliseconds: 100));
+        expect(streamClient.peak, lessThanOrEqualTo(1));
+
+        await controller.stop();
+        await _waitFor(
+          () => streamClient.active == 0,
+          timeout: const Duration(seconds: 5),
+        );
+        await controller.start(
+          host,
+          const GatewayInvalidationWatch(
+            projectId: 'proj-demo',
+            agent: 'lead',
+            namespaceEpoch: 4,
+          ),
+        );
+        await _waitFor(() => requestCount == 3 && streamClient.active == 1);
+        expect(streamClient.peak, lessThanOrEqualTo(1));
+        await controller.dispose();
+        httpClient.close(force: true);
+      },
+    );
+
+    test(
       'tap routing opens target agent when project view still contains it',
       () {
         final route = resolveProjectHomeTaskCompletionNotificationTap(
@@ -787,12 +1131,29 @@ Future<void> _drain() async {
   await Future<void>.delayed(Duration.zero);
 }
 
+Future<void> _waitFor(
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 2),
+  String Function()? description,
+}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) {
+      throw TimeoutException(
+        'condition was not met within $timeout${description == null ? '' : ': ${description()}'}',
+      );
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 10));
+  }
+}
+
 class _FakeTaskCompletionStreamClient
     implements GatewayTaskCompletionNotificationStreamClient {
   final _controller =
       StreamController<TaskCompletionNotificationEvent>.broadcast();
   var subscribeCalls = 0;
   final lastEventIds = <String?>[];
+  final watches = <GatewayInvalidationWatch?>[];
 
   void add(TaskCompletionNotificationEvent event) {
     _controller.add(event);
@@ -807,7 +1168,81 @@ class _FakeTaskCompletionStreamClient
   ]) {
     subscribeCalls += 1;
     lastEventIds.add(lastEventId);
+    watches.add(watch);
     return _controller.stream;
+  }
+}
+
+class _DelayedReadSecureStore implements GatewaySecureStore {
+  final readStarted = Completer<void>();
+  final _readResult = Completer<String?>();
+  final values = <String, String>{};
+
+  void completeRead(String? value) {
+    if (!_readResult.isCompleted) {
+      _readResult.complete(value);
+    }
+  }
+
+  @override
+  Future<String?> read({required String key}) {
+    if (!readStarted.isCompleted) {
+      readStarted.complete();
+    }
+    return _readResult.future;
+  }
+
+  @override
+  Future<void> write({required String key, required String value}) async {
+    values[key] = value;
+  }
+
+  @override
+  Future<void> delete({required String key}) async {
+    values.remove(key);
+  }
+}
+
+class _CountingTaskCompletionStreamClient
+    implements GatewayTaskCompletionNotificationStreamClient {
+  _CountingTaskCompletionStreamClient(this._delegate);
+
+  final GatewayTaskCompletionNotificationStreamClient _delegate;
+  var active = 0;
+  var peak = 0;
+
+  @override
+  Stream<TaskCompletionNotificationEvent> subscribe(
+    GatewayPairedHost host, [
+    String? lastEventId,
+    GatewayInvalidationWatch? watch,
+    void Function()? onConnected,
+  ]) {
+    return Stream<TaskCompletionNotificationEvent>.multi((controller) {
+      active += 1;
+      peak = peak > active ? peak : active;
+      var closed = false;
+      void markClosed() {
+        if (closed) return;
+        closed = true;
+        active -= 1;
+      }
+
+      final subscription = _delegate
+          .subscribe(host, lastEventId, watch, onConnected)
+          .listen(
+            controller.add,
+            onError: controller.addError,
+            onDone: () {
+              markClosed();
+              controller.close();
+            },
+          );
+      controller.onCancel = () async {
+        await subscription.cancel();
+        markClosed();
+      };
+    });
   }
 }
 
@@ -851,6 +1286,10 @@ class _DelayedConnectionTaskCompletionStreamClient
     _controller.addError(error);
   }
 
+  void add(TaskCompletionNotificationEvent event) {
+    _controller.add(event);
+  }
+
   @override
   Stream<TaskCompletionNotificationEvent> subscribe(
     GatewayPairedHost host, [
@@ -889,5 +1328,20 @@ class _FakeTaskCompletionLocalNotifications
   Future<bool> showTaskCompletion(TaskCompletionNotificationEvent event) async {
     shown.add(event);
     return true;
+  }
+}
+
+class _SequencedPermissionTaskCompletionLocalNotifications
+    extends _FakeTaskCompletionLocalNotifications {
+  final requests =
+      <Completer<TaskCompletionLocalNotificationPermissionStatus>>[];
+
+  @override
+  Future<TaskCompletionLocalNotificationPermissionStatus>
+  requestPermissionIfNeeded() {
+    final request =
+        Completer<TaskCompletionLocalNotificationPermissionStatus>();
+    requests.add(request);
+    return request.future;
   }
 }

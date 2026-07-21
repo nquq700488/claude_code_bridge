@@ -66,6 +66,8 @@ class KillSummary:
     forced: bool
     cleanup_summaries: tuple[ProjectTmuxCleanupSummary, ...] = ()
     worktree_warnings: tuple[object, ...] = ()
+    runtime_actions: tuple[str, ...] = ()
+    runtime_warnings: tuple[str, ...] = ()
 
 
 __all__ = [

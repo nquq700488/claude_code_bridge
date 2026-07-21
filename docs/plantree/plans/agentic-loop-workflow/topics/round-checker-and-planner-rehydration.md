@@ -71,7 +71,7 @@ Round checker result routing:
 
 | Result | Next Owner | Meaning |
 | :--- | :--- | :--- |
-| `pass` | planner / `ccb plan` | Import completion evidence and mark task done. |
+| `pass` | script-owned child/task-set projection | Import completion evidence and mark the child done; Planner rehydrates once at task-set or milestone closure. |
 | `rework_node` | orchestrator | A bounded node can fix the issue within the current plan. |
 | `partial` | planner | Preserve completed sibling work and replan remaining branch. |
 | `replan_required` | planner | Requirements, split, acceptance, or risk model must change. |
@@ -91,3 +91,12 @@ For V1:
 
 This gives an end-to-end chain without making planner, checker, and plan
 steward one large context.
+
+Decision 029 refines the V1 pass path: successful child tasks do not each wake
+Planner. A deterministic task-set join aggregates terminal child evidence and
+submits one revision-fenced Planner closure backfill. Partial and replan
+results may still activate Planner before final closure when macro work cannot
+safely continue.
+
+Related:
+[../decisions/029-planner-feedback-and-task-set-closure.md](../decisions/029-planner-feedback-and-task-set-closure.md).

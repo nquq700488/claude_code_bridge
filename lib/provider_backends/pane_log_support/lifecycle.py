@@ -9,7 +9,11 @@ from provider_core.tmux_ownership import (
 )
 
 from .lifecycle_common import attach_pane_log, live_owned_pane
-from .lifecycle_recovery import can_reclaim_project_slot_pane, tmux_rebound_pane
+from .lifecycle_recovery import (
+    can_reclaim_project_slot_pane,
+    clear_recovery_block,
+    tmux_rebound_pane,
+)
 
 
 def ensure_pane(
@@ -25,6 +29,7 @@ def ensure_pane(
     pane_id = session.pane_id
     live_pane = live_owned_pane(session, backend, pane_id)
     if live_pane is not None:
+        clear_recovery_block(session)
         apply_session_tmux_identity(session, backend, live_pane)
         attach_pane_log_fn(session, backend, live_pane)
         return True, live_pane

@@ -1,6 +1,6 @@
 # Config Designer UI Roadmap
 
-Date: 2026-07-10
+Date: 2026-07-13
 
 ## Done
 
@@ -87,10 +87,18 @@ Date: 2026-07-10
   compact configs containing the unsupported `cmd` pane stay Full-TOML-only.
 - Fixed the core project-config renderer so Rich tool leaves are preserved
   instead of being indexed as configured agents.
+- Added selected Agent deletion to the V1/V2 visual editor. Deletion promotes
+  the sibling subtree to collapse the binary split, removes stale Agent
+  overlays, supports undo, removes a sole-leaf Window only when another Window
+  remains, and delegates activation to the guarded `remove_agent` reload path.
+- Fixed explicit multi-window config rendering so Agent overlays are indexed
+  from every Window rather than only the entry Window. Model, thinking, Role,
+  API, and other `[agents.<name>]` overrides now survive the visual editor's
+  asynchronous render round trip for non-entry-window Agents.
 
 ## Validation Evidence
 
-Date: 2026-07-10
+Date: 2026-07-13
 
 - Focused Config UI/parser/phase2 plus full config-loader suites: `112 passed`.
 - Rust Sidebar suite: `74 passed`.
@@ -149,6 +157,28 @@ Date: 2026-07-10
   the existing guarded drain-and-respawn path rather than mutating a live
   provider process in place.
 - JavaScript syntax, Python compile, and `git diff --check` passed.
+- Real selected-Agent removal acceptance:
+  `/home/bfly/yunwei/test_ccb2/config-ui-agent-delete-20260713`. A mounted
+  authenticated Codex + Claude project was edited through real headless Chrome:
+  Claude was selected, deleted, restored with Undo, deleted again, confirmed in
+  the config diff, and hot reloaded as `remove_agent`. Claude pane `%2` stopped;
+  Codex retained pane `%1` and PID `415429`; the Window expanded Codex into the
+  released area while preserving the 20% Sidebar. Follow-up reload dry-run was
+  `no_change`. Desktop/mobile screenshots have no horizontal overflow.
+- Nested target-topology acceptance:
+  `/home/bfly/yunwei/test_ccb2/config-ui-agent-delete-nested-20260713` started
+  authenticated Codex, Claude, and Grok as `Codex ; (Claude, Grok)`. Browser
+  deletion of outer Codex published `remove_agent`; Claude pane `%2` and Grok
+  pane `%3` retained their process identities and expanded into a full-width
+  vertical stack matching `claude1:claude, grok1:grok`. Follow-up dry-run was
+  `no_change`.
+- Final Config UI/config-loader/reload/remove/reflow suite: `196 passed`.
+- 2026-07-15 multi-window overlay regression: reproduced the reset with the
+  live five-Window project shape, then verified model/thinking retention for
+  eight Codex Agents across the first three Windows in real headless Chrome.
+  Config UI plus V2 config-loader suites passed `132 passed`; an external
+  `/home/bfly/yunwei/ccb_source/ccb_test config ui --no-open --port 0` probe
+  also preserved the non-entry Agent overlay through `GET /api/config`.
 
 ## In Progress
 

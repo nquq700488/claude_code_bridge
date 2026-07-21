@@ -52,6 +52,7 @@ class AgentMessageSubmitCoordinator {
     required MobileCcbRepository repository,
     TerminalTransport? terminalTransport,
     bool usePaneInput = false,
+    List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
     required AgentMessageDraftAccepted onAccepted,
   }) async {
@@ -89,6 +90,7 @@ class AgentMessageSubmitCoordinator {
         repository: repository,
         terminalTransport: terminalTransport,
         usePaneInput: usePaneInput,
+        paneSubmitBytes: paneSubmitBytes,
         refreshView: refreshView,
       );
     } finally {
@@ -106,6 +108,7 @@ class AgentMessageSubmitCoordinator {
     required MobileCcbRepository repository,
     TerminalTransport? terminalTransport,
     bool usePaneInput = false,
+    List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
   }) async {
     if (_chatController.isSubmitting(item.agentName)) {
@@ -128,6 +131,7 @@ class AgentMessageSubmitCoordinator {
         repository: repository,
         terminalTransport: terminalTransport,
         usePaneInput: usePaneInput,
+        paneSubmitBytes: paneSubmitBytes,
         refreshView: refreshView,
       );
     } finally {
@@ -146,6 +150,7 @@ class AgentMessageSubmitCoordinator {
     required MobileCcbRepository repository,
     required TerminalTransport? terminalTransport,
     required bool usePaneInput,
+    required List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
   }) async {
     if (usePaneInput && _paneSubmitter != null) {
@@ -155,6 +160,7 @@ class AgentMessageSubmitCoordinator {
         view: view,
         repository: repository,
         terminalTransport: terminalTransport,
+        paneSubmitBytes: paneSubmitBytes,
         refreshView: refreshView,
       );
       return;
@@ -174,6 +180,7 @@ class AgentMessageSubmitCoordinator {
     required CcbProjectView view,
     required MobileCcbRepository repository,
     required TerminalTransport? terminalTransport,
+    required List<int>? paneSubmitBytes,
     required AgentViewRefresh? refreshView,
   }) async {
     if (terminalTransport == null) {
@@ -183,6 +190,7 @@ class AgentMessageSubmitCoordinator {
         message: message,
         view: view,
         refreshView: refreshView,
+        submitBytes: paneSubmitBytes ?? const [13],
       );
       if (!_isMounted()) {
         return;
@@ -221,6 +229,7 @@ class AgentMessageSubmitCoordinator {
       view: view,
       refreshView: refreshView,
       paneBody: paneBody,
+      submitBytes: paneSubmitBytes ?? const [13],
     );
     if (!_isMounted()) {
       return;

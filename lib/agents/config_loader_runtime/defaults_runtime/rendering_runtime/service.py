@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import re
 
 from agents.models import LayoutLeaf, LayoutNode, is_layout_tool_alias, normalize_agent_name, parse_layout_spec
@@ -17,6 +18,11 @@ def render_default_project_config_text(*, provider: str | None = None, which_fn=
 
 
 def render_project_config_text(config) -> str:
+    if int(getattr(config, 'version', 2)) == 3:
+        source_path = Path(str(getattr(config, 'source_path', '') or ''))
+        if not source_path.is_file():
+            raise ValueError('version 3 config rendering requires its original source_path')
+        return source_path.read_text(encoding='utf-8')
     loop_payload = loop_capacity_to_config_dict(getattr(config, 'loop_capacity', None))
     if getattr(config, 'windows_explicit', False):
         return _render_windows_config_text(config)
@@ -198,7 +204,11 @@ def _sidebar_payload(config) -> dict[str, object]:
 
 
 def _windows_agent_overlay_payload(config) -> dict[str, dict[str, object]]:
-    compact_agent_defaults = _compact_agent_defaults_by_name(_render_hybrid_layout(config))
+    compact_agent_defaults: dict[str, dict[str, str]] = {}
+    for window in tuple(getattr(config, 'windows', ()) or ()):
+        compact_agent_defaults.update(
+            _compact_agent_defaults_by_name(str(window.layout_spec))
+        )
     overlay_agents: dict[str, dict[str, object]] = {}
     ordered_names = list(config.default_agents) + [name for name in config.agents if name not in config.default_agents]
     for name in ordered_names:

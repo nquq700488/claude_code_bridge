@@ -7,6 +7,7 @@ import re
 from agents.models import AgentSpec, WorkspaceMode
 from project.resolver import ProjectContext
 from storage.paths import PathLayout
+from workspace.binding import WorkspaceBindingStore
 from workspace.models import WorkspacePlan
 
 _PLACEHOLDER_RE = re.compile(r'\{([a-z_]+)\}')
@@ -30,10 +31,19 @@ class WorkspacePlanner:
             branch_name = None
             workspace_scope = 'external'
         elif agent_spec.workspace_group is not None:
-            workspace_path = layout.workspace_group_path(agent_spec.workspace_group)
             binding_path = layout.workspace_group_binding_path(agent_spec.workspace_group)
+            if binding_path.is_file():
+                binding = WorkspaceBindingStore().load(binding_path)
+                if binding.project_id != project_ctx.project_id:
+                    raise ValueError('workspace group binding belongs to a different project')
+                if Path(binding.target_project).resolve() != project_ctx.project_root:
+                    raise ValueError('workspace group binding targets a different project root')
+                workspace_path = Path(binding.workspace_path)
+                branch_name = binding.branch_name
+            else:
+                workspace_path = layout.workspace_group_path(agent_spec.workspace_group)
+                branch_name = f'ccb/group/{agent_spec.workspace_group}'
             unsafe_shared_workspace = False
-            branch_name = f'ccb/group/{agent_spec.workspace_group}'
             workspace_scope = 'group'
         else:
             workspace_path = layout.workspace_path(agent_spec.name, workspace_root=agent_spec.workspace_root)
@@ -57,6 +67,37 @@ class WorkspacePlanner:
             branch_template=agent_spec.branch_template or _DEFAULT_BRANCH_TEMPLATE,
             unsafe_shared_workspace=unsafe_shared_workspace,
             workspace_scope=workspace_scope,
+        )
+
+    def plan_controller_worktree(
+        self,
+        project_ctx: ProjectContext,
+        *,
+        agent_name: str,
+        workspace_path: Path,
+        branch_name: str,
+        base_commit: str,
+    ) -> WorkspacePlan:
+        branch = str(branch_name or '').strip()
+        if not branch:
+            raise ValueError('controller worktree branch_name cannot be empty')
+        base = str(base_commit or '').strip()
+        if not base:
+            raise ValueError('controller worktree base_commit cannot be empty')
+        return WorkspacePlan(
+            project_id=project_ctx.project_id,
+            project_root=project_ctx.project_root,
+            project_slug=PathLayout(project_ctx.project_root).project_slug,
+            agent_name=agent_name,
+            workspace_mode=WorkspaceMode.GIT_WORKTREE,
+            workspace_path=workspace_path,
+            binding_path=None,
+            source_root=project_ctx.project_root,
+            branch_name=branch,
+            branch_template=None,
+            unsafe_shared_workspace=False,
+            workspace_scope='controller',
+            base_commit=base,
         )
 
     def _render_branch_name(self, agent_spec: AgentSpec, project_slug: str) -> str:

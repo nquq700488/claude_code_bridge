@@ -143,7 +143,6 @@ def prepare_detached_tmux_server(backend) -> None:
         return
 
     prepared = True
-    prepared = best_effort_tmux_run(backend, ['start-server']) and prepared
     prepared = best_effort_tmux_run(backend, ['set-option', '-g', 'destroy-unattached', 'off']) and prepared
     prepared = best_effort_tmux_run(backend, ['set-option', '-g', 'mouse', 'on']) and prepared
     prepared = best_effort_tmux_run(backend, ['set-option', '-g', 'history-limit', '50000']) and prepared
@@ -197,11 +196,11 @@ def _best_effort_tmux_environment_policy(backend) -> bool:
 
 def create_detached_tmux_pane(backend, *, cmd: str, cwd: Path, session_name: str) -> str:
     target_session = f'{session_name}-{int(time.time() * 1000)}-{os.getpid()}'
-    prepare_detached_tmux_server(backend)
     backend._tmux_run(  # type: ignore[attr-defined]
         ['new-session', '-d', '-x', '160', '-y', '48', '-s', target_session, '-c', str(cwd), *pane_placeholder_argv()],
         check=True,
     )
+    prepare_detached_tmux_server(backend)
     result = backend._tmux_run(  # type: ignore[attr-defined]
         ['list-panes', '-t', target_session, '-F', '#{pane_id}'],
         capture=True,

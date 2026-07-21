@@ -7,7 +7,6 @@ from .backend import (
     create_session,
     ensure_server_policy,
     ensure_window,
-    prepare_server,
     session_window_target,
     window_root_pane,
 )
@@ -21,7 +20,6 @@ def prepare_namespace_root_pane(
     terminal_size: tuple[int, int] | None = None,
     timeout_s: float | None = None,
 ) -> None:
-    prepare_server(context.backend, timeout_s=timeout_s)
     if not context.session_is_alive:
         create_session(
             context.backend,

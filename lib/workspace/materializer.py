@@ -89,7 +89,9 @@ class WorkspaceMaterializer:
         if branch_exists:
             args.extend([str(plan.workspace_path), plan.branch_name])
         else:
-            args.extend(['-b', plan.branch_name, str(plan.workspace_path), 'HEAD'])
+            args.extend(
+                ['-b', plan.branch_name, str(plan.workspace_path), plan.base_commit or 'HEAD']
+            )
         return args
 
     def _prune_stale_worktree_registration(self, plan: WorkspacePlan) -> None:

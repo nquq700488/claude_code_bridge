@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shlex
+
 from ccbd.api_models import JobRecord
 from completion.models import CompletionSourceKind
 from provider_core.protocol import request_anchor_for_job
@@ -14,6 +16,7 @@ from .helpers import resolve_work_dir
 
 
 _PANE_LINES_DEFAULT = 2000
+_AUTO_PERMISSION_FLAG = '--dangerously-skip-permissions'
 
 
 def start_submission(
@@ -89,6 +92,16 @@ def start_submission(
     reader = AgyPaneReader(backend=backend, pane_id=pane_id, lines=_PANE_LINES_DEFAULT)
     initial_content = reader.snapshot()
     prompt_deferred_until_ready = not agy_pane_ready_for_input(initial_content)
+    session_data = getattr(session, 'data', {})
+    ccb_auto_permission = bool(
+        session_data.get('agy_auto_permission') if isinstance(session_data, dict) else False
+    )
+    trust_confirmation_allowed = ccb_auto_permission and _trust_confirmation_allowed(session.start_cmd)
+    trust_authority = (
+        'ccb_auto_permission_and_start_cmd_dangerously_skip_permissions'
+        if trust_confirmation_allowed
+        else 'none'
+    )
 
     send_error: str | None = None
     prompt_sent = False
@@ -106,6 +119,8 @@ def start_submission(
         'req_id': req_id,
         'task_id': job.request.task_id,
         'workspace_path': str(work_dir),
+        'agy_project_trust_confirmation_allowed': trust_confirmation_allowed,
+        'agy_project_trust_authority': trust_authority,
     }
     if send_error:
         diagnostics['send_error'] = send_error
@@ -139,6 +154,8 @@ def start_submission(
             'prompt_sent': prompt_sent,
             'pending_prompt': prompt,
             'prompt_deferred_until_ready': prompt_deferred_until_ready,
+            'agy_project_trust_confirmation_allowed': trust_confirmation_allowed,
+            'agy_project_trust_authority': trust_authority,
             'send_error': send_error,
             'snapshot_errors': 0,
             'next_seq': 1,
@@ -149,6 +166,14 @@ def start_submission(
             'session_path': '',
         },
     )
+
+
+def _trust_confirmation_allowed(start_cmd: str) -> bool:
+    try:
+        parts = shlex.split(str(start_cmd or ''))
+    except ValueError:
+        return False
+    return _AUTO_PERMISSION_FLAG in parts
 
 
 __all__ = ['start_submission']

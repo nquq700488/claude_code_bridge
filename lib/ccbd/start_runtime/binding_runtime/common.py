@@ -24,8 +24,10 @@ def matching_project_namespace_record(
     agent_name: str,
     project_id: str,
     window_name: str | None,
+    namespace_epoch: int | None,
     tmux_backend_factory,
     inspect_project_namespace_pane_fn,
+    namespace_pane_records: dict[str, object] | None = None,
 ):
     pane_id = binding_pane_id(binding)
     if pane_id is None:
@@ -33,8 +35,13 @@ def matching_project_namespace_record(
     session_name = str(tmux_session_name or '').strip()
     if not session_name:
         return None
-    backend = tmux_backend_for_factory(tmux_backend_factory, socket_path=tmux_socket_path)
-    record = inspect_project_namespace_pane_fn(backend, pane_id)
+    if window_name is not None and namespace_epoch is None:
+        return None
+    if namespace_pane_records is not None:
+        record = namespace_pane_records.get(pane_id)
+    else:
+        backend = tmux_backend_for_factory(tmux_backend_factory, socket_path=tmux_socket_path)
+        record = inspect_project_namespace_pane_fn(backend, pane_id)
     if record is None:
         return None
     if not record.matches(
@@ -44,7 +51,8 @@ def matching_project_namespace_record(
         slot_key=agent_name,
         window_name=window_name,
         managed_by='ccbd',
-        window_id=workspace_window_id,
+        window_id=None if window_name is not None else workspace_window_id,
+        namespace_epoch=namespace_epoch if window_name is not None else None,
     ):
         return None
     return record

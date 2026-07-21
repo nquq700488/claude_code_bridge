@@ -51,6 +51,9 @@ def _record_outside_namespace(runtime, namespace_state, record) -> bool:
     window_name = _runtime_window_name(runtime)
     if window_name is not None:
         match_kwargs['window_name'] = window_name
+        namespace_epoch = getattr(namespace_state, 'namespace_epoch', None)
+        if namespace_epoch is not None:
+            match_kwargs['namespace_epoch'] = int(namespace_epoch)
     if not record.matches(**match_kwargs):
         return True
     if _record_matches_runtime_window(runtime, record):

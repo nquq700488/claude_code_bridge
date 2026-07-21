@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+import json
 
 from .common import cleanup_csv, render_tmux_cleanup_summaries
 from .ops_views_common import binding_line
@@ -46,6 +47,27 @@ def render_agent_lifecycle(summary) -> tuple[str, ...]:
 
 
 def render_config_validate(summary) -> tuple[str, ...]:
+    if int(getattr(summary, 'config_version', 2)) == 3:
+        workflow = summary.workflow or {}
+        capacity = summary.effective_workgroup_capacity or {}
+        return (
+            'config_status: valid',
+            f'project: {summary.project_root}',
+            f'project_id: {summary.project_id}',
+            f'config_source_kind: {summary.source_kind}',
+            f'config_source: {summary.source or "<builtin>"}',
+            'config_version: 3',
+            f'workflow_mode: {workflow.get("mode", "")}',
+            f'workflow_profile: {workflow.get("profile", "")}',
+            f'entry_role: {workflow.get("entry_role", "")}',
+            'resident_roles: ' + ', '.join(str(item.get('slot')) for item in summary.resident_roles),
+            'dynamic_profiles: ' + ', '.join(str(item.get('profile')) for item in summary.dynamic_profiles),
+            'effective_workgroup_capacity: '
+            f'max_workgroups={capacity.get("max_workgroups")} '
+            f'max_parallel_workgroups={capacity.get("max_parallel_workgroups")} '
+            f'max_active_dynamic_agents={capacity.get("max_active_dynamic_agents")}',
+            f'capacity_digest: {summary.capacity_digest}',
+        )
     lines = [
         'config_status: valid',
         f'project: {summary.project_root}',
@@ -71,6 +93,28 @@ def render_start(summary) -> tuple[str, ...]:
         f'socket_path: {summary.socket_path}',
         f'agents: {", ".join(summary.started)}',
     ]
+    startup_run_id = str(getattr(summary, 'startup_run_id', None) or '').strip()
+    if startup_run_id:
+        lines.append(f'startup_run_id: {startup_run_id}')
+    cli_timings_ms = getattr(summary, 'cli_timings_ms', None)
+    if isinstance(cli_timings_ms, Mapping):
+        lines.append(
+            'startup_cli_timings_ms: '
+            + json.dumps(dict(cli_timings_ms), ensure_ascii=True, sort_keys=True, separators=(',', ':'))
+        )
+    process_trace_id = str(getattr(summary, 'process_bootstrap_trace_id', None) or '').strip()
+    process_timings_ms = getattr(summary, 'process_bootstrap_timings_ms', None)
+    if process_trace_id and isinstance(process_timings_ms, Mapping):
+        lines.append(f'startup_process_trace_id: {process_trace_id}')
+        lines.append(
+            'startup_process_bootstrap_timings_ms: '
+            + json.dumps(
+                dict(process_timings_ms),
+                ensure_ascii=True,
+                sort_keys=True,
+                separators=(',', ':'),
+            )
+        )
     heartbeat = getattr(summary, 'maintenance_heartbeat', None)
     if isinstance(heartbeat, Mapping):
         details = [
@@ -91,6 +135,16 @@ def render_start(summary) -> tuple[str, ...]:
     layout_summary = getattr(summary, 'layout_summary', None)
     if isinstance(layout_summary, Mapping):
         lines.extend(_render_start_layout_summary(layout_summary))
+    sidebar_refresh = getattr(summary, 'sidebar_helper_refresh', None)
+    if isinstance(sidebar_refresh, Mapping):
+        status = str(sidebar_refresh.get('status') or '').strip()
+        if status == 'refreshed':
+            panes = ','.join(str(item) for item in sidebar_refresh.get('panes') or ()) or '-'
+            lines.append(f'sidebar_helper_refresh: refreshed panes={panes}')
+        elif status == 'failed':
+            error_type = str(sidebar_refresh.get('error_type') or 'Error').strip()
+            error = str(sidebar_refresh.get('error') or 'unknown error').strip()
+            lines.append(f'sidebar_helper_refresh: failed {error_type}: {error}')
     lines.extend(render_tmux_cleanup_summaries(getattr(summary, 'cleanup_summaries', ()) or ()))
     return tuple(lines)
 
@@ -476,6 +530,8 @@ def render_plan_task(summary) -> tuple[str, ...]:
         f'action: {payload.get("action", "")}',
         f'task_id: {payload.get("task_id", "")}',
         f'status: {payload.get("status", "")}',
+        f'next_owner: {task.get("next_owner", "")}',
+        f'activation_reason: {task.get("activation_reason", "")}',
         f'plan_slug: {payload.get("plan_slug", "")}',
         f'task_root: {payload.get("task_root", "")}',
         f'readme_path: {payload.get("readme_path", "")}',
@@ -766,6 +822,23 @@ def render_mobile_serve(summary) -> tuple[str, ...]:
     endpoints = payload.get('endpoints')
     if isinstance(endpoints, (list, tuple)):
         lines.append(f'endpoints: {", ".join(str(item) for item in endpoints)}')
+    push_sender = payload.get('push_sender')
+    if isinstance(push_sender, Mapping):
+        details = [
+            f'provider={push_sender.get("provider", "")}',
+            f'configured={str(bool(push_sender.get("configured"))).lower()}',
+        ]
+        if 'ready' in push_sender:
+            details.append(f'ready={str(bool(push_sender.get("ready"))).lower()}')
+        if push_sender.get('credential_source'):
+            details.append(f'credential_source={push_sender.get("credential_source", "")}')
+        if push_sender.get('reason'):
+            details.append(f'reason={push_sender.get("reason", "")}')
+        if push_sender.get('timeout_seconds') is not None:
+            details.append(f'timeout_seconds={push_sender.get("timeout_seconds")}')
+        if push_sender.get('max_workers') is not None:
+            details.append(f'max_workers={push_sender.get("max_workers")}')
+        lines.append('push_sender: ' + ' '.join(details))
     pairing = payload.get('pairing')
     if isinstance(pairing, Mapping):
         lines.extend(
@@ -955,6 +1028,8 @@ def render_kill(summary) -> tuple[str, ...]:
         f'socket_path: {summary.socket_path}',
         f'forced: {str(summary.forced).lower()}',
     ]
+    lines.extend(f'kill_action: {action}' for action in getattr(summary, 'runtime_actions', ()) or ())
+    lines.extend(f'kill_warning: {warning}' for warning in getattr(summary, 'runtime_warnings', ()) or ())
     lines.extend(render_tmux_cleanup_summaries(getattr(summary, 'cleanup_summaries', ()) or ()))
     return tuple(lines)
 

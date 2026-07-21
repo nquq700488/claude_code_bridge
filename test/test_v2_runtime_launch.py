@@ -23,9 +23,12 @@ from agents.models import (
 from cli.context import CliContext
 from cli.models import ParsedStartCommand
 from cli.services.provider_binding import AgentBinding
+from cli.services.role_command_policy import RoleCommandPolicy
 import cli.services.runtime_launch as runtime_launch
+from cli.services.runtime_launch_runtime import tmux_panes
 from cli.services.runtime_launch import ensure_agent_runtime
 from provider_backends.claude import launcher as claude_launcher
+import provider_backends.claude.launcher_runtime.home as claude_home_runtime
 from provider_backends.claude.launcher_runtime.home import (
     prepare_claude_home_overrides as prepare_claude_home_overrides_for_test,
 )
@@ -47,6 +50,13 @@ from project.resolver import ProjectContext
 from storage.paths import PathLayout
 from terminal_runtime.tmux_identity import pane_visual
 from workspace.planner import WorkspacePlanner
+
+
+@pytest.fixture(autouse=True)
+def _reset_detached_tmux_server_cache() -> None:
+    tmux_panes._PREPARED_DETACHED_TMUX_SERVER_KEYS.clear()
+    yield
+    tmux_panes._PREPARED_DETACHED_TMUX_SERVER_KEYS.clear()
 
 
 def _spec(
@@ -102,6 +112,16 @@ def _write_project_memory(project_root: Path, text: str) -> None:
     path = _project_memory_path(project_root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding='utf-8')
+
+
+@pytest.fixture(autouse=True)
+def _stable_claude_cli_capabilities(monkeypatch) -> None:
+    """Keep launch-command assertions independent from the host Claude CLI."""
+    monkeypatch.setattr(
+        claude_launcher,
+        'claude_cli_supports_flag',
+        lambda cmd_parts, flag: str(flag) in {'--setting-sources', '--settings', '--permission-mode'},
+    )
 
 
 def _clipboard_bind_call(key: str) -> tuple[str, tuple[str, ...]]:
@@ -261,6 +281,8 @@ def test_claude_home_overrides_wsl_exports_paths_and_api_env_names(
     assert 'USERPROFILE/p' in wslenv
     assert 'CLAUDE_PROJECTS_ROOT/p' in wslenv
     assert 'CLAUDE_PROJECT_ROOT/p' in wslenv
+    assert 'CLAUDE_CODE_PLUGIN_SEED_DIR/p' in wslenv
+    assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR/p' in wslenv
     assert 'ANTHROPIC_AUTH_TOKEN' in wslenv
     assert 'ANTHROPIC_API_KEY' in wslenv
     assert 'ANTHROPIC_BASE_URL' in wslenv
@@ -268,6 +290,103 @@ def test_claude_home_overrides_wsl_exports_paths_and_api_env_names(
     assert 'ANTHROPIC_API_KEY/p' not in wslenv
     assert 'ANTHROPIC_BASE_URL/p' not in wslenv
     assert wslenv[-1] == 'EXISTING/u'
+
+
+def test_claude_home_overrides_share_plugin_seed_but_isolate_writable_caches(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    seed_root.mkdir(parents=True)
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    (seed_root / 'cache').mkdir()
+
+    first = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-agent1',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    second = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-agent2',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+
+    assert first['CLAUDE_CODE_PLUGIN_SEED_DIR'] == str(seed_root)
+    assert second['CLAUDE_CODE_PLUGIN_SEED_DIR'] == str(seed_root)
+    first_plugin_root = Path(first['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    second_plugin_root = Path(second['CLAUDE_CODE_PLUGIN_CACHE_DIR'])
+    assert first_plugin_root.is_dir()
+    assert second_plugin_root.is_dir()
+    assert not first_plugin_root.is_symlink()
+    assert not second_plugin_root.is_symlink()
+    assert first_plugin_root != second_plugin_root
+    (first_plugin_root / 'cache').mkdir()
+    (first_plugin_root / 'cache' / 'agent1-runtime.json').write_text('{}\n', encoding='utf-8')
+    assert not (seed_root / 'cache' / 'agent1-runtime.json').exists()
+    assert not (second_plugin_root / 'cache' / 'agent1-runtime.json').exists()
+
+
+def test_claude_home_overrides_ignore_non_seed_plugin_metadata(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    plugin_root = source_home / '.claude' / 'plugins'
+    plugin_root.mkdir(parents=True)
+    (plugin_root / 'blocklist.json').write_text('{}\n', encoding='utf-8')
+
+    overrides = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+    )
+
+    assert 'CLAUDE_CODE_PLUGIN_SEED_DIR' not in overrides
+    assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR' not in overrides
+    assert not (tmp_path / 'runtime' / 'claude-home' / '.claude' / 'plugins').exists()
+
+
+def test_claude_home_overrides_respect_config_inheritance_and_hard_role_policy(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source-home'
+    plugin_root = source_home / '.claude' / 'plugins'
+    plugin_root.mkdir(parents=True)
+    (plugin_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    no_config_profile = ResolvedProviderProfile(
+        provider='claude',
+        agent_name='agent1',
+        inherit_config=False,
+    )
+    hard_policy = RoleCommandPolicy(
+        role_id='test.hard',
+        path=tmp_path / 'command-surface.toml',
+        mode='deny_all_except',
+        enforcement='required',
+        if_unsupported='fail_mount',
+        generic_shell=False,
+        generic_ccb=False,
+        supported_providers=('claude',),
+        provider_tools=(),
+        allowed_effects=(),
+        forbidden_effects=(),
+        allowed=(),
+    )
+
+    inheritance_disabled = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-no-config',
+        no_config_profile,
+        source_home=source_home,
+        refresh_home=False,
+    )
+    role_restricted = prepare_claude_home_overrides_for_test(
+        tmp_path / 'runtime-hard-role',
+        None,
+        source_home=source_home,
+        refresh_home=False,
+        command_policy=hard_policy,
+    )
+
+    for overrides in (inheritance_disabled, role_restricted):
+        assert 'CLAUDE_CODE_PLUGIN_SEED_DIR' not in overrides
+        assert 'CLAUDE_CODE_PLUGIN_CACHE_DIR' not in overrides
 
 
 def _write_codex_plugin_source(
@@ -352,6 +471,58 @@ def test_ensure_agent_runtime_configures_claude_managed_home_without_touching_wo
     assert observed['managed_settings_exists'] is True
     managed_payload = json.loads(managed_settings.read_text(encoding='utf-8'))
     assert managed_payload['hooks']['Stop'][0]['hooks'][0]['command']
+
+
+def test_ensure_agent_runtime_consumes_prepared_effective_command_without_recomputing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-prepared-effective-command'
+    (project_root / '.ccb').mkdir(parents=True)
+    raw_command = ParsedStartCommand(
+        project=None,
+        agent_names=('reviewer',),
+        restore=False,
+        auto_permission=True,
+    )
+    effective_command = ParsedStartCommand(
+        project=None,
+        agent_names=('reviewer',),
+        restore=False,
+        auto_permission=False,
+    )
+    ctx = _context(project_root, raw_command)
+    spec = _spec('reviewer', provider='claude')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    observed: dict[str, object] = {}
+
+    def fake_ensure_impl(context, command, *_args, **_kwargs):
+        observed['context'] = context
+        observed['command'] = command
+        return runtime_launch.RuntimeLaunchResult(launched=False, binding=None)
+
+    monkeypatch.setattr(runtime_launch, '_ensure_agent_runtime_impl', fake_ensure_impl)
+    monkeypatch.setattr(
+        runtime_launch,
+        'effective_start_command',
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError('prepared effective command must not be recomputed')
+        ),
+    )
+
+    result = ensure_agent_runtime(
+        ctx,
+        raw_command,
+        spec,
+        plan,
+        None,
+        provider_prepared=True,
+        effective_command=effective_command,
+    )
+
+    assert result == runtime_launch.RuntimeLaunchResult(launched=False, binding=None)
+    assert observed['context'] is ctx
+    assert observed['command'] is effective_command
 
 
 def test_ensure_agent_runtime_launches_named_codex_session(monkeypatch, tmp_path: Path) -> None:
@@ -951,10 +1122,11 @@ def test_ensure_agent_runtime_launches_named_claude_session(monkeypatch, tmp_pat
         )
     )
     assert settings_payload['skipDangerousModePermissionPrompt'] is True
-    assert json.loads(_claude_settings_arg(payload['start_cmd'])) == settings_payload
+    settings_path = ctx.paths.agent_dir('reviewer') / 'provider-runtime' / 'claude' / 'claude-settings.json'
+    assert _claude_settings_arg(payload['start_cmd']) == str(settings_path)
     assert payload['start_cmd'].endswith(
         f'claude --setting-sources user,project,local --settings '
-        f'{shlex.quote(json.dumps(settings_payload, ensure_ascii=False))} '
+        f'{shlex.quote(str(settings_path))} '
         '--permission-mode bypassPermissions --continue'
     )
     assert tmux_state['title'] == ('%44', 'reviewer')
@@ -1329,7 +1501,10 @@ def test_ensure_agent_runtime_falls_back_to_detached_tmux_session(monkeypatch, t
 
     assert result.binding is not None
     assert result.binding.runtime_ref == 'tmux:%88'
-    assert any(name == 'start-server' for name, _ in calls)
+    assert not any(name == 'start-server' for name, _ in calls)
+    assert next(index for index, (name, _) in enumerate(calls) if name == 'new-session') < next(
+        index for index, (name, _) in enumerate(calls) if name == 'set-option'
+    )
     assert any(name == 'set-option' for name, _ in calls)
     assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'history-limit', '50000')) in calls
@@ -1512,7 +1687,10 @@ def test_ensure_agent_runtime_outside_tmux_relaunches_stale_binding_via_detached
     assert result.binding is not None
     assert result.binding.runtime_ref == 'tmux:%88'
     assert ('kill', ('sock-dead', '%44')) in calls
-    assert any(name == 'start-server' for name, _ in calls)
+    assert not any(name == 'start-server' for name, _ in calls)
+    assert next(index for index, (name, _) in enumerate(calls) if name == 'new-session') < next(
+        index for index, (name, _) in enumerate(calls) if name == 'set-option'
+    )
     assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'history-limit', '50000')) in calls
     assert ('set-option', ('set-option', '-g', 'set-clipboard', 'on')) in calls
@@ -1773,7 +1951,18 @@ def test_native_cli_launcher_builds_provider_state_payload(
     if provider == 'crush':
         assert visible_parts == [default_executable, '--data-dir', str(state_dir / 'data'), '--demo']
     elif provider == 'grok':
-        assert visible_parts == [default_executable, '--no-auto-update', '--cwd', str(plan.workspace_path), '--demo']
+        assert visible_parts == [
+            default_executable,
+            '--no-auto-update',
+            '--minimal',
+            '--cwd',
+            str(plan.workspace_path),
+            '--demo',
+        ]
+        assert payload['grok_skill_permissions_enabled'] is False
+        assert payload['grok_auto_permission_enabled'] is False
+        assert (state_dir / 'home' / '.grok' / 'skills' / 'ask' / 'SKILL.md').is_file()
+        assert (state_dir / 'home' / '.grok' / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
     elif provider == 'pi':
         assert f'PI_CODING_AGENT_DIR={shlex.quote(str(state_dir / "home"))}' in start_cmd
         assert f'PI_CODING_AGENT_SESSION_DIR={shlex.quote(str(state_dir / "sessions"))}' in start_cmd
@@ -1795,6 +1984,44 @@ def test_native_cli_launcher_builds_provider_state_payload(
         ]
     else:
         assert visible_parts == [default_executable, '--demo']
+
+
+def test_grok_launcher_fullscreen_startup_arg_overrides_default_minimal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv('GROK_START_CMD', raising=False)
+    project_root = tmp_path / 'repo-grok-fullscreen'
+    command = ParsedStartCommand(
+        project=None,
+        agent_names=('grok1',),
+        restore=True,
+        auto_permission=False,
+    )
+    ctx = _context(project_root, command)
+    spec = _spec('grok1', provider='grok', startup_args=('--fullscreen', '--demo'))
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('grok1', 'grok')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['grok']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-grok-fullscreen',
+        prepared_state=prepared,
+    )
+
+    assert shlex.split(start_cmd.rsplit('; ', 1)[-1]) == [
+        'grok',
+        '--no-auto-update',
+        '--cwd',
+        str(plan.workspace_path),
+        '--fullscreen',
+        '--demo',
+    ]
 
 
 def test_grok_launcher_projects_system_login_into_managed_home(
@@ -1826,6 +2053,82 @@ def test_grok_launcher_projects_system_login_into_managed_home(
     assert (managed_home / '.grok' / 'auth.json').read_text(encoding='utf-8') == '{"token":"system-login"}\n'
     assert (managed_home / '.grok' / 'config.toml').read_text(encoding='utf-8') == 'model = "grok-test"\n'
     assert f'HOME={shlex.quote(str(managed_home))}' in start_cmd
+
+
+def test_grok_launcher_uses_bypass_permissions_and_allows_ccb_skills_on_normal_start(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    (source_home / '.grok').mkdir(parents=True)
+    monkeypatch.setattr(grok_home, 'current_provider_source_home', lambda: source_home)
+    project_root = tmp_path / 'repo-grok-skill-permissions'
+    command = ParsedStartCommand(project=None, agent_names=('grok1',), restore=True, auto_permission=True)
+    ctx = _context(project_root, command)
+    spec = _spec('grok1', provider='grok')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('grok1', 'grok')
+    launcher = build_default_runtime_launcher_map(include_optional=True)['grok']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(command, spec, runtime_dir, 'sess-grok', prepared_state=prepared)
+    payload = launcher.build_session_payload(
+        ctx,
+        spec,
+        plan,
+        runtime_dir,
+        plan.workspace_path,
+        '%42',
+        'CCB-grok1',
+        start_cmd,
+        'sess-grok',
+        prepared,
+    )
+    visible_parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert visible_parts.count('--allow') == 2
+    assert 'Bash(command ask *)' in visible_parts
+    assert 'Bash(command ccb clear*)' in visible_parts
+    assert '--minimal' in visible_parts
+    assert visible_parts[visible_parts.index('--permission-mode') + 1] == 'bypassPermissions'
+    assert '--always-approve' not in visible_parts
+    assert payload['grok_skill_permissions_enabled'] is True
+    assert payload['grok_auto_permission_enabled'] is True
+
+
+def test_grok_launcher_disables_skill_projection_and_rules_when_inheritance_is_off(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'source-home'
+    (source_home / '.grok').mkdir(parents=True)
+    monkeypatch.setattr(grok_home, 'current_provider_source_home', lambda: source_home)
+    project_root = tmp_path / 'repo-grok-skills-disabled'
+    command = ParsedStartCommand(project=None, agent_names=('grok1',), restore=True, auto_permission=True)
+    ctx = _context(project_root, command)
+    spec = _spec('grok1', provider='grok')
+    plan = WorkspacePlanner().plan(spec, ctx.project)
+    plan.workspace_path.mkdir(parents=True, exist_ok=True)
+    runtime_dir = ctx.paths.agent_provider_runtime_dir('grok1', 'grok')
+    _write_provider_profile(
+        runtime_dir,
+        ResolvedProviderProfile(provider='grok', agent_name='grok1', inherit_skills=False),
+    )
+    launcher = build_default_runtime_launcher_map(include_optional=True)['grok']
+
+    prepared = launcher.prepare_launch_context(ctx, spec, plan, runtime_dir, {})
+    start_cmd = launcher.build_start_cmd(command, spec, runtime_dir, 'sess-grok', prepared_state=prepared)
+    managed_home = ctx.paths.agent_provider_state_dir('grok1', 'grok') / 'home'
+
+    visible_parts = shlex.split(start_cmd.rsplit('; ', 1)[-1])
+
+    assert '--allow' not in visible_parts
+    assert visible_parts[visible_parts.index('--permission-mode') + 1] == 'bypassPermissions'
+    assert prepared['grok_skill_permissions_enabled'] is False
+    assert prepared['grok_auto_permission_enabled'] is True
+    assert not (managed_home / '.grok' / 'skills' / 'ask').exists()
+    assert not (managed_home / '.grok' / 'skills' / 'ccb-clear').exists()
 
 
 def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypatch, tmp_path: Path) -> None:
@@ -1892,7 +2195,10 @@ def test_ensure_agent_runtime_falls_back_when_created_pane_is_too_small(monkeypa
     assert result.binding is not None
     assert result.binding.runtime_ref == 'tmux:%88'
     assert ('kill', ('%42',)) in calls
-    assert any(name == 'start-server' for name, _ in calls)
+    assert not any(name == 'start-server' for name, _ in calls)
+    assert next(index for index, (name, _) in enumerate(calls) if name == 'new-session') < next(
+        index for index, (name, _) in enumerate(calls) if name == 'set-option'
+    )
     assert any(name == 'set-option' for name, _ in calls)
     assert ('set-option', ('set-option', '-g', 'mouse', 'on')) in calls
     assert ('set-option', ('set-option', '-g', 'history-limit', '50000')) in calls
@@ -2038,8 +2344,8 @@ def test_codex_launcher_repairs_activity_hook_trust_for_existing_home(monkeypatc
     project_root = tmp_path / 'repo-codex-existing-hooks'
     runtime_dir = project_root / '.ccb' / 'agents' / 'agent1' / 'provider-runtime' / 'codex'
     runtime_dir.mkdir(parents=True, exist_ok=True)
-    system_home = tmp_path / 'system-home'
-    system_codex = system_home / '.codex'
+    source_home = tmp_path / 'source-home'
+    system_codex = source_home / '.codex'
     omx_command = '"/usr/bin/node" "/usr/lib/node_modules/oh-my-codex/dist/scripts/codex-native-hook.js"'
     system_codex.mkdir(parents=True, exist_ok=True)
     (system_codex / 'hooks.json').write_text(
@@ -2072,7 +2378,10 @@ def test_codex_launcher_repairs_activity_hook_trust_for_existing_home(monkeypatc
         ),
         encoding='utf-8',
     )
-    monkeypatch.setenv('CODEX_HOME', str(system_codex))
+    host_codex = tmp_path / 'host-codex'
+    host_codex.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
+    monkeypatch.setenv('CODEX_HOME', str(host_codex))
 
     spec = _spec('agent1')
     command = ParsedStartCommand(project=None, agent_names=('agent1',), restore=False, auto_permission=True)
@@ -2092,6 +2401,17 @@ def test_codex_launcher_repairs_activity_hook_trust_for_existing_home(monkeypatc
     user_prompt_key = f'{codex_home / "hooks.json"}:user_prompt_submit:0:0'
     assert state[user_prompt_key]['enabled'] is True
     assert str(state[user_prompt_key]['trusted_hash']).startswith('sha256:')
+
+    codex_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'sess-existing-hooks-repeat',
+        prepared_state=_codex_prepared_state(runtime_dir),
+    )
+
+    repeated_config = tomllib.loads((codex_home / 'config.toml').read_text(encoding='utf-8'))
+    assert repeated_config['hooks']['state'] == state
 
 
 def test_codex_launcher_build_start_cmd_uses_agent_scoped_resume_session(monkeypatch, tmp_path: Path) -> None:
@@ -2289,6 +2609,39 @@ def test_claude_launcher_build_start_cmd_uses_overlay_and_drops_dead_local_user_
     )
 
 
+def test_claude_launcher_exports_plugin_seed_before_process_start(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir(parents=True)
+    source_home = tmp_path / 'source-home'
+    seed_root = source_home / '.claude' / 'plugins'
+    seed_root.mkdir(parents=True)
+    (seed_root / 'known_marketplaces.json').write_text('{}\n', encoding='utf-8')
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=False)
+
+    monkeypatch.setattr(claude_home_runtime, 'current_provider_source_home', lambda: source_home)
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-plugin-seed',
+        prepared_state=_claude_prepared_state(runtime_dir),
+    )
+
+    expected_plugin_root = runtime_dir / 'claude-home' / '.claude' / 'plugins'
+    assert f'CLAUDE_CODE_PLUGIN_SEED_DIR={shlex.quote(str(seed_root))}' in start_cmd
+    assert f'CLAUDE_CODE_PLUGIN_CACHE_DIR={shlex.quote(str(expected_plugin_root))}' in start_cmd
+    assert expected_plugin_root.is_dir()
+    assert start_cmd.index('CLAUDE_CODE_PLUGIN_SEED_DIR=') < start_cmd.rindex('; claude ')
+
+
 def test_claude_launcher_provider_command_template_wraps_command_after_env_prefix(
     monkeypatch,
     tmp_path: Path,
@@ -2454,6 +2807,47 @@ def test_claude_launcher_build_start_cmd_does_not_duplicate_root_skip_flag(monke
     assert start_cmd.endswith(
         'claude --setting-sources user,project,local --dangerously-skip-permissions --debug'
     )
+
+
+def test_claude_cli_capability_probe_does_not_reuse_prior_help_output(monkeypatch) -> None:
+    help_outputs = iter(('--settings\n', '--permission-mode\n'))
+
+    monkeypatch.setattr(
+        claude_launcher.subprocess,
+        'run',
+        lambda *args, **kwargs: subprocess.CompletedProcess(args[0], 0, next(help_outputs), ''),
+    )
+
+    assert '--settings' in claude_launcher._claude_help_text(('claude',))
+    assert '--permission-mode' in claude_launcher._claude_help_text(('claude',))
+
+
+def test_claude_launcher_skips_unsupported_optional_flags(monkeypatch, tmp_path: Path) -> None:
+    runtime_dir = tmp_path / 'runtime-claude-no-optional-flags'
+    runtime_dir.mkdir(parents=True, exist_ok=True)
+    spec = _spec('reviewer', provider='claude')
+    command = ParsedStartCommand(project=None, agent_names=('reviewer',), restore=False, auto_permission=True)
+
+    monkeypatch.setattr(claude_launcher, 'claude_cli_supports_flag', lambda cmd_parts, flag: False)
+    monkeypatch.setattr(claude_launcher, 'is_root_user', lambda: False)
+    monkeypatch.setattr(
+        claude_launcher,
+        '_resolve_claude_restore_target',
+        lambda **kwargs: ProviderRestoreTarget(run_cwd=runtime_dir, has_history=False),
+    )
+
+    start_cmd = claude_launcher.build_start_cmd(
+        command,
+        spec,
+        runtime_dir,
+        'claude-sess-no-optional-flags',
+        prepared_state=_claude_prepared_state(runtime_dir),
+    )
+
+    assert '--setting-sources' not in start_cmd
+    assert '--settings' not in start_cmd
+    assert '--permission-mode' not in start_cmd
+    assert '--dangerously-skip-permissions' in start_cmd
 
 
 def test_claude_launcher_build_start_cmd_requires_launch_context(tmp_path: Path) -> None:

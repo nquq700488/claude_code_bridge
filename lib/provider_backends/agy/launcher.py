@@ -408,7 +408,7 @@ def build_session_payload(
     launch_session_id: str,
     prepared_state: dict[str, object],
 ) -> dict[str, object]:
-    del context, spec, prepared_state
+    del spec, prepared_state
     return {
         'ccb_session_id': launch_session_id,
         'runtime_dir': str(runtime_dir),
@@ -420,6 +420,7 @@ def build_session_payload(
         'workspace_path': str(plan.workspace_path),
         'work_dir': str(run_cwd),
         'start_cmd': start_cmd,
+        'agy_auto_permission': bool(getattr(context.command, 'auto_permission', False)),
     }
 
 

@@ -267,6 +267,135 @@ void main() {
     );
   });
 
+  testWidgets('403 scope denial keeps profile and offers Retry', (
+    tester,
+  ) async {
+    final profile = _pairedHost(hostId: 'proj-demo', deviceId: 'phone');
+    final profileStore = await _profileStoreWith([profile]);
+    final repository =
+        _HealthCheckedGatewayRepository()
+          ..deviceError = GatewayHttpException(
+            Uri.parse('http://proj-demo.local:8787/v1/devices/me'),
+            403,
+            'scope denied',
+          );
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: RecordingGatewayRepository(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => repository,
+          gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await openConnectionDetails(tester);
+    await expandTile(tester, const ValueKey('runtime-mode-panel'));
+    _runtimeSegments(
+      tester,
+    ).onSelectionChanged?.call({AppRuntimeMode.pairedGateway});
+    await tester.pumpAndSettle();
+    await dismissConnectionDetails(tester);
+
+    expect(find.byKey(const ValueKey('project-list-retry-button')), findsOne);
+    expect(
+      find.byKey(const ValueKey('project-list-repair-button')),
+      findsNothing,
+    );
+    expect(
+      await profileStore.read(hostId: 'proj-demo', deviceId: 'phone'),
+      isNotNull,
+    );
+  });
+
+  testWidgets(
+    'SSE connected keeps reconnect visible until a core HTTP probe succeeds',
+    (tester) async {
+      final profile = _pairedHost(
+        hostId: 'proj-demo',
+        deviceId: 'phone',
+        scopes: const {'view', 'focus', 'notify'},
+      );
+      final profileStore = await _profileStoreWith([profile]);
+      final repository =
+          _HealthCheckedGatewayRepository()
+            ..listProjectsError = TimeoutException('core HTTP unavailable')
+            ..healthError = TimeoutException('core HTTP unavailable');
+      final streamClient = _ConnectedTaskCompletionStreamClient();
+
+      await tester.pumpWidget(
+        MaterialApp(
+          home: ProjectHomeScreen(
+            repository: RecordingGatewayRepository(),
+            profileStore: profileStore,
+            autoActivateStoredProfile: true,
+            gatewayRepositoryFactory: (_) => repository,
+            gatewayTerminalTransportFactory:
+                (_) => RecordingTerminalTransport(),
+            taskNotificationStreamClient: streamClient,
+            taskCompletionLocalNotifications:
+                _NoopTaskCompletionNotifications(),
+            taskCompletionSeenStore: TaskCompletionSeenDedupeStore(
+              secureStore: MemorySecureStore(),
+            ),
+            taskCompletionUnreadStore: TaskCompletionUnreadStore(
+              secureStore: MemorySecureStore(),
+            ),
+            invalidationCursorStore: GatewayInvalidationCursorStore(
+              secureStore: MemorySecureStore(),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      expect(streamClient.subscribeCalls, 1);
+      expect(repository.healthCalls, greaterThan(0));
+      expect(find.byKey(const ValueKey('project-list-retry-button')), findsOne);
+      expect(
+        find.byKey(const ValueKey('project-list-repair-button')),
+        findsNothing,
+      );
+    },
+  );
+
+  testWidgets('paired lifecycle publishes visible presence transitions', (
+    tester,
+  ) async {
+    final profile = _pairedHost(hostId: 'proj-demo', deviceId: 'phone');
+    final profileStore = await _profileStoreWith([profile]);
+    final repository = _HealthCheckedGatewayRepository();
+
+    await tester.pumpWidget(
+      MaterialApp(
+        home: ProjectHomeScreen(
+          repository: RecordingGatewayRepository(),
+          profileStore: profileStore,
+          gatewayRepositoryFactory: (_) => repository,
+          gatewayTerminalTransportFactory: (_) => RecordingTerminalTransport(),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    await openConnectionDetails(tester);
+    await expandTile(tester, const ValueKey('runtime-mode-panel'));
+    _runtimeSegments(
+      tester,
+    ).onSelectionChanged?.call({AppRuntimeMode.pairedGateway});
+    await tester.pumpAndSettle();
+
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    await tester.pump();
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump();
+
+    expect(repository.presenceVisible, containsAllInOrder([true, false, true]));
+  });
+
   testWidgets('activation syncs gateway settings on project list', (
     tester,
   ) async {
@@ -463,12 +592,27 @@ class _FailingProfileStore extends GatewayHostProfileStore {
 }
 
 class _HealthCheckedGatewayRepository extends RecordingGatewayRepository
-    implements MobileGatewayProfileHealthProbe {
+    implements
+        MobileGatewayProfileHealthProbe,
+        MobileGatewayCoreRouteVerifier,
+        MobileGatewayPresenceReporter {
   Object? healthError;
+  Object? deviceError;
+  Object? listProjectsError;
   bool revoked = false;
+  final presenceVisible = <bool>[];
+  var healthCalls = 0;
+
+  @override
+  Future<List<CcbProject>> listProjects() async {
+    final error = listProjectsError;
+    if (error != null) throw error;
+    return super.listProjects();
+  }
 
   @override
   Future<GatewayHealth> health() async {
+    healthCalls += 1;
     final error = healthError;
     if (error != null) {
       throw error;
@@ -478,6 +622,8 @@ class _HealthCheckedGatewayRepository extends RecordingGatewayRepository
 
   @override
   Future<GatewayDevice> device() async {
+    final error = deviceError;
+    if (error != null) throw error;
     return GatewayDevice(
       deviceId: 'phone',
       projectId: 'proj-demo',
@@ -486,6 +632,28 @@ class _HealthCheckedGatewayRepository extends RecordingGatewayRepository
       revoked: revoked,
     );
   }
+
+  @override
+  Future<void> verifyCoreRoutes() async {
+    final health = await this.health();
+    if (health.status.toLowerCase() != 'ok') {
+      throw GatewayHttpException(Uri(), 503, 'gateway health is degraded');
+    }
+    final device = await this.device();
+    if (device.revoked) {
+      throw GatewayHttpException(Uri(), 401, 'device revoked');
+    }
+  }
+
+  @override
+  Future<void> reportPresence({
+    required bool visible,
+    String? focusedProjectId,
+    String? focusedAgent,
+    bool userActivity = false,
+  }) async {
+    presenceVisible.add(visible);
+  }
 }
 
 GatewayPairedHost _pairedHost({
@@ -493,6 +661,7 @@ GatewayPairedHost _pairedHost({
   required String deviceId,
   Uri? gatewayUrl,
   RouteProviderKind routeKind = RouteProviderKind.lan,
+  Set<String> scopes = const {'view', 'focus', 'terminal_input', 'lifecycle'},
 }) {
   return GatewayPairedHost(
     profile: GatewayHostProfile(
@@ -502,9 +671,43 @@ GatewayPairedHost _pairedHost({
         kind: routeKind,
         gatewayUrl: gatewayUrl ?? Uri.parse('http://$hostId.local:8787'),
       ),
-      scopes: const {'view', 'focus', 'terminal_input', 'lifecycle'},
+      scopes: scopes,
     ),
     deviceToken: 'token-$hostId-$deviceId',
     projectId: hostId,
   );
+}
+
+class _ConnectedTaskCompletionStreamClient
+    implements GatewayTaskCompletionNotificationStreamClient {
+  var subscribeCalls = 0;
+
+  @override
+  Stream<TaskCompletionNotificationEvent> subscribe(
+    GatewayPairedHost host, [
+    String? lastEventId,
+    GatewayInvalidationWatch? watch,
+    void Function()? onConnected,
+  ]) {
+    subscribeCalls += 1;
+    onConnected?.call();
+    return const Stream<TaskCompletionNotificationEvent>.empty();
+  }
+}
+
+class _NoopTaskCompletionNotifications
+    implements TaskCompletionLocalNotifications {
+  @override
+  Stream<TaskCompletionNotificationTap> get taps =>
+      const Stream<TaskCompletionNotificationTap>.empty();
+
+  @override
+  Future<TaskCompletionLocalNotificationPermissionStatus>
+  requestPermissionIfNeeded() async =>
+      TaskCompletionLocalNotificationPermissionStatus.granted;
+
+  @override
+  Future<bool> showTaskCompletion(
+    TaskCompletionNotificationEvent event,
+  ) async => true;
 }

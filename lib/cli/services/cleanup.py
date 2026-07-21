@@ -464,6 +464,17 @@ def _cleanup_pane_crash_logs(layout, *, actions: list[CleanupAction], skipped: l
                 actions=actions,
                 skipped=skipped,
             )
+            reason_path = path.with_suffix('.reason.json')
+            if reason_path.is_file() and not reason_path.is_symlink():
+                _remove_tree(
+                    reason_path,
+                    root=runtime_dir,
+                    provider=runtime_dir.name,
+                    kind='crash_reason',
+                    reason='old_pane_crash_reason',
+                    actions=actions,
+                    skipped=skipped,
+                )
 
 
 def _remove_tree(

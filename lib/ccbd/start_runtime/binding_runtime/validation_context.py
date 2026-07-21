@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .common import binding_pane_id, matching_project_namespace_record
 
@@ -13,6 +13,8 @@ class BindingValidationContext:
     agent_name: str
     project_id: str
     window_name: str | None
+    namespace_epoch: int | None
+    namespace_pane_records: dict[str, object] | None
     tmux_backend_factory: object
     inspect_project_namespace_pane_fn: object
     same_tmux_socket_path_fn: object
@@ -41,6 +43,8 @@ def build_binding_validation_context(
     inspect_project_namespace_pane_fn,
     same_tmux_socket_path_fn,
     window_name: str | None = None,
+    namespace_epoch: int | None = None,
+    namespace_pane_records: dict[str, object] | None = None,
 ) -> BindingValidationContext:
     return BindingValidationContext(
         tmux_socket_path=tmux_socket_path,
@@ -49,6 +53,8 @@ def build_binding_validation_context(
         agent_name=agent_name,
         project_id=project_id,
         window_name=window_name,
+        namespace_epoch=namespace_epoch,
+        namespace_pane_records=namespace_pane_records,
         tmux_backend_factory=tmux_backend_factory,
         inspect_project_namespace_pane_fn=inspect_project_namespace_pane_fn,
         same_tmux_socket_path_fn=same_tmux_socket_path_fn,
@@ -64,9 +70,28 @@ def matching_namespace_binding(binding, *, context: BindingValidationContext):
         agent_name=context.agent_name,
         project_id=context.project_id,
         window_name=context.window_name,
+        namespace_epoch=context.namespace_epoch,
         tmux_backend_factory=context.tmux_backend_factory,
         inspect_project_namespace_pane_fn=context.inspect_project_namespace_pane_fn,
+        namespace_pane_records=context.namespace_pane_records,
     )
+
+
+def binding_with_namespace_record(binding, record):
+    updates = {}
+    if hasattr(binding, 'tmux_window_id'):
+        updates['tmux_window_id'] = getattr(record, 'window_id', None)
+    if hasattr(binding, 'tmux_window_name'):
+        updates['tmux_window_name'] = (
+            getattr(record, 'ccb_window', None)
+            or getattr(record, 'window_name', None)
+        )
+    if not updates:
+        return binding
+    try:
+        return replace(binding, **updates)
+    except (TypeError, ValueError):
+        return binding
 
 
 def binding_matches_project_socket(binding, *, context: BindingValidationContext) -> bool:
@@ -111,6 +136,7 @@ def has_project_tmux_session_name(context: BindingValidationContext) -> bool:
 __all__ = [
     'BindingValidationContext',
     'binding_has_live_namespace_record',
+    'binding_with_namespace_record',
     'binding_matches_project_socket',
     'binding_pane_state',
     'build_binding_validation_context',

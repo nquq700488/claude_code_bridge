@@ -296,7 +296,10 @@ def test_cleanup_trims_pane_crash_logs_by_runtime_count(tmp_path: Path, monkeypa
     for index in range(55):
         path = runtime_dir / f'pane-crash-{index:04d}.log'
         path.write_text(f'crash {index}\n', encoding='utf-8')
+        reason_path = runtime_dir / f'pane-crash-{index:04d}.reason.json'
+        reason_path.write_text('{"reason":"provider_auth_revoked"}\n', encoding='utf-8')
         os.utime(path, (now + index, now + index))
+        os.utime(reason_path, (now + index, now + index))
     monkeypatch.setattr(cleanup_service, 'inspect_daemon', lambda context: (None, None, _stopped_inspection()))
 
     summary = cleanup_project_storage(_context(project_root), SimpleNamespace())
@@ -305,5 +308,9 @@ def test_cleanup_trims_pane_crash_logs_by_runtime_count(tmp_path: Path, monkeypa
     assert len(crash_actions) == 5
     assert not (runtime_dir / 'pane-crash-0000.log').exists()
     assert not (runtime_dir / 'pane-crash-0004.log').exists()
+    assert not (runtime_dir / 'pane-crash-0000.reason.json').exists()
+    assert not (runtime_dir / 'pane-crash-0004.reason.json').exists()
     assert (runtime_dir / 'pane-crash-0005.log').exists()
     assert (runtime_dir / 'pane-crash-0054.log').exists()
+    assert (runtime_dir / 'pane-crash-0005.reason.json').exists()
+    assert (runtime_dir / 'pane-crash-0054.reason.json').exists()

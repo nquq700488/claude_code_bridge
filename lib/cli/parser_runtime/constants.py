@@ -31,6 +31,7 @@ SUBCOMMANDS = {
     'repair',
     'config',
     'fault',
+    'frontdesk',
     'restart',
     'reload',
 }
@@ -43,6 +44,7 @@ ASK_FLAG_OPTIONS = {
     '--chain',
     '--callback',
     '--compact',
+    '--inline-request',
     '--silence',
     '--notify-sender',
 }

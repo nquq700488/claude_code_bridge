@@ -82,14 +82,14 @@ void main() {
       bodies.add(body);
       final payload =
           request.uri.path == '/v1/projects' && projectListPayloads.isNotEmpty
-              ? _GatewayResponse(projectListPayloads.removeAt(0))
-              : _payloadForRequest(
-                request.method,
-                request.uri.path,
-                body,
-                authorization,
-                request.headers.value(HttpHeaders.hostHeader),
-              );
+          ? _GatewayResponse(projectListPayloads.removeAt(0))
+          : _payloadForRequest(
+              request.method,
+              request.uri.path,
+              body,
+              authorization,
+              request.headers.value(HttpHeaders.hostHeader),
+            );
       request.response.headers.contentType = ContentType.json;
       request.response.statusCode = payload.statusCode;
       request.response.write(jsonEncode(payload.body));
@@ -156,6 +156,39 @@ void main() {
       }
     },
   );
+
+  test('reports redacted device presence with bearer identity', () async {
+    final baseUrl = Uri.parse('http://127.0.0.1:${server.port}');
+    final authed = HttpGatewayTransport(
+      profile: GatewayHostProfile(
+        hostId: 'host-demo',
+        deviceId: 'dev-demo',
+        routeProvider: RouteProvider(
+          kind: RouteProviderKind.lan,
+          gatewayUrl: baseUrl,
+        ),
+        scopes: {'view'},
+      ),
+      deviceToken: 'device-secret',
+    );
+    addTearDown(() => authed.close(force: true));
+
+    await authed.reportPresence(
+      visible: true,
+      focusedProjectId: 'proj-demo',
+      focusedAgent: 'mobile',
+      userActivity: true,
+    );
+
+    expect(requests, ['/v1/devices/me/presence']);
+    expect(authorizations, ['Bearer device-secret']);
+    expect(jsonDecode(bodies.single), {
+      'visible': true,
+      'focused_project_id': 'proj-demo',
+      'focused_agent': 'mobile',
+      'user_activity': true,
+    });
+  });
 
   test('reads current-project list from G1 gateway JSON', () async {
     final projects = await transport.listProjects();
@@ -863,27 +896,43 @@ _GatewayResponse _payloadForRequest(
     '/v1/devices/me' =>
       authorization == 'Bearer device-secret'
           ? _GatewayResponse({
-            'schema_version': 1,
-            'status': 'ok',
-            'device': {
-              'device_id': 'dev-demo',
-              'name': 'Pixel Fold',
-              'project_id': 'proj-demo',
-              'pairing_id': 'pair-demo',
-              'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
-              'route_provider': 'cloudflare_tunnel',
-              'gateway_url': 'http://${host ?? "127.0.0.1:8787"}',
-              'created_at': '2026-06-18T00:00:00Z',
-              'last_seen_at': '2026-06-18T00:01:00Z',
-              'revoked': false,
-              'revoked_at': null,
-            },
-          })
+              'schema_version': 1,
+              'status': 'ok',
+              'device': {
+                'device_id': 'dev-demo',
+                'name': 'Pixel Fold',
+                'project_id': 'proj-demo',
+                'pairing_id': 'pair-demo',
+                'scopes': ['view', 'focus', 'terminal_input', 'lifecycle'],
+                'route_provider': 'cloudflare_tunnel',
+                'gateway_url': 'http://${host ?? "127.0.0.1:8787"}',
+                'created_at': '2026-06-18T00:00:00Z',
+                'last_seen_at': '2026-06-18T00:01:00Z',
+                'revoked': false,
+                'revoked_at': null,
+              },
+            })
           : _GatewayResponse({
-            'schema_version': 1,
-            'status': 'error',
-            'error': 'device token required',
-          }, 401),
+              'schema_version': 1,
+              'status': 'error',
+              'error': 'device token required',
+            }, 401),
+    '/v1/devices/me/presence' =>
+      authorization == 'Bearer device-secret'
+          ? _GatewayResponse({
+              'schema_version': 1,
+              'status': 'ok',
+              'presence': {
+                'device_id': 'dev-demo',
+                'visible': true,
+                'freshness': 'fresh',
+              },
+            })
+          : _GatewayResponse({
+              'schema_version': 1,
+              'status': 'error',
+              'error': 'device token required',
+            }, 401),
     '/v1/projects' => _GatewayResponse({
       'schema_version': 1,
       'projects': [

@@ -71,6 +71,34 @@ def set_pane_style(
     set_pane_option(service, pane_id, "pane-active-border-style", active_border_style)
 
 
+def set_pane_identity(
+    service,
+    pane_id: str,
+    *,
+    title: str,
+    user_options: dict[str, str],
+    border_style: str | None = None,
+    active_border_style: str | None = None,
+) -> None:
+    if not pane_id:
+        return
+    commands: list[list[str]] = [['select-pane', '-t', pane_id, '-T', title or '']]
+    for name, value in user_options.items():
+        option = service.normalize_user_option_fn(name)
+        if option:
+            commands.append(['set-option', '-p', '-t', pane_id, option, value or ''])
+    if border_style:
+        commands.append(['set-option', '-p', '-t', pane_id, 'pane-border-style', border_style])
+    if active_border_style:
+        commands.append(['set-option', '-p', '-t', pane_id, 'pane-active-border-style', active_border_style])
+    args: list[str] = []
+    for command in commands:
+        if args:
+            args.append(';')
+        args.extend(command)
+    service.tmux_run_fn(args, check=False, capture=True)
+
+
 def _unzoom_parent_if_needed(service, parent_pane_id: str) -> None:
     if not service.looks_like_pane_id_fn(parent_pane_id):
         return
@@ -182,6 +210,7 @@ def _parse_pane_size(pane_size: str) -> tuple[int, int]:
 
 __all__ = [
     "set_pane_style",
+    "set_pane_identity",
     "set_pane_title",
     "set_pane_user_option",
     "split_pane",

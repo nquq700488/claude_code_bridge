@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from provider_sessions.files import find_project_session_file, safe_write_session
+from workspace.binding import WorkspaceBindingStore
 
 
 def test_find_project_session_file_walks_upward(tmp_path: Path) -> None:
@@ -98,16 +99,42 @@ def test_find_project_session_file_prefers_workspace_binding_over_workspace_anch
     assert find_project_session_file(workspace_root, ".opencode-demo-session") == session
 
 
+def test_find_project_session_file_uses_controller_worktree_binding(tmp_path: Path) -> None:
+    project_root = tmp_path / "project"
+    project_ccb = project_root / ".ccb"
+    project_ccb.mkdir(parents=True)
+    session = project_ccb / ".codex-loop-worker-session"
+    session.write_text("{}", encoding="utf-8")
+
+    workspace_root = tmp_path / "workgroups" / "wg1" / "nodes" / "node1"
+    binding_path = project_ccb / "workspaces" / "workgroups" / "wg1" / ".ccb-workspace.json"
+    WorkspaceBindingStore().bind_controller_worktree(
+        binding_path,
+        target_project=project_root,
+        project_id="proj_test",
+        workspace_group="wg1",
+        workspace_path=workspace_root,
+        branch_name="ccb/workgroup/wg1/node1",
+    )
+
+    nested = workspace_root / "src"
+    nested.mkdir(parents=True)
+
+    assert find_project_session_file(nested, ".codex-loop-worker-session") == session
+
+
 def test_safe_write_session_atomic_write(tmp_path: Path) -> None:
     target = tmp_path / "state.json"
     ok, err = safe_write_session(target, '{"hello":"world"}\n')
     assert ok is True
     assert err is None
     assert target.read_text(encoding="utf-8") == '{"hello":"world"}\n'
+    assert target.stat().st_mode & 0o777 == 0o600
     assert not target.with_suffix(".tmp").exists()
 
     ok2, err2 = safe_write_session(target, '{"hello":"again"}\n')
     assert ok2 is True
     assert err2 is None
     assert target.read_text(encoding="utf-8") == '{"hello":"again"}\n'
+    assert target.stat().st_mode & 0o777 == 0o600
     assert not target.with_suffix(".tmp").exists()

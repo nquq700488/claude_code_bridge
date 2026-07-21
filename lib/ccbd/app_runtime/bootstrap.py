@@ -42,7 +42,15 @@ from .service_graph import CcbdServiceGraphDependencies, build_ccbd_service_grap
 APP_REQUEST_TIMEOUT_S = 0.0
 
 
-def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> None:
+def initialize_app(
+    app,
+    project_root: str | Path,
+    *,
+    clock,
+    pid: int | None,
+    expected_startup_fence=None,
+    keeper_startup_checkpoint=None,
+) -> None:
     app.project_root = Path(project_root).expanduser().resolve()
     app.project_id = compute_project_id(app.project_root)
     app.paths = PathLayout(app.project_root)
@@ -55,6 +63,8 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     keeper_pid = str(os.environ.get('CCB_KEEPER_PID') or '').strip()
     app.keeper_pid = int(keeper_pid) if keeper_pid.isdigit() and int(keeper_pid) > 0 else None
     app.daemon_instance_id = uuid.uuid4().hex
+    app.expected_startup_fence = expected_startup_fence
+    app.keeper_startup_checkpoint = keeper_startup_checkpoint
     app.start_maintenance_lock = threading.Lock()
     app._service_graph_publish_lock = threading.Lock()
     app.provider_catalog = build_default_provider_catalog()
@@ -82,6 +92,7 @@ def initialize_app(app, project_root: str | Path, *, clock, pid: int | None) -> 
     )
     app.control_plane_metrics = ControlPlaneMetrics()
     app.lease = None
+    app.startup_generation = None
     app.runtime_accelerator = None
     service_graph = build_ccbd_service_graph(
         CcbdServiceGraphDependencies(

@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:ccb_mobile/ccb_mobile.dart';
+import 'package:ccb_mobile/features/project_home/mobile_connection_supervisor.dart';
+import 'package:ccb_mobile/features/project_home/project_home_runtime_activation.dart';
 import 'package:test/test.dart';
 
 void main() {
@@ -11,11 +13,13 @@ void main() {
   final requests = <String>[];
   final queries = <String>[];
   final bodies = <String>[];
+  var failDeviceProbe = false;
 
   setUp(() async {
     requests.clear();
     queries.clear();
     bodies.clear();
+    failDeviceProbe = false;
     server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     server.listen((request) async {
       if (request.method == 'GET' &&
@@ -33,6 +37,37 @@ void main() {
       requests.add(request.uri.path);
       queries.add(request.uri.query);
       bodies.add(body);
+      if (request.uri.path == '/v1/health') {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({'status': 'ok', 'server_time': '2026-07-13T00:00:00Z'}),
+        );
+        await request.response.close();
+        return;
+      }
+      if (request.uri.path == '/v1/devices/me' && failDeviceProbe) {
+        request.response.headers.contentType = ContentType.json;
+        request.response.statusCode = HttpStatus.serviceUnavailable;
+        request.response.write(jsonEncode({'status': 'error'}));
+        await request.response.close();
+        return;
+      }
+      if (request.uri.path == '/v1/devices/me') {
+        request.response.headers.contentType = ContentType.json;
+        request.response.write(
+          jsonEncode({
+            'device': {
+              'device_id': 'device-demo',
+              'project_id': 'proj-demo',
+              'scopes': ['view'],
+              'route_provider': 'lan',
+              'revoked': false,
+            },
+          }),
+        );
+        await request.response.close();
+        return;
+      }
       final payload = _payloadForRequest(
         request.method,
         request.uri.path,
@@ -78,6 +113,96 @@ void main() {
     expect(view.agentByName('mobile')?.active, isTrue);
     expect(requests, ['/v1/projects', '/v1/projects/proj-demo/view']);
   });
+
+  test(
+    'core probe does not report online after health succeeds then device fails',
+    () async {
+      failDeviceProbe = true;
+      final states = <MobileConnectionState>[];
+      final supervisor = MobileConnectionSupervisor(
+        onChanged: (snapshot) => states.add(snapshot.state),
+        initialDelay: const Duration(hours: 1),
+        maxDelay: const Duration(hours: 1),
+      );
+      repository.outcomeReporter = MobileConnectionOutcomeAdapter(
+        supervisor: supervisor,
+        isCurrent: () => true,
+      );
+
+      supervisor.start(
+        profile: GatewayPairedHost(
+          profile: transport.profile,
+          deviceToken: 'device-secret',
+        ),
+        probe: repository,
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 20));
+
+      expect(states, isNot(contains(MobileConnectionState.online)));
+      expect(supervisor.snapshot.state, MobileConnectionState.reconnecting);
+      supervisor.dispose();
+    },
+  );
+
+  test(
+    'activation core verification never reports online when device fails',
+    () async {
+      failDeviceProbe = true;
+      final states = <MobileConnectionState>[];
+      final supervisor = MobileConnectionSupervisor(
+        onChanged: (snapshot) => states.add(snapshot.state),
+      );
+      repository.outcomeReporter = MobileConnectionOutcomeAdapter(
+        supervisor: supervisor,
+        isCurrent: () => true,
+      );
+      supervisor.start(
+        profile: GatewayPairedHost(
+          profile: transport.profile,
+          deviceToken: 'device-secret',
+        ),
+        probeImmediately: false,
+      );
+
+      await expectLater(
+        verifyProjectHomeGatewayProfile(repository),
+        throwsA(isA<ProjectHomeGatewayActivationException>()),
+      );
+
+      expect(states, isNot(contains(MobileConnectionState.online)));
+      expect(supervisor.snapshot.state, MobileConnectionState.reconnecting);
+      supervisor.dispose();
+    },
+  );
+
+  test(
+    'activation core verification reports one recovery after complete success',
+    () async {
+      final states = <MobileConnectionState>[];
+      final supervisor = MobileConnectionSupervisor(
+        onChanged: (snapshot) => states.add(snapshot.state),
+      );
+      repository.outcomeReporter = MobileConnectionOutcomeAdapter(
+        supervisor: supervisor,
+        isCurrent: () => true,
+      );
+      supervisor.start(
+        profile: GatewayPairedHost(
+          profile: transport.profile,
+          deviceToken: 'device-secret',
+        ),
+        probeImmediately: false,
+      );
+
+      await verifyProjectHomeGatewayProfile(repository);
+
+      expect(states, [
+        MobileConnectionState.connecting,
+        MobileConnectionState.online,
+      ]);
+      supervisor.dispose();
+    },
+  );
 
   test('focuses through authenticated gateway routes', () async {
     final agentView = await repository.focusAgent(
@@ -183,8 +308,10 @@ void main() {
   });
 
   test(
-    'uploads and downloads selected-agent files through repository',
+    'uploads and downloads report their distinct outcomes through repository',
     () async {
+      final reporter = _RecordingOutcomeReporter();
+      repository.outcomeReporter = reporter;
       final uploaded = await repository.uploadFile(
         projectId: 'proj-demo',
         agentName: 'mobile',
@@ -206,8 +333,27 @@ void main() {
         '/v1/projects/proj-demo/agents/mobile/files/file-1',
       ]);
       expect(bodies.first, String.fromCharCodes([1, 2, 3]));
+      expect(reporter.successes, [
+        GatewayConnectionOperation.mutation,
+        GatewayConnectionOperation.dataRead,
+      ]);
     },
   );
+}
+
+class _RecordingOutcomeReporter implements GatewayConnectionOutcomeReporter {
+  final successes = <GatewayConnectionOperation>[];
+  final failures = <GatewayConnectionOperation>[];
+
+  @override
+  void failed(GatewayConnectionOperation operation, Object error) {
+    failures.add(operation);
+  }
+
+  @override
+  void succeeded(GatewayConnectionOperation operation) {
+    successes.add(operation);
+  }
 }
 
 _GatewayResponse _payloadForRequest(String method, String path, String body) {

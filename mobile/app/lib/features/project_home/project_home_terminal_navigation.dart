@@ -17,11 +17,11 @@ ProjectHomeTerminalNavigationOutcome projectHomeFakeTerminalNavigation({
 }
 
 ProjectHomeTerminalNavigationOutcome projectHomeGatewayTerminalNavigation({
-  required CcbProjectView? focusedView,
+  required CcbProjectView? view,
   required String agentName,
   required bool hasTerminalTransport,
 }) {
-  if (focusedView == null) {
+  if (view == null) {
     return const ProjectHomeTerminalNavigationOutcome.none();
   }
   if (!hasTerminalTransport) {
@@ -29,11 +29,18 @@ ProjectHomeTerminalNavigationOutcome projectHomeGatewayTerminalNavigation({
       snackMessage: projectHomeTerminalTransportNotReadySnack,
     );
   }
+  final agent = view.agentByName(agentName);
+  if (agent == null || view.namespaceEpoch == null || agent.paneId == null) {
+    return const ProjectHomeTerminalNavigationOutcome.none();
+  }
   return ProjectHomeTerminalNavigationOutcome.open(
     ProjectHomeTerminalNavigationSpec(
-      projectId: focusedView.project.id,
+      projectId: view.project.id,
       agentName: agentName,
       gatewayTerminal: true,
+      namespaceEpoch: view.namespaceEpoch,
+      windowName: agent.window,
+      paneId: agent.paneId,
     ),
   );
 }
@@ -73,9 +80,15 @@ class ProjectHomeTerminalNavigationSpec {
     required this.projectId,
     required this.agentName,
     required this.gatewayTerminal,
+    this.namespaceEpoch,
+    this.windowName,
+    this.paneId,
   });
 
   final String projectId;
   final String agentName;
   final bool gatewayTerminal;
+  final int? namespaceEpoch;
+  final String? windowName;
+  final String? paneId;
 }

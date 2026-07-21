@@ -210,7 +210,7 @@ void main() {
     expect(find.text('Project view is stale'), findsOneWidget);
   });
 
-  testWidgets('paired open terminal focuses agent before navigation', (
+  testWidgets('paired open terminal does not focus agent before navigation', (
     tester,
   ) async {
     final profileStore = await _profileStoreWithHost();
@@ -240,11 +240,17 @@ void main() {
     await tester.tap(find.byKey(const ValueKey('open-agent-terminal-button')));
     await tester.pumpAndSettle();
 
-    expect(gatewayRepository.focusAgentCalls, [('proj-demo', 'lead', 4)]);
+    expect(gatewayRepository.focusAgentCalls, isEmpty);
     expect(find.byType(TerminalView), findsOneWidget);
     expect(terminalTransport.requests, hasLength(1));
-    expect(terminalTransport.requests.single.target.projectId, 'proj-focused');
+    expect(terminalTransport.requests.single.target.projectId, 'proj-demo');
     expect(terminalTransport.requests.single.target.agent, 'lead');
+    expect(
+      terminalTransport.requests.single.target.kind,
+      CcbTerminalTargetKind.agent,
+    );
+    expect(terminalTransport.requests.single.target.window, 'main');
+    expect(terminalTransport.requests.single.target.paneId, '%1');
   });
 
   testWidgets('paired stale terminal open does not focus or navigate', (
@@ -276,7 +282,7 @@ void main() {
     expect(gatewayRepository.focusAgentCalls, isEmpty);
     expect(find.byType(TerminalView), findsNothing);
     expect(terminalTransport.requests, isEmpty);
-    expect(find.text('Project view is stale'), findsOneWidget);
+    expect(find.text('Project view is stale'), findsNothing);
   });
 
   testWidgets('fake open terminal opens without focus', (tester) async {

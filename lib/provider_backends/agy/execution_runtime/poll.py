@@ -13,7 +13,7 @@ from completion.models import (
 from provider_execution.base import ProviderPollResult, ProviderSubmission
 from provider_execution.common import build_item, send_prompt_to_runtime_target
 
-from ..comm import agy_pane_ready_for_input
+from ..comm import agy_pane_ready_for_input, agy_project_trust_dialog_visible
 from ..native_log import AgyTranscriptObservation, observe_agy_transcript
 from .helpers import hash_text, seconds_between, state_int, state_str
 
@@ -214,6 +214,7 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
 
     boundary_ref = str(observation.provider_turn_ref or observation.conversation_id or transcript_path or req_id)
     if observation.completed and boundary_ref != state_str(state, 'turn_boundary_ref'):
+        trust_evidence = _trust_evidence(state)
         items.append(
             build_item(
                 submission,
@@ -231,6 +232,7 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
                     'latest_status': observation.latest_status,
                     'request_coalesced': bool(coalesced_ids),
                     'coalesced_request_ids': list(coalesced_ids),
+                    **trust_evidence,
                 },
                 cursor_kwargs={'session_path': transcript_path or None},
             )
@@ -266,6 +268,38 @@ def _poll_deferred_prompt(
     ready_wait_secs = seconds_between(started_at, now)
     state['ready_wait_secs'] = ready_wait_secs
     content = _pane_snapshot(backend, pane_id)
+    if agy_project_trust_dialog_visible(content):
+        state['agy_project_trust_dialog_observed'] = True
+        state.setdefault('agy_project_trust_dialog_observed_at', now)
+        if (
+            bool(state.get('agy_project_trust_confirmation_allowed'))
+            and not bool(state.get('agy_project_trust_confirmation_attempted'))
+        ):
+            state['agy_project_trust_confirmation_attempted'] = True
+            state['agy_project_trust_confirmation_count'] = 1
+            confirm_error = _send_key(backend, pane_id, 'Enter')
+            if confirm_error:
+                state['agy_project_trust_confirmation_error'] = confirm_error
+                with_diagnostics = _with_trust_diagnostics(submission, state)
+                return _terminal(
+                    with_diagnostics,
+                    state,
+                    now,
+                    status=CompletionStatus.FAILED,
+                    reason='agy_project_trust_confirmation_failed',
+                    reply='',
+                    confidence=CompletionConfidence.DEGRADED,
+                    diagnostics_extra={
+                        'agy_project_trust_confirmation_error': confirm_error,
+                    },
+                )
+            state['agy_project_trust_confirmed'] = True
+            state['agy_project_trust_confirmed_at'] = now
+            state['last_poll_at'] = now
+            state['next_seq'] = state_int(state, 'next_seq', 1)
+            progress = _with_trust_diagnostics(submission, state)
+            return ProviderPollResult(submission=progress, items=(), decision=None)
+
     if agy_pane_ready_for_input(content):
         pending_prompt = state_str(state, 'pending_prompt')
         if not pending_prompt:
@@ -325,7 +359,8 @@ def _poll_deferred_prompt(
         )
     state['last_poll_at'] = now
     state['next_seq'] = state_int(state, 'next_seq', 1)
-    return ProviderPollResult(submission=replace(submission, runtime_state=state), items=(), decision=None)
+    progress = _with_trust_diagnostics(submission, state)
+    return ProviderPollResult(submission=progress, items=(), decision=None)
 
 
 def _home_candidates(state: dict[str, object]) -> list[Path]:
@@ -472,6 +507,59 @@ def _send_prompt(backend: object, pane_id: str, prompt: str) -> str | None:
     except Exception as exc:
         return f'send_text_failed:{exc!r}'
     return None
+
+
+def _send_key(backend: object, pane_id: str, key: str) -> str | None:
+    sender = getattr(backend, 'send_key', None)
+    if not callable(sender):
+        return 'terminal_backend_does_not_support_key_submission'
+    try:
+        sent = sender(pane_id, key)
+    except Exception as exc:
+        return f'send_key_failed:{exc!r}'
+    if sent is False:
+        return 'send_key_failed'
+    return None
+
+
+def _with_trust_diagnostics(
+    submission: ProviderSubmission,
+    state: dict[str, object],
+) -> ProviderSubmission:
+    diagnostics = dict(submission.diagnostics or {})
+    for key in (
+        'agy_project_trust_confirmation_allowed',
+        'agy_project_trust_authority',
+        'agy_project_trust_dialog_observed',
+        'agy_project_trust_dialog_observed_at',
+        'agy_project_trust_confirmation_attempted',
+        'agy_project_trust_confirmation_count',
+        'agy_project_trust_confirmed',
+        'agy_project_trust_confirmed_at',
+        'agy_project_trust_confirmation_error',
+    ):
+        if key in state:
+            diagnostics[key] = state[key]
+    state['diagnostics'] = diagnostics
+    return replace(submission, diagnostics=diagnostics, runtime_state=state)
+
+
+def _trust_evidence(state: dict[str, object]) -> dict[str, object]:
+    evidence: dict[str, object] = {}
+    for key in (
+        'agy_project_trust_confirmation_allowed',
+        'agy_project_trust_authority',
+        'agy_project_trust_dialog_observed',
+        'agy_project_trust_dialog_observed_at',
+        'agy_project_trust_confirmation_attempted',
+        'agy_project_trust_confirmation_count',
+        'agy_project_trust_confirmed',
+        'agy_project_trust_confirmed_at',
+        'agy_project_trust_confirmation_error',
+    ):
+        if key in state:
+            evidence[key] = state[key]
+    return evidence
 
 
 def _send_error_is_fatal(send_error: str) -> bool:

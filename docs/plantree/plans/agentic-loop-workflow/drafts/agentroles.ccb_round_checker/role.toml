@@ -8,7 +8,7 @@ description = "Whole-round verifier for CCB workflow execution loops."
 license = "Apache-2.0"
 
 [catalog]
-level = "draft"
+level = "experimental"
 
 [identity]
 default_name = "round_checker"

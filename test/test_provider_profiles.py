@@ -112,6 +112,59 @@ def _write_codex_plugin_source(
     )
 
 
+def test_refresh_codex_auth_projection_updates_only_auth_files(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_home.mkdir()
+    target_home.mkdir()
+    (source_home / 'auth.json').write_text('{"tokens":{"refresh_token":"fresh"}}\n', encoding='utf-8')
+    (source_home / 'config.toml').write_text(
+        'token_file = "$CODEX_HOME/company-extra-token"\n',
+        encoding='utf-8',
+    )
+    (source_home / 'company-extra-token').write_text('fresh-token\n', encoding='utf-8')
+    (target_home / 'auth.json').write_text('{"tokens":{"refresh_token":"revoked"}}\n', encoding='utf-8')
+    (target_home / 'config.toml').write_text('model = "managed"\n', encoding='utf-8')
+    (target_home / 'company-extra-token').write_text('old-token\n', encoding='utf-8')
+
+    result = codex_home_config.refresh_codex_auth_projection(
+        target_home,
+        source_home=source_home,
+    )
+
+    assert result.refreshed is True
+    assert result.changed_files == ('auth.json', 'company-extra-token')
+    assert (target_home / 'auth.json').read_text(encoding='utf-8') == '{"tokens":{"refresh_token":"fresh"}}\n'
+    assert (target_home / 'company-extra-token').read_text(encoding='utf-8') == 'fresh-token\n'
+    assert (target_home / 'config.toml').read_text(encoding='utf-8') == 'model = "managed"\n'
+    manifest = json.loads((target_home / '.ccb-auth-projection.json').read_text(encoding='utf-8'))
+    assert manifest['status'] == 'inherited_auth_recovered'
+
+
+@pytest.mark.parametrize('source_text', [None, 'not-json\n', '{}\n'])
+def test_refresh_codex_auth_projection_preserves_target_when_source_is_invalid(
+    tmp_path: Path,
+    source_text: str | None,
+) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_home.mkdir()
+    target_home.mkdir()
+    target_auth = '{"tokens":{"refresh_token":"local"}}\n'
+    (target_home / 'auth.json').write_text(target_auth, encoding='utf-8')
+    if source_text is not None:
+        (source_home / 'auth.json').write_text(source_text, encoding='utf-8')
+
+    result = codex_home_config.refresh_codex_auth_projection(
+        target_home,
+        source_home=source_home,
+    )
+
+    assert result.refreshed is False
+    assert 'missing or invalid' in result.detail
+    assert (target_home / 'auth.json').read_text(encoding='utf-8') == target_auth
+
+
 def test_materialize_codex_profile_copies_inherited_assets(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-codex-home'
@@ -918,6 +971,12 @@ def test_materialize_codex_home_config_migrates_current_legacy_plugin_copy_to_sh
     shutil.copytree(source_home / '.tmp' / 'plugins', target_home / '.tmp' / 'plugins')
     (target_home / '.tmp' / 'plugins' / 'plugins-clone-residue').mkdir(parents=True, exist_ok=True)
     (target_home / '.tmp' / 'plugins.sha').write_text('shared-plugin-sha\n', encoding='utf-8')
+    projected_assets.write_projected_marker(
+        target_home / '.tmp' / 'plugins',
+        label='codex-plugin-bundle',
+        mode='copy',
+        source=source_home / '.tmp' / 'plugins',
+    )
 
     codex_home_config.materialize_codex_home_config(
         target_home,
@@ -1479,6 +1538,161 @@ def test_materialize_codex_profile_refreshes_plugin_projection_when_source_chang
     assert not (runtime_home / '.tmp' / 'plugins.sha').exists()
 
 
+def test_materialize_codex_home_seeds_writable_current_plugin_layout(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    first_target_home = tmp_path / 'target-agent1'
+    second_target_home = tmp_path / 'target-agent2'
+    marketplace_root = source_home / '.tmp' / 'marketplaces'
+    plugin_cache_root = source_home / 'plugins' / 'cache'
+    (marketplace_root / 'demo' / '.agents' / 'plugins').mkdir(parents=True)
+    (plugin_cache_root / 'demo' / 'demo' / '1.0.0' / '.codex-plugin').mkdir(parents=True)
+    (marketplace_root / 'demo' / '.agents' / 'plugins' / 'marketplace.json').write_text('{}\n', encoding='utf-8')
+    (plugin_cache_root / 'demo' / 'demo' / '1.0.0' / '.codex-plugin' / 'plugin.json').write_text(
+        '{}\n',
+        encoding='utf-8',
+    )
+
+    codex_home_config.materialize_codex_home_config(first_target_home, source_home=source_home)
+    codex_home_config.materialize_codex_home_config(second_target_home, source_home=source_home)
+
+    first_marketplaces = first_target_home / '.tmp' / 'marketplaces'
+    first_cache = first_target_home / 'plugins' / 'cache'
+    second_marketplaces = second_target_home / '.tmp' / 'marketplaces'
+    second_cache = second_target_home / 'plugins' / 'cache'
+    for target in (first_marketplaces, first_cache, second_marketplaces, second_cache):
+        assert target.is_dir()
+        assert not target.is_symlink()
+
+    assert first_marketplaces.resolve() != marketplace_root.resolve()
+    assert first_cache.resolve() != plugin_cache_root.resolve()
+    assert first_marketplaces.resolve() != second_marketplaces.resolve()
+    assert first_cache.resolve() != second_cache.resolve()
+    assert (first_marketplaces / 'demo' / '.agents' / 'plugins' / 'marketplace.json').is_file()
+    assert (first_cache / 'demo' / 'demo' / '1.0.0' / '.codex-plugin' / 'plugin.json').is_file()
+
+    (first_cache / 'agent1-runtime-state.json').write_text('{}\n', encoding='utf-8')
+    assert not (plugin_cache_root / 'agent1-runtime-state.json').exists()
+    assert not (second_cache / 'agent1-runtime-state.json').exists()
+
+
+def test_materialize_codex_home_migrates_marked_current_plugin_symlink_to_local_seed(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_cache = source_home / 'plugins' / 'cache'
+    (source_cache / 'demo').mkdir(parents=True)
+    (source_cache / 'demo' / 'plugin.json').write_text('{}\n', encoding='utf-8')
+    target_cache = target_home / 'plugins' / 'cache'
+    target_cache.parent.mkdir(parents=True)
+    target_cache.symlink_to(source_cache, target_is_directory=True)
+    projected_assets.write_projected_marker(
+        target_cache,
+        label='codex-plugin-bundle',
+        mode='symlink',
+        source=source_cache,
+    )
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert target_cache.is_dir()
+    assert not target_cache.is_symlink()
+    assert (target_cache / 'demo' / 'plugin.json').is_file()
+    (target_cache / 'local-runtime.json').write_text('{}\n', encoding='utf-8')
+    assert not (source_cache / 'local-runtime.json').exists()
+    marker = json.loads(Path(f'{target_cache}.ccb-projection.json').read_text(encoding='utf-8'))
+    assert marker['mode'] == 'copy-seed'
+    assert marker['source_fingerprint']
+
+
+def test_materialize_codex_home_preserves_unmarked_current_plugin_targets(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_cache = source_home / 'plugins' / 'cache'
+    target_cache = target_home / 'plugins' / 'cache'
+    (source_cache / 'source-plugin').mkdir(parents=True)
+    (source_cache / 'source-plugin' / 'plugin.json').write_text('{"source":true}\n', encoding='utf-8')
+    (target_cache / 'user-plugin').mkdir(parents=True)
+    (target_cache / 'user-plugin' / 'plugin.json').write_text('{"user":true}\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert (target_cache / 'user-plugin' / 'plugin.json').is_file()
+    assert not (target_cache / 'source-plugin').exists()
+    assert not Path(f'{target_cache}.ccb-projection.json').exists()
+
+
+def test_materialize_codex_home_refreshes_only_marked_current_plugin_seed(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    source_cache = source_home / 'plugins' / 'cache'
+    source_file = source_cache / 'demo' / 'plugin.json'
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text('{"version":1}\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+    target_cache = target_home / 'plugins' / 'cache'
+    target_file = target_cache / 'demo' / 'plugin.json'
+    (target_cache / 'provider-local.json').write_text('{}\n', encoding='utf-8')
+    source_file.write_text('{"version":22}\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert target_file.read_text(encoding='utf-8') == '{"version":22}\n'
+    assert not (target_cache / 'provider-local.json').exists()
+
+    shutil.rmtree(source_cache)
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert target_file.read_text(encoding='utf-8') == '{"version":22}\n'
+
+
+def test_materialize_codex_home_preserves_unmarked_legacy_plugin_bundle(tmp_path: Path) -> None:
+    source_home = tmp_path / 'source'
+    target_home = tmp_path / 'target'
+    _write_codex_plugin_source(source_home, sha='source-sha')
+    target_tree = target_home / '.tmp' / 'plugins'
+    target_tree.mkdir(parents=True)
+    (target_tree / 'user-owned.txt').write_text('keep\n', encoding='utf-8')
+    target_sha = target_home / '.tmp' / 'plugins.sha'
+    target_sha.write_text('user-sha\n', encoding='utf-8')
+
+    codex_home_config.materialize_codex_home_config(target_home, source_home=source_home)
+
+    assert (target_tree / 'user-owned.txt').read_text(encoding='utf-8') == 'keep\n'
+    assert target_sha.read_text(encoding='utf-8') == 'user-sha\n'
+    assert not Path(f'{target_tree}.ccb-projection.json').exists()
+
+
+def test_seed_projected_tree_preserves_last_seed_when_source_disappears(tmp_path: Path) -> None:
+    source = tmp_path / 'source'
+    target = tmp_path / 'target'
+    source.mkdir()
+    (source / 'state.json').write_text('{"version":1}\n', encoding='utf-8')
+    assert projected_assets.seed_projected_tree(source, target, label='test-seed')
+
+    shutil.rmtree(source)
+
+    assert not projected_assets.seed_projected_tree(source, target, label='test-seed')
+    assert (target / 'state.json').read_text(encoding='utf-8') == '{"version":1}\n'
+
+
+def test_seed_projected_tree_rolls_back_when_marker_update_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source = tmp_path / 'source'
+    target = tmp_path / 'target'
+    source.mkdir()
+    source_file = source / 'state.json'
+    source_file.write_text('{"version":1}\n', encoding='utf-8')
+    assert projected_assets.seed_projected_tree(source, target, label='test-seed')
+    source_file.write_text('{"version":22}\n', encoding='utf-8')
+
+    monkeypatch.setattr(projected_assets, '_write_projection_marker', lambda *args, **kwargs: False)
+
+    assert not projected_assets.seed_projected_tree(source, target, label='test-seed')
+    assert (target / 'state.json').read_text(encoding='utf-8') == '{"version":1}\n'
+
+
 def test_materialize_codex_profile_refreshes_plugin_projection_without_sha_marker(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo'
     source_home = tmp_path / 'system-codex-home'
@@ -1785,8 +1999,39 @@ def test_materialize_claude_home_config_projects_system_settings_into_managed_ho
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
     assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'system-token'
+    assert 'ANTHROPIC_API_KEY' not in payload['env']
     assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
     assert payload['theme'] == 'light'
+    trust = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert 'customApiKeyResponses' not in trust
+
+
+def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path: Path) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_API_KEY': 'system-api-key',
+                    'ANTHROPIC_BASE_URL': 'https://claude.example.test',
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert payload['env']['ANTHROPIC_API_KEY'] == 'system-api-key'
+    assert 'ANTHROPIC_AUTH_TOKEN' not in payload['env']
+    trust = json.loads(layout.trust_path.read_text(encoding='utf-8'))
+    assert trust['customApiKeyResponses']['approved'] == ['system-api-key']
 
 
 def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(tmp_path: Path) -> None:
@@ -2886,7 +3131,18 @@ def test_materialize_claude_home_config_respects_inherit_skills_without_disablin
     assert (layout.claude_dir / 'commands' / 'check.md').read_text(encoding='utf-8') == 'command\n'
 
 
-def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_logged_out(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ('managed_api_key', 'expected_api_key'),
+    [
+        pytest.param('managed-token', None, id='legacy-token-alias'),
+        pytest.param('independent-api-key', 'independent-api-key', id='distinct-credentials'),
+    ],
+)
+def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_logged_out(
+    tmp_path: Path,
+    managed_api_key: str,
+    expected_api_key: str | None,
+) -> None:
     source_home = tmp_path / 'system-home'
     target_home = tmp_path / 'managed-home'
     source_settings = source_home / '.claude' / 'settings.json'
@@ -2911,6 +3167,7 @@ def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_lo
             {
                 'env': {
                     'ANTHROPIC_AUTH_TOKEN': 'managed-token',
+                    'ANTHROPIC_API_KEY': managed_api_key,
                     'ANTHROPIC_BASE_URL': 'https://managed.example.test',
                 },
                 'theme': 'stale-theme',
@@ -2927,6 +3184,10 @@ def test_materialize_claude_home_config_preserves_managed_auth_when_source_is_lo
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
     assert payload['env']['ANTHROPIC_AUTH_TOKEN'] == 'managed-token'
+    if expected_api_key is None:
+        assert 'ANTHROPIC_API_KEY' not in payload['env']
+    else:
+        assert payload['env']['ANTHROPIC_API_KEY'] == expected_api_key
     assert payload['env']['ANTHROPIC_BASE_URL'] == 'https://claude.example.test'
     assert payload['theme'] == 'light'
     assert payload['hooks']['Stop'][0]['hooks'][0]['command'] == 'echo hook'
@@ -3055,7 +3316,7 @@ def test_materialize_claude_home_config_clears_stale_managed_auth_when_auth_is_n
     )
 
     payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
-    assert payload == {}
+    assert payload == {'allowedTools': []}
     assert not layout.auth_path.exists()
     assert not layout.credentials_path.exists()
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
+import subprocess
+import threading
 
 import pytest
 
@@ -20,6 +22,7 @@ from agents.models import (
 from ccbd.api_models import DeliveryScope, JobStatus, MessageEnvelope
 from ccbd.services.dispatcher import DispatchError, JobDispatcher
 from ccbd.services.dispatcher_runtime.finalization_runtime.persistence import persist_terminal_completion
+from ccbd.services.dispatcher_runtime.polling_service import _validate_provider_completion_decision
 from ccbd.services.dispatcher_runtime.reply_delivery import prepare_reply_deliveries
 from ccbd.services.job_heartbeat import JobHeartbeatService
 from ccbd.services.registry import AgentRegistry
@@ -130,6 +133,43 @@ def _failed_decision(*, reason: str = 'api_error', diagnostics: dict[str, object
         source_cursor=None,
         finished_at='2026-03-30T00:00:10Z',
         diagnostics=payload,
+    )
+
+
+def _empty_provider_reply_decision() -> CompletionDecision:
+    return CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.INCOMPLETE,
+        reason='task_complete_empty_reply',
+        confidence=CompletionConfidence.DEGRADED,
+        reply='',
+        anchor_seen=True,
+        reply_started=False,
+        reply_stable=False,
+        provider_turn_ref='turn-empty-provider-reply',
+        source_cursor=None,
+        finished_at='2026-03-30T00:00:10Z',
+        diagnostics={'empty_reply': True, 'error_type': 'empty_provider_reply'},
+    )
+
+
+def _retryable_delivery_incomplete_decision() -> CompletionDecision:
+    return CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.INCOMPLETE,
+        reason='codex_session_file_missing',
+        confidence=CompletionConfidence.DEGRADED,
+        reply='',
+        anchor_seen=False,
+        reply_started=False,
+        reply_stable=False,
+        provider_turn_ref='turn-delivery-missing-session',
+        source_cursor=None,
+        finished_at='2026-03-30T00:00:10Z',
+        diagnostics={
+            'delivery_failure_kind': 'delivery_session_missing',
+            'delivery_retryable': True,
+        },
     )
 
 
@@ -592,6 +632,8 @@ def test_dispatcher_silence_hides_success_reply_body_for_caller_mailbox(tmp_path
         f'{job_id} task=task-silent result=hidden'
     )
     assert replies[0].diagnostics.get('silence_on_success') is True
+    assert InboundEventStore(layout).list_agent('claude') == []
+    assert MailboxStore(layout).load('claude') is None
 
 
 def test_dispatcher_silence_does_not_hide_failure_reply_body(tmp_path: Path) -> None:
@@ -641,6 +683,7 @@ def test_dispatcher_silence_does_not_hide_failure_reply_body(tmp_path: Path) -> 
     assert replies[0].reply
     assert 'result=hidden' not in replies[0].reply
     assert replies[0].diagnostics.get('silence_on_success') is True
+    assert len(InboundEventStore(layout).list_agent('claude')) == 1
 
 
 def test_dispatcher_callback_routes_child_result_as_parent_continuation(tmp_path: Path) -> None:
@@ -863,6 +906,283 @@ def test_dispatcher_callback_rejects_without_active_parent(tmp_path: Path) -> No
         )
     assert MessageStore(layout).list_all() == []
     assert CallbackEdgeStore(layout).list_all() == []
+    assert dispatcher._job_store.list_agent('claude') == []
+    assert AttemptStore(layout).list_agent('claude') == []
+    assert InboundEventStore(layout).list_agent('claude') == []
+
+
+@pytest.mark.parametrize('completion_path', ('direct', 'poll'))
+def test_chain_submission_linearizes_parent_terminalization_before_edge_registration(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    completion_path: str,
+) -> None:
+    from ccbd.services.dispatcher_runtime import submission_recording
+
+    project_root = tmp_path / f'repo-callback-linearized-{completion_path}'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-callback-linearized',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    if completion_path == 'poll':
+        class PollExecution:
+            def __init__(self) -> None:
+                self._emitted = False
+
+            def poll(self):
+                if self._emitted:
+                    return ()
+                self._emitted = True
+                return (
+                    ExecutionUpdate(
+                        job_id=parent_job_id,
+                        items=(),
+                        decision=_decision(reply='delegated'),
+                    ),
+                )
+
+            def finish(self, _job_id: str) -> None:
+                pass
+
+        dispatcher._execution_service = PollExecution()
+
+    registration_entered = threading.Event()
+    allow_registration = threading.Event()
+    completion_started = threading.Event()
+    completion_done = threading.Event()
+    original_register = submission_recording.register_callback_edge
+
+    def blocking_register(*args, **kwargs):
+        registration_entered.set()
+        assert allow_registration.wait(timeout=2)
+        return original_register(*args, **kwargs)
+
+    monkeypatch.setattr(submission_recording, 'register_callback_edge', blocking_register)
+    submitted: list[object] = []
+    submission_errors: list[BaseException] = []
+
+    def submit_child() -> None:
+        try:
+            submitted.append(
+                dispatcher.submit(
+                    MessageEnvelope(
+                        project_id=ctx.project_id,
+                        to_agent='claude',
+                        from_actor='codex',
+                        body='review',
+                        task_id='task-callback-linearized',
+                        reply_to=None,
+                        message_type='ask',
+                        delivery_scope=DeliveryScope.SINGLE,
+                        route_options={'mode': 'chain'},
+                    )
+                )
+            )
+        except BaseException as exc:
+            submission_errors.append(exc)
+
+    submit_thread = threading.Thread(target=submit_child)
+    submit_thread.start()
+    assert registration_entered.wait(timeout=2)
+
+    def complete_parent() -> None:
+        completion_started.set()
+        if completion_path == 'poll':
+            dispatcher.poll_completions()
+        else:
+            dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+        completion_done.set()
+
+    complete_thread = threading.Thread(target=complete_parent)
+    complete_thread.start()
+    assert completion_started.wait(timeout=2)
+    assert not completion_done.wait(timeout=0.1)
+    allow_registration.set()
+    submit_thread.join(timeout=2)
+    complete_thread.join(timeout=2)
+
+    assert not submit_thread.is_alive()
+    assert not complete_thread.is_alive()
+    assert submission_errors == []
+    child_job_id = submitted[0].jobs[0].job_id
+    child_job = dispatcher.get(child_job_id)
+    assert child_job is not None
+    attempt = AttemptStore(layout).get_latest_by_job_id(child_job_id)
+    assert attempt is not None
+    message = MessageStore(layout).get_latest(attempt.message_id)
+    assert message is not None
+    inbound = InboundEventStore(layout).get_latest_for_attempt('claude', attempt.attempt_id)
+    assert inbound is not None
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    assert edge.parent_job_id == parent_job_id
+    assert completion_done.is_set()
+
+
+def test_parent_terminal_before_chain_submission_has_zero_child_side_effects(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-callback-parent-first'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id='task-callback-parent-first',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+    dispatcher.complete(parent_job_id, _decision())
+    message_count = len(MessageStore(layout).list_all())
+
+    with pytest.raises(DispatchError, match='active parent job'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='claude',
+                from_actor='codex',
+                body='late review',
+                task_id='task-callback-parent-first',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                route_options={'mode': 'chain'},
+            )
+        )
+
+    assert dispatcher._job_store.list_agent('claude') == []
+    assert len(MessageStore(layout).list_all()) == message_count
+    assert AttemptStore(layout).list_agent('claude') == []
+    assert InboundEventStore(layout).list_agent('claude') == []
+    assert CallbackEdgeStore(layout).list_all() == []
+
+
+@pytest.mark.parametrize('terminalizer', ('cancel', 'terminate'))
+def test_chain_submission_linearizes_cancel_and_terminate_without_locking_provider_io(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    terminalizer: str,
+) -> None:
+    from ccbd.services.dispatcher_runtime import submission_recording
+
+    project_root = tmp_path / f'repo-callback-{terminalizer}'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='root task',
+            task_id=f'task-callback-{terminalizer}',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    provider_cancelled = threading.Event()
+
+    class ExecutionSpy:
+        def cancel(self, _job_id: str) -> None:
+            provider_cancelled.set()
+
+        def finish(self, _job_id: str) -> None:
+            pass
+
+    dispatcher._execution_service = ExecutionSpy()
+    registration_entered = threading.Event()
+    allow_registration = threading.Event()
+    original_register = submission_recording.register_callback_edge
+
+    def blocking_register(*args, **kwargs):
+        registration_entered.set()
+        assert allow_registration.wait(timeout=2)
+        return original_register(*args, **kwargs)
+
+    monkeypatch.setattr(submission_recording, 'register_callback_edge', blocking_register)
+    submitted: list[object] = []
+
+    def submit_child() -> None:
+        submitted.append(
+            dispatcher.submit(
+                MessageEnvelope(
+                    project_id=ctx.project_id,
+                    to_agent='claude',
+                    from_actor='codex',
+                    body='review',
+                    task_id=f'task-callback-{terminalizer}',
+                    reply_to=None,
+                    message_type='ask',
+                    delivery_scope=DeliveryScope.SINGLE,
+                    route_options={'mode': 'chain'},
+                )
+            )
+        )
+
+    submit_thread = threading.Thread(target=submit_child)
+    submit_thread.start()
+    assert registration_entered.wait(timeout=2)
+    terminal_errors: list[BaseException] = []
+
+    def terminalize_parent() -> None:
+        try:
+            if terminalizer == 'cancel':
+                dispatcher.cancel(parent_job_id)
+            else:
+                dispatcher.terminate_nonterminal_jobs(shutdown_reason='test', forced=True)
+        except BaseException as exc:
+            terminal_errors.append(exc)
+
+    terminal_thread = threading.Thread(target=terminalize_parent)
+    terminal_thread.start()
+    assert provider_cancelled.wait(timeout=2)
+    assert terminal_thread.is_alive()
+    allow_registration.set()
+    submit_thread.join(timeout=2)
+    terminal_thread.join(timeout=2)
+
+    assert not submit_thread.is_alive()
+    assert not terminal_thread.is_alive()
+    assert terminal_errors == []
+    child_job_id = submitted[0].jobs[0].job_id
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None
+    assert edge.parent_job_id == parent_job_id
 
 
 def test_dispatcher_rejects_plain_nested_ask_from_active_parent(tmp_path: Path) -> None:
@@ -1705,12 +2025,11 @@ def test_dispatcher_callback_repair_reuses_existing_continuation_job(tmp_path: P
     assert latest_codex_job_ids == original_codex_job_ids
 
 
-def test_dispatcher_callback_timeout_fails_parent_message_and_notifies_original_caller(tmp_path: Path) -> None:
-    project_root = tmp_path / 'repo-callback-timeout'
+def test_dispatcher_callback_has_no_elapsed_time_business_timeout(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-callback-no-timeout'
     ctx = _bootstrap_test_project(project_root)
     layout = PathLayout(project_root)
     config = _provider_config('codex', 'claude')
-    object.__setattr__(config, 'callback_timeout_s', 1.0)
     now = {'value': '2026-03-30T00:00:00Z'}
     registry = AgentRegistry(layout, config)
     registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
@@ -1745,22 +2064,148 @@ def test_dispatcher_callback_timeout_fails_parent_message_and_notifies_original_
     ).jobs[0].job_id
     edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
     assert edge is not None
-    assert edge.timeout_at == '2026-03-30T00:00:01Z'
+    assert edge.timeout_at is None
     dispatcher.complete(parent_job_id, _decision(reply='delegated'))
 
-    now['value'] = '2026-03-30T00:00:02Z'
+    now['value'] = '2026-04-30T00:00:02Z'
     dispatcher.tick()
 
     edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
     assert edge is not None
-    assert edge.state is CallbackEdgeState.TIMED_OUT
+    assert edge.state is CallbackEdgeState.PENDING
     parent_message = MessageStore(layout).get_latest(edge.parent_message_id)
     assert parent_message is not None
-    assert parent_message.message_state is MessageState.FAILED
-    replies = ReplyStore(layout).list_message(edge.parent_message_id)
-    assert len(replies) == 1
-    assert replies[0].terminal_status is ReplyTerminalStatus.FAILED
-    assert replies[0].diagnostics.get('chain_failure') is True
+    assert parent_message.message_state is MessageState.RUNNING
+    assert ReplyStore(layout).list_message(edge.parent_message_id) == []
+
+    dispatcher.complete(child_job_id, _decision(reply='eventual child result'))
+    edge = CallbackEdgeStore(layout).get_latest(edge.edge_id)
+    assert edge is not None
+    assert edge.state is CallbackEdgeState.CONTINUATION_SUBMITTED
+
+
+def test_dispatcher_restricts_workflow_chain_to_assigned_reviewer_and_propagates_policy(
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-restricted-workflow-chain'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    worker_workspace = layout.workspace_path('codex')
+    worker_workspace.mkdir(parents=True)
+    subprocess.run(['git', 'init'], cwd=worker_workspace, check=True, capture_output=True)
+    subprocess.run(
+        ['git', 'config', 'user.name', 'Test User'],
+        cwd=worker_workspace,
+        check=True,
+    )
+    subprocess.run(
+        ['git', 'config', 'user.email', 'test@example.com'],
+        cwd=worker_workspace,
+        check=True,
+    )
+    (worker_workspace / 'result.txt').write_text('review me\n', encoding='utf-8')
+    subprocess.run(['git', 'add', '.'], cwd=worker_workspace, check=True)
+    subprocess.run(['git', 'commit', '-m', 'base'], cwd=worker_workspace, check=True)
+    (worker_workspace / 'result.txt').write_text('review this tree\n', encoding='utf-8')
+    for index, agent_name in enumerate(config.agents, start=1):
+        registry.upsert(_runtime(agent_name, project_id=ctx.project_id, layout=layout, pid=100 + index))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    parent_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='system',
+            body='implement then review',
+            task_id='task-restricted-chain',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={
+                'allowed_chain_targets': ['claude'],
+                'bind_chain_workspace_tree': True,
+            },
+        )
+    ).jobs[0].job_id
+    dispatcher.tick()
+
+    with pytest.raises(DispatchError, match='only use ask --chain'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='claude',
+                from_actor='codex',
+                body='silent bypass',
+                task_id='task-restricted-chain',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                silence_on_success=True,
+            )
+        )
+    with pytest.raises(DispatchError, match='not the assigned reviewer'):
+        dispatcher.submit(
+            MessageEnvelope(
+                project_id=ctx.project_id,
+                to_agent='gemini',
+                from_actor='codex',
+                body='wrong target',
+                task_id='task-restricted-chain',
+                reply_to=None,
+                message_type='ask',
+                delivery_scope=DeliveryScope.SINGLE,
+                route_options={'mode': 'chain'},
+            )
+        )
+
+    child_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='review current node',
+            task_id='task-restricted-chain',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'chain'},
+        )
+    ).jobs[0].job_id
+    dispatcher.complete(parent_job_id, _decision(reply='delegated'))
+    dispatcher.tick()
+    dispatcher.complete(child_job_id, _decision(reply='status: rework_required'))
+
+    edge = CallbackEdgeStore(layout).get_latest_for_child_job(child_job_id)
+    assert edge is not None and edge.continuation_job_id
+    assert edge.diagnostics['review_workspace_path'] == str(worker_workspace.resolve())
+    assert str(edge.diagnostics['review_tree_digest']).startswith('git-tree:sha1:')
+    dispatcher.tick()
+    continuation = dispatcher.get(edge.continuation_job_id)
+    assert continuation is not None
+    assert continuation.workspace_path == str(worker_workspace)
+    assert continuation.request.route_options['allowed_chain_targets'] == ['claude']
+    assert continuation.request.route_options['bind_chain_workspace_tree'] is True
+    first_tree_digest = edge.diagnostics['review_tree_digest']
+    (worker_workspace / 'result.txt').write_text('review repaired tree\n', encoding='utf-8')
+    recheck_job_id = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='review repaired node',
+            task_id='task-restricted-chain',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+            route_options={'mode': 'chain'},
+        )
+    ).jobs[0].job_id
+    recheck_edge = CallbackEdgeStore(layout).get_latest_for_child_job(recheck_job_id)
+    assert recheck_edge is not None
+    assert recheck_edge.diagnostics['review_workspace_path'] == str(worker_workspace.resolve())
+    assert recheck_edge.diagnostics['review_tree_digest'] != first_tree_digest
 
 
 def test_dispatcher_callback_rejects_depth_limit(tmp_path: Path) -> None:
@@ -2437,6 +2882,114 @@ def test_dispatcher_auto_retries_retryable_api_failures_before_delivering_failed
     ack = dispatcher.ack_reply('claude')
     assert ack['reply_terminal_status'] == 'failed'
     assert 'failed after 3 attempts' in ack['reply']
+
+
+def test_dispatcher_auto_retries_empty_provider_replies_before_delivering_incomplete_reply(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-auto-retry-empty-provider-reply'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='empty provider reply retry test',
+            task_id='task-auto-retry-empty-provider-reply',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    message = MessageStore(layout).list_all()[-1]
+    job_id = receipt.jobs[0].job_id
+
+    for expected_retry_index in (1, 2):
+        dispatcher.tick()
+        dispatcher.complete(job_id, _empty_provider_reply_decision())
+
+        claude_inbox = dispatcher.inbox('claude')
+        assert claude_inbox['item_count'] == 0
+
+        latest_attempts = {}
+        for record in AttemptStore(layout).list_message(message.message_id):
+            latest_attempts[record.attempt_id] = record
+        pending_retry = next(
+            attempt
+            for attempt in latest_attempts.values()
+            if attempt.retry_index == expected_retry_index and attempt.attempt_state is AttemptState.PENDING
+        )
+        job_id = pending_retry.job_id
+
+    dispatcher.tick()
+    dispatcher.complete(job_id, _empty_provider_reply_decision())
+
+    claude_inbox = dispatcher.inbox('claude')
+    assert claude_inbox['item_count'] == 1
+    assert claude_inbox['head']['event_type'] == 'task_reply'
+
+    latest_attempts = {}
+    for record in AttemptStore(layout).list_message(message.message_id):
+        latest_attempts[record.attempt_id] = record
+    assert len(latest_attempts) == 3
+    assert {attempt.retry_index for attempt in latest_attempts.values()} == {0, 1, 2}
+    assert {attempt.attempt_state for attempt in latest_attempts.values()} == {AttemptState.INCOMPLETE}
+
+    replies = ReplyStore(layout).list_message(message.message_id)
+    assert len(replies) == 1
+    assert replies[0].terminal_status is ReplyTerminalStatus.INCOMPLETE
+    assert 'empty reply after 3 attempts' in replies[0].reply
+
+    ack = dispatcher.ack_reply('claude')
+    assert ack['reply_terminal_status'] == 'incomplete'
+    assert 'empty reply after 3 attempts' in ack['reply']
+
+
+def test_dispatcher_auto_retries_retryable_delivery_incomplete_before_delivering_reply(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-auto-retry-delivery-incomplete'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-03-30T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='claude',
+            body='retry delivery after missing session',
+            task_id='task-auto-retry-delivery-incomplete',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    message = MessageStore(layout).list_all()[-1]
+    job_id = receipt.jobs[0].job_id
+
+    dispatcher.tick()
+    dispatcher.complete(job_id, _retryable_delivery_incomplete_decision())
+
+    claude_inbox = dispatcher.inbox('claude')
+    assert claude_inbox['item_count'] == 0
+
+    attempts = {record.attempt_id: record for record in AttemptStore(layout).list_message(message.message_id)}
+    retry_attempt = next(attempt for attempt in attempts.values() if attempt.retry_index == 1)
+    retry_job = dispatcher.get(retry_attempt.job_id)
+
+    assert retry_attempt.attempt_state is AttemptState.PENDING
+    assert retry_job is not None
+    assert retry_job.request.body == 'retry delivery after missing session'
+    assert retry_job.provider_options.get('retry_delivery_mode') != 'continue'
+    assert retry_job.provider_options['retry_source_job_id'] == job_id
 
 
 def test_dispatcher_auto_retries_resumable_pane_failures_before_delivering_failed_reply(tmp_path: Path) -> None:
@@ -3489,6 +4042,60 @@ def test_dispatcher_tick_keeps_degraded_agent_queued_until_recovered(tmp_path: P
     assert started[0].job_id == job_id
 
 
+def test_dispatcher_tick_does_not_retry_provider_auth_blocked_agent(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-provider-auth-blocked-queue'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude', 'gemini')
+    registry = AgentRegistry(layout, config)
+    blocked_runtime = replace(
+        _runtime('codex', project_id=ctx.project_id, layout=layout, pid=101),
+        state=AgentState.DEGRADED,
+        health='provider-auth-revoked',
+        reconcile_state='blocked',
+        restart_count=1,
+        last_failure_reason='run `codex login` before remounting',
+    )
+    registry.upsert(blocked_runtime)
+
+    class _UnexpectedRuntimeService:
+        def patch_runtime_state(self, runtime, **updates):
+            return runtime
+
+        def refresh_provider_binding(self, agent_name: str, *, recover: bool = False):
+            raise AssertionError(f'blocked runtime must not refresh: {agent_name}:{recover}')
+
+    dispatcher = JobDispatcher(
+        layout,
+        config,
+        registry,
+        runtime_service=_UnexpectedRuntimeService(),
+        clock=lambda: '2026-03-30T00:00:00Z',
+    )
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='codex',
+            from_actor='user',
+            body='wait for login',
+            task_id='task-provider-auth-blocked',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    job_id = receipt.jobs[0].job_id
+
+    assert dispatcher.tick() == ()
+    accepted = dispatcher.get(job_id)
+    assert accepted is not None
+    assert accepted.status.value == 'accepted'
+    unchanged = registry.get('codex')
+    assert unchanged is not None
+    assert unchanged.health == 'provider-auth-revoked'
+    assert unchanged.restart_count == 1
+
+
 def test_dispatcher_tick_keeps_recoverable_agent_queued_without_runtime_service(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-degraded-recovery-start'
     ctx = _bootstrap_test_project(project_root)
@@ -4029,6 +4636,71 @@ def test_dispatcher_failed_reply_delivery_requeues_original_reply_head(tmp_path:
     assert mailbox is not None
     assert mailbox.summary_source == 'transition-rewrite-head'
     assert delivery_job_id_from_payload(mailbox.head_payload_ref) is None
+
+
+def test_confirmed_empty_codex_reply_delivery_consumes_head_without_requeue(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-confirmed-empty-codex-reply-delivery'
+    ctx = _bootstrap_test_project(project_root)
+    layout = PathLayout(project_root)
+    config = _provider_config('codex', 'claude')
+    registry = AgentRegistry(layout, config)
+    registry.upsert(_runtime('codex', project_id=ctx.project_id, layout=layout, pid=101))
+    registry.upsert(_runtime('claude', project_id=ctx.project_id, layout=layout, pid=102))
+    dispatcher = JobDispatcher(layout, config, registry, clock=lambda: '2026-07-15T00:00:00Z')
+
+    receipt = dispatcher.submit(
+        MessageEnvelope(
+            project_id=ctx.project_id,
+            to_agent='claude',
+            from_actor='codex',
+            body='question for claude',
+            task_id='task-confirmed-empty-codex-reply-delivery',
+            reply_to=None,
+            message_type='ask',
+            delivery_scope=DeliveryScope.SINGLE,
+        )
+    )
+    dispatcher.tick()
+    dispatcher.complete(receipt.jobs[0].job_id, _decision(reply='reply for codex'))
+
+    delivery_job = dispatcher.tick()[0]
+    assert delivery_job.request.message_type == 'reply_delivery'
+    submission = ProviderSubmission(
+        job_id=delivery_job.job_id,
+        agent_name='codex',
+        provider='codex',
+        accepted_at='2026-07-15T00:00:00Z',
+        ready_at='2026-07-15T00:00:00Z',
+        source_kind=CompletionSourceKind.PROTOCOL_EVENT_STREAM,
+        reply='',
+        runtime_state={
+            'mode': 'active',
+            'reply_delivery_complete_on_dispatch': True,
+            'delivery_state': 'accepted',
+            'anchor_seen': True,
+        },
+    )
+    decision = CompletionDecision(
+        terminal=True,
+        status=CompletionStatus.COMPLETED,
+        reason='reply_delivery_sent',
+        confidence=CompletionConfidence.OBSERVED,
+        reply='',
+        anchor_seen=True,
+        reply_started=False,
+        reply_stable=True,
+        provider_turn_ref=delivery_job.job_id,
+        source_cursor=None,
+        finished_at='2026-07-15T00:00:01Z',
+        diagnostics={'reply_delivery': True, 'delivery_status': 'accepted'},
+    )
+
+    validated = _validate_provider_completion_decision(submission, decision)
+    dispatcher.complete(delivery_job.job_id, validated)
+
+    assert validated.status is CompletionStatus.COMPLETED
+    assert dispatcher.inbox('codex')['item_count'] == 0
+    assert not any(job.request.message_type == 'reply_delivery' for job in dispatcher.tick())
 
 
 def test_dispatcher_ack_rejects_reply_after_auto_delivery_is_scheduled(tmp_path: Path) -> None:

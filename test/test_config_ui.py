@@ -33,6 +33,9 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
     assert path.is_file()
     page = path.read_text(encoding='utf-8')
     assert '<title>CCB Config Control Panel Demo</title>' in page
+    assert 'id="staticDeletePane"' in page
+    assert 'id="basicDeletePane"' in page
+    assert 'function deleteSelectedPane()' in page
     match = re.search(r'CCB_MOBILE_ICON_DATA = "data:image/png;base64,([^"]+)"', page)
     assert match is not None
     embedded_icon = base64.b64decode(match.group(1))
@@ -49,6 +52,25 @@ def test_config_ui_asset_is_packaged_source_content() -> None:
         / 'ic_launcher.png'
     )
     assert embedded_icon == mobile_icon.read_bytes()
+
+
+def test_config_ui_layout_canvas_can_fill_stretched_workspace_column() -> None:
+    page = config_ui_asset_path().read_text(encoding='utf-8')
+
+    def css_rule(selector: str) -> str:
+        match = re.search(
+            rf'^\s*{re.escape(selector)}\s*\{{(?P<body>.*?)^\s*\}}',
+            page,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        assert match is not None
+        return match.group('body')
+
+    assert 'display: grid' in css_rule('.layout-card')
+    assert 'height: 100%' in css_rule('.layout-shell')
+    preview_rule = css_rule('.layout-preview')
+    assert 'height: 100%' in preview_rule
+    assert 'max-height: none' in preview_rule
 
 
 def test_config_ui_serves_token_guarded_page_and_project_session(tmp_path: Path) -> None:
@@ -217,13 +239,22 @@ def test_config_ui_validates_saves_with_digest_guard_and_hot_reloads(tmp_path: P
         assert rendered['validation']['agent_names'] == ['agent1']
 
         thinking_document = json.loads(json.dumps(document))
+        thinking_document['windows']['secondary'] = 'agent2:codex(worktree)'
         thinking_document['agents'] = {
             'agent1': {'model': 'gpt-5.5', 'thinking': 'high'},
+            'agent2': {'model': 'gpt-5.6-sol', 'thinking': 'xhigh'},
         }
         thinking_rendered = _post_json(handle.url, '/api/render', {'document': thinking_document})
         assert 'model = "gpt-5.5"' in thinking_rendered['text']
         assert 'thinking = "high"' in thinking_rendered['text']
+        assert '[agents.agent2]' in thinking_rendered['text']
+        assert 'model = "gpt-5.6-sol"' in thinking_rendered['text']
+        assert 'thinking = "xhigh"' in thinking_rendered['text']
         assert 'model_reasoning_effort' not in thinking_rendered['text']
+        assert thinking_rendered['editor']['document']['agents']['agent2'] == {
+            'model': 'gpt-5.6-sol',
+            'thinking': 'xhigh',
+        }
 
         rich_document = json.loads(json.dumps(document))
         rich_document['windows']['main'] = 'agent1:codex, rich'
@@ -326,6 +357,74 @@ def test_config_ui_rejects_invalid_candidate_without_writing(tmp_path: Path) -> 
         assert invalid.value.code == 422
         assert config_path.read_text(encoding='utf-8') == original
         assert not tuple(config_path.parent.glob('ccb.config.bak.*'))
+    finally:
+        thread.join(timeout=2)
+        handle.close()
+    assert not thread.is_alive()
+
+
+def test_config_ui_hot_reload_removes_agent_and_preserves_remaining_overlay(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-remove-agent'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    config_path.parent.mkdir(parents=True)
+    original = '''version = 2
+
+[windows]
+main = "agent1:codex, agent2:claude"
+
+[agents.agent1]
+role = "agentroles.coder"
+
+[agents.agent2]
+role = "agentroles.code_reviewer"
+'''
+    updated = '''version = 2
+
+[windows]
+main = "agent1:codex"
+
+[agents.agent1]
+role = "agentroles.coder"
+'''
+    config_path.write_text(original, encoding='utf-8')
+    page = tmp_path / 'index.html'
+    page.write_text('<!doctype html><title>settings</title>', encoding='utf-8')
+    reload_calls: list[bool] = []
+
+    def _reload(dry_run: bool) -> dict[str, object]:
+        reload_calls.append(dry_run)
+        if dry_run:
+            return {'status': 'ok', 'plan_class': 'remove_agent', 'future_safe_to_apply': True}
+        return {'status': 'published', 'plan_class': 'remove_agent'}
+
+    handle = prepare_config_ui(
+        _context(project_root),
+        ParsedConfigUiCommand(project=None),
+        asset_path=page,
+        token='test-token',
+        idle_timeout_s=1.0,
+        reload_action=_reload,
+    )
+    thread = threading.Thread(target=handle.serve_forever)
+    thread.start()
+
+    try:
+        config = _get_json(handle.url, '/api/config')
+        applied = _post_json(
+            handle.url,
+            '/api/apply',
+            {'text': updated, 'expected_digest': config['digest'], 'mode': 'hot_reload'},
+        )
+
+        assert applied['status'] == 'reloaded'
+        assert applied['dry_run']['plan_class'] == 'remove_agent'
+        assert applied['reload']['status'] == 'published'
+        assert reload_calls == [True, False]
+        saved_text = config_path.read_text(encoding='utf-8')
+        assert saved_text == updated
+        assert '[agents.agent1]' in saved_text
+        assert '[agents.agent2]' not in saved_text
+        assert Path(applied['backup_path']).read_text(encoding='utf-8') == original
     finally:
         thread.join(timeout=2)
         handle.close()

@@ -95,6 +95,16 @@ abstract interface class GatewayFilePathUploader {
   });
 }
 
+abstract interface class GatewayPresenceTransport {
+  Future<void> reportPresence({
+    required bool visible,
+    String? focusedProjectId,
+    String? focusedAgent,
+    String? terminalId,
+    bool userActivity = false,
+  });
+}
+
 class GatewayFileUploadResult {
   const GatewayFileUploadResult({
     required this.fileId,

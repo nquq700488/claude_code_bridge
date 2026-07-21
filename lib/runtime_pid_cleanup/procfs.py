@@ -37,6 +37,10 @@ def list_process_cmdlines(
     read_proc_cmdline_fn=read_proc_cmdline,
 ) -> dict[int, str]:
     current_pid = int(current_pid or os.getpid())
+    if proc_root == Path('/proc'):
+        process_table = _list_process_cmdlines_via_ps(current_pid=current_pid)
+        if process_table:
+            return process_table
     entries = _proc_entries(proc_root)
     if entries is not None:
         mapping: dict[int, str] = {}
@@ -51,7 +55,7 @@ def list_process_cmdlines(
 
 def remove_pid_files(paths: tuple[Path, ...]) -> None:
     for path in paths:
-        if path.suffix != '.pid':
+        if path.suffix != '.pid' and path.name != 'runtime-accelerator.json':
             continue
         try:
             path.unlink()

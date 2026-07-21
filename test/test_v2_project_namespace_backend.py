@@ -181,7 +181,7 @@ def test_prepare_server_accepts_fast_probe_timeout(monkeypatch) -> None:
     assert backend.calls == [('start-server',)]
 
 
-def test_prepare_server_does_not_require_server_policy_before_session_exists(monkeypatch, tmp_path: Path) -> None:
+def test_fresh_namespace_creates_session_before_server_policy(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
     monkeypatch.delenv('DISPLAY', raising=False)
     monkeypatch.delenv('WAYLAND_DISPLAY', raising=False)
@@ -210,17 +210,17 @@ def test_prepare_server_does_not_require_server_policy_before_session_exists(mon
     backend = _FlakyBackend()
     backend.require_session_for_server_policy = True
 
-    prepare_server(backend)
     create_session(backend, session_name='ccb-proj', project_root=tmp_path, window_name='cmd')
     ensure_server_policy(backend)
 
-    assert backend.calls[0] == ('start-server',)
-    assert ('set-option', '-g', 'destroy-unattached', 'off') not in backend.calls[:2]
-    assert ('set-option', '-g', 'mouse', 'on') not in backend.calls[:2]
-    assert ('set-option', '-g', 'history-limit', '50000') not in backend.calls[:2]
-    assert ('set-option', '-g', 'set-clipboard', 'on') not in backend.calls[:2]
-    assert ('set-option', '-g', 'focus-events', 'on') not in backend.calls[:2]
-    assert ('set-option', '-g', 'escape-time', '10') not in backend.calls[:2]
+    assert backend.calls[0][:1] == ('new-session',)
+    assert ('start-server',) not in backend.calls
+    assert ('set-option', '-g', 'destroy-unattached', 'off') not in backend.calls[:1]
+    assert ('set-option', '-g', 'mouse', 'on') not in backend.calls[:1]
+    assert ('set-option', '-g', 'history-limit', '50000') not in backend.calls[:1]
+    assert ('set-option', '-g', 'set-clipboard', 'on') not in backend.calls[:1]
+    assert ('set-option', '-g', 'focus-events', 'on') not in backend.calls[:1]
+    assert ('set-option', '-g', 'escape-time', '10') not in backend.calls[:1]
     expected_policy_calls = [
         ('set-option', '-g', 'destroy-unattached', 'off'),
         ('set-option', '-g', 'mouse', 'on'),
@@ -319,6 +319,17 @@ def test_session_alive_treats_absent_project_server_as_missing_namespace(monkeyp
     monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
     backend = _FlakyBackend()
     backend.missing_session_stderr = 'no server running on /tmp/ccb-runtime/test.sock\n'
+
+    assert session_alive(backend, 'ccb-proj') is False
+    assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 1
+
+
+def test_session_alive_treats_missing_project_socket_as_missing_namespace(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_OBJECT_READY_POLL_INTERVAL_S', '0')
+    backend = _FlakyBackend()
+    backend.missing_session_stderr = (
+        'error connecting to /tmp/ccb-runtime/test.sock (No such file or directory)\n'
+    )
 
     assert session_alive(backend, 'ccb-proj') is False
     assert backend.calls.count(('has-session', '-t', 'ccb-proj')) == 1

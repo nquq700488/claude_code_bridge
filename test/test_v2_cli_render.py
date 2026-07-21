@@ -167,6 +167,37 @@ def test_render_mobile_serve_includes_pairing_summary_when_present() -> None:
     )
 
 
+def test_render_mobile_serve_includes_redacted_push_sender_summary() -> None:
+    lines = render_mobile_serve(
+        {
+            'mobile_status': 'serving',
+            'listen': '127.0.0.1:8787',
+            'gateway_url': 'http://127.0.0.1:8787',
+            'route_provider': 'lan',
+            'project_id': 'proj-1',
+            'project_root': '/tmp/project',
+            'mode': 'loopback_current_project',
+            'endpoints': ['/v1/mobile/push/audit'],
+            'push_sender': {
+                'provider': 'fcm_http_v1',
+                'configured': True,
+                'ready': False,
+                'credential_source': 'service_account_file',
+                'reason': 'credential_file_unreadable',
+                'timeout_seconds': 1.25,
+                'max_workers': 2,
+            },
+        }
+    )
+
+    assert (
+        'push_sender: provider=fcm_http_v1 configured=true ready=false '
+        'credential_source=service_account_file reason=credential_file_unreadable '
+        'timeout_seconds=1.25 max_workers=2'
+    ) in lines
+    assert '/secret/service-account.json' not in '\n'.join(lines)
+
+
 def test_render_mobile_serve_includes_relay_outbound_summary() -> None:
     assert render_mobile_serve(
         {
@@ -1121,6 +1152,13 @@ def test_render_start_and_kill_include_tmux_cleanup_summary() -> None:
         socket_path='/tmp/repo/.ccb/ccbd/ccbd.sock',
         started=('agent1', 'agent2'),
         cleanup_summaries=cleanup,
+        startup_run_id='start_' + 'a' * 32,
+        cli_timings_ms={'start_rpc': 12.5, 'cli_pre_rpc': 1.25},
+        process_bootstrap_trace_id='trace_' + 'b' * 32,
+        process_bootstrap_timings_ms={
+            'popen_begin_to_ccb_test_entry': 2.5,
+            'ccb_test_entry_to_pre_exec': 1.0,
+        },
     )
     kill = SimpleNamespace(
         project_id='proj-1',
@@ -1134,9 +1172,36 @@ def test_render_start_and_kill_include_tmux_cleanup_summary() -> None:
     kill_lines = render_kill(kill)
 
     assert 'agents: agent1, agent2' in start_lines
+    assert 'startup_run_id: start_' + 'a' * 32 in start_lines
+    assert 'startup_cli_timings_ms: {"cli_pre_rpc":1.25,"start_rpc":12.5}' in start_lines
+    assert 'startup_process_trace_id: trace_' + 'b' * 32 in start_lines
+    assert (
+        'startup_process_bootstrap_timings_ms: '
+        '{"ccb_test_entry_to_pre_exec":1.0,"popen_begin_to_ccb_test_entry":2.5}'
+    ) in start_lines
     assert 'tmux_cleanup: socket=<default> owned=%1,%2 active=%1 orphaned=%2 killed=%2' in start_lines
     assert 'kill_status: ok' in kill_lines
     assert 'tmux_cleanup: socket=<default> owned=%1,%2 active=%1 orphaned=%2 killed=%2' in kill_lines
+
+
+def test_render_kill_surfaces_runtime_recovery_actions_and_warnings() -> None:
+    summary = SimpleNamespace(
+        project_id='proj-1',
+        state='unmounted',
+        socket_path='/tmp/repo/.ccb/ccbd/ccbd.sock',
+        forced=True,
+        cleanup_summaries=(),
+        runtime_actions=('recover_corrupt_runtime_accelerator_owner:321',),
+        runtime_warnings=('runtime_accelerator_corrupt_owner_preserved:exact_legacy_identity_not_found',),
+    )
+
+    lines = render_kill(summary)
+
+    assert 'kill_action: recover_corrupt_runtime_accelerator_owner:321' in lines
+    assert (
+        'kill_warning: runtime_accelerator_corrupt_owner_preserved:exact_legacy_identity_not_found'
+        in lines
+    )
 
 
 def test_render_start_includes_layout_identity_summary() -> None:
@@ -1221,6 +1286,34 @@ def test_render_start_surfaces_layout_identity_summary_failure() -> None:
     assert 'layout_summary_status: unavailable' in lines
     assert 'layout_summary_error_type: RuntimeError' in lines
     assert 'layout_summary_error: layout probe failed' in lines
+
+
+def test_render_start_reports_sidebar_helper_refresh_and_failure() -> None:
+    base = {
+        'project_root': '/tmp/repo',
+        'project_id': 'proj-1',
+        'daemon_started': False,
+        'socket_path': '/tmp/repo/.ccb/ccbd/ccbd.sock',
+        'started': ('frontdesk',),
+        'cleanup_summaries': (),
+    }
+
+    refreshed = render_start(
+        SimpleNamespace(**base, sidebar_helper_refresh={'status': 'refreshed', 'panes': ('%1', '%4')})
+    )
+    failed = render_start(
+        SimpleNamespace(
+            **base,
+            sidebar_helper_refresh={
+                'status': 'failed',
+                'error_type': 'RuntimeError',
+                'error': 'tmux unavailable',
+            },
+        )
+    )
+
+    assert 'sidebar_helper_refresh: refreshed panes=%1,%4' in refreshed
+    assert 'sidebar_helper_refresh: failed RuntimeError: tmux unavailable' in failed
 
 
 def test_render_logs_includes_tail_content() -> None:

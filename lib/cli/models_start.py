@@ -137,7 +137,14 @@ class ParsedLoopRunOnceCommand:
 class ParsedLoopRunnerCommand:
     project: str | None
     once: bool = True
+    auto: bool = False
+    task_id: str | None = None
+    plan_slug: str | None = None
+    role_job_id: str | None = None
+    wait_job_id: str | None = None
     timeout_s: float | None = None
+    max_steps: int = 24
+    poll_interval_s: float = 2.0
     consume_role_output: bool = False
     json_output: bool = False
     kind: str = 'loop-runner'
@@ -152,11 +159,28 @@ class ParsedPlanTaskCommand:
     task_id: str | None = None
     artifact_kind: str | None = None
     file_path: str | None = None
+    route: str | None = None
     status: str | None = None
+    next_owner: str | None = None
+    activation_reason: str | None = None
     loop_id: str | None = None
     result: str | None = None
     json_output: bool = False
     kind: str = 'plan-task'
+
+
+@dataclass(frozen=True)
+class ParsedFrontdeskCommand:
+    project: str | None
+    action: str
+    plan_slug: str | None = None
+    request_id: str | None = None
+    source_job_id: str | None = None
+    file_path: str | None = None
+    intake_base64: str | None = None
+    intake_text: str = ''
+    json_output: bool = False
+    kind: str = 'frontdesk'
 
 
 @dataclass(frozen=True)
@@ -185,6 +209,10 @@ class ParsedPsCommand:
 @dataclass(frozen=True)
 class ParsedConfigValidateCommand:
     project: str | None
+    action: str = 'validate'
+    json_output: bool = False
+    to_version: int | None = None
+    dry_run: bool = False
     kind: str = 'config-validate'
 
 
@@ -241,6 +269,7 @@ __all__ = [
     'ParsedConfigUiCommand',
     'ParsedConfigValidateCommand',
     'ParsedDoctorCommand',
+    'ParsedFrontdeskCommand',
     'ParsedKillCommand',
     'ParsedLayoutCommand',
     'ParsedLogsCommand',

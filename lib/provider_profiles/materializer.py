@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 from provider_profiles.models import ProviderProfileSpec, ResolvedProviderProfile
 from provider_profiles.codex_home_config import materialize_codex_home_config
 from provider_core.pathing import session_filename_for_agent
-from storage.atomic import atomic_write_json
+from storage.atomic import atomic_write_json, atomic_write_json_if_changed
 from storage.paths import PathLayout
 
 
@@ -63,6 +63,7 @@ def materialize_provider_profile(
     layout: PathLayout,
     spec: 'AgentSpec',
     workspace_path: Path,
+    materialize_home: bool = True,
 ) -> ResolvedProviderProfile:
     validate_provider_runtime_home_policy(spec)
     runtime_dir = layout.agent_provider_runtime_dir(spec.name, spec.provider)
@@ -77,6 +78,7 @@ def materialize_provider_profile(
             profile_spec=profile_spec,
             profile_root=profile_root,
             workspace_path=workspace_path,
+            materialize_home=materialize_home,
         )
     elif spec.provider == 'claude':
         profile = _materialize_claude_profile(
@@ -176,6 +178,7 @@ def _materialize_codex_profile(
     profile_spec: ProviderProfileSpec,
     profile_root: Path,
     workspace_path: Path,
+    materialize_home: bool,
 ) -> ResolvedProviderProfile:
     runtime_dir = layout.agent_provider_runtime_dir(spec.name, spec.provider)
     runtime_home = _effective_provider_runtime_home(layout=layout, spec=spec)
@@ -188,17 +191,18 @@ def _materialize_codex_profile(
         )
         if migrated_legacy_home:
             _discard_migrated_codex_projection(runtime_home)
-    materialize_codex_home_config(
-        runtime_home,
-        profile=profile_spec,
-        project_root=layout.project_root,
-        agent_name=spec.name,
-        runtime_dir=runtime_dir,
-        workspace_path=workspace_path,
-        shared_cache_root=layout.shared_cache_dir,
-        memory_projection_event_path=layout.agent_events_path(spec.name),
-        memory_projection_marker_path=runtime_dir / 'codex-memory-projection.json',
-    )
+    if materialize_home:
+        materialize_codex_home_config(
+            runtime_home,
+            profile=profile_spec,
+            project_root=layout.project_root,
+            agent_name=spec.name,
+            runtime_dir=runtime_dir,
+            workspace_path=workspace_path,
+            shared_cache_root=layout.shared_cache_dir,
+            memory_projection_event_path=layout.agent_events_path(spec.name),
+            memory_projection_marker_path=runtime_dir / 'codex-memory-projection.json',
+        )
 
     return ResolvedProviderProfile(
         provider=spec.provider,
@@ -718,7 +722,7 @@ def _remove_empty_dir(path: Path) -> bool:
 
 def _write_profile_record(runtime_dir: Path, profile: ResolvedProviderProfile) -> Path:
     path = Path(runtime_dir) / 'provider-profile.json'
-    atomic_write_json(path, profile.to_record())
+    atomic_write_json_if_changed(path, profile.to_record())
     return path
 
 

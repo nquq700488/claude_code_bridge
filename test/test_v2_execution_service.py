@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -76,6 +77,17 @@ def _runtime_context(tmp_path: Path) -> ProviderRuntimeContext:
         session_ref='session:agent1',
         runtime_pid=123,
         runtime_health='healthy',
+    )
+
+
+def _restored_runtime_context(tmp_path: Path) -> ProviderRuntimeContext:
+    return ProviderRuntimeContext(
+        agent_name='agent1',
+        workspace_path=str(tmp_path),
+        backend_type='pane-backed',
+        runtime_ref='codex:agent1:attached',
+        session_ref='session:agent1',
+        runtime_health='restored',
     )
 
 
@@ -1221,7 +1233,7 @@ def test_execution_service_claude_adapter_can_resume_after_restart(monkeypatch: 
     assert persisted.submission.runtime_state['state']['carry'] == b''
 
     restarted = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:05Z', state_store=state_store)
-    restored = restarted.restore(job, runtime_context=_runtime_context(tmp_path))
+    restored = restarted.restore(job, runtime_context=_restored_runtime_context(tmp_path))
     assert restored.restored is True
 
     update = restarted.poll()[0]
@@ -1294,7 +1306,7 @@ def test_execution_service_claude_persists_before_ready_wait_and_resumes_prompt_
     assert pane_reads == []
 
     restarted = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:01Z', state_store=state_store)
-    restored = restarted.restore(job, runtime_context=_runtime_context(tmp_path))
+    restored = restarted.restore(job, runtime_context=_restored_runtime_context(tmp_path))
     assert restored.restored is True
 
     assert restarted.poll() == ()
@@ -1429,6 +1441,99 @@ def test_execution_service_codex_adapter_emits_protocol_items_from_log(monkeypat
     assert update.items[-1].payload['last_agent_message'] == 'partial\nfinal without done'
     assert update.items[-1].payload['turn_id'] == 'turn-codex-1'
     assert update.decision is None
+
+
+def test_execution_service_codex_adapter_returns_only_parent_turn_after_native_subagent(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    from provider_execution import codex as codex_adapter_module
+
+    fixed_req_id = 'job_codex_parent_only'
+
+    class FakeBackend:
+        def send_text(self, pane_id: str, text: str) -> None:
+            del pane_id, text
+
+        def is_alive(self, pane_id: str) -> bool:
+            return pane_id == '%1'
+
+    class FakeSession:
+        data = {}
+        codex_session_path = ''
+        codex_session_id = ''
+        work_dir = str(tmp_path)
+
+        def ensure_pane(self):
+            return True, '%1'
+
+    class FakeReader:
+        def __init__(self, *args, **kwargs) -> None:
+            del args, kwargs
+            self._events = [
+                {
+                    'role': 'system',
+                    'payload_type': 'task_started',
+                    'turn_id': 'parent-turn',
+                },
+                {
+                    'role': 'user',
+                    'text': f'CCB_REQ_ID: {fixed_req_id}\n\nprompt',
+                    'entry_type': 'response_item',
+                    'payload_type': 'message',
+                },
+                {
+                    'role': 'assistant',
+                    'text': 'native child result',
+                    'phase': 'final_answer',
+                    'turn_id': 'child-turn',
+                    'timestamp': '2026-03-18T00:00:01Z',
+                },
+                {
+                    'role': 'system',
+                    'payload_type': 'task_complete',
+                    'turn_id': 'child-turn',
+                    'last_agent_message': 'native child result',
+                },
+                {
+                    'role': 'assistant',
+                    'text': 'parent synthesized result',
+                    'phase': 'final_answer',
+                    'turn_id': 'parent-turn',
+                    'timestamp': '2026-03-18T00:00:02Z',
+                },
+                {
+                    'role': 'system',
+                    'payload_type': 'task_complete',
+                    'turn_id': 'parent-turn',
+                    'last_agent_message': 'parent synthesized result',
+                },
+            ]
+
+        def capture_state(self):
+            return {'index': 0}
+
+        def try_get_entries(self, state):
+            index = int(state.get('index', 0))
+            if index >= len(self._events):
+                return [], state
+            return [self._events[index]], {'index': index + 1}
+
+    monkeypatch.setattr(codex_adapter_module, 'load_project_session', lambda work_dir, instance=None: FakeSession())
+    monkeypatch.setattr(codex_adapter_module, 'get_backend_for_session', lambda data: FakeBackend())
+    monkeypatch.setattr(codex_adapter_module, 'CodexLogReader', FakeReader)
+    service = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:00Z')
+    service.start(_anchored_job_for_provider('codex', fixed_req_id), runtime_context=_runtime_context(tmp_path))
+
+    update = service.poll()[0]
+
+    assert [item.kind for item in update.items] == [
+        CompletionItemKind.ANCHOR_SEEN,
+        CompletionItemKind.ASSISTANT_CHUNK,
+        CompletionItemKind.TURN_BOUNDARY,
+    ]
+    assert update.items[-1].payload['turn_id'] == 'parent-turn'
+    assert update.items[-1].payload['last_agent_message'] == 'parent synthesized result'
+    assert all('native child result' not in str(item.payload) for item in update.items)
 
 
 def test_execution_service_codex_adapter_emits_empty_task_complete_boundary(
@@ -1832,7 +1937,7 @@ def test_execution_service_codex_adapter_can_resume_after_restart(monkeypatch: p
     assert str(persisted.submission.runtime_state['state']['log_path']).endswith('codex-session.jsonl')
 
     restarted = ExecutionService(build_default_execution_registry(), clock=lambda: '2026-03-18T00:00:05Z', state_store=state_store)
-    restored = restarted.restore(job, runtime_context=_runtime_context(tmp_path))
+    restored = restarted.restore(job, runtime_context=_restored_runtime_context(tmp_path))
     assert restored.restored is True
 
     update = restarted.poll()[0]
@@ -2152,6 +2257,8 @@ def test_execution_service_codex_adapter_quarantines_anchor_fallback_without_reb
         + "\n",
         encoding='utf-8',
     )
+    os.utime(old_log, (100, 100))
+    os.utime(fallback_log, (200, 200))
     work_dir_str = str(work_dir)
 
     class FakeBackend:
@@ -2247,6 +2354,8 @@ def test_execution_service_codex_adapter_adopts_new_session_after_delayed_fallba
         + "\n",
         encoding='utf-8',
     )
+    os.utime(old_log, (100, 100))
+    os.utime(fallback_log, (200, 200))
     work_dir_str = str(work_dir)
     current_now = {'value': '2026-03-18T00:00:00Z'}
 

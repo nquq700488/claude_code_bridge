@@ -174,9 +174,9 @@ def test_namespace_patch_plan_add_tool_window_creates_sidebar_and_tool_pane(tmp_
         tmp_path / 'new-tool-window',
         BASE_CONFIG
         + """
-[tool_windows.neovim]
-command = "ccb-nvim"
-label = "neovim"
+[tool_windows.files]
+command = "ccb-workbench files"
+label = "files"
 """,
     )
     plan = build_reload_dry_run_plan(
@@ -196,9 +196,9 @@ label = "neovim"
         'create_sidebar_pane',
         'create_tool_pane',
     ]
-    assert patch['steps'][0]['window'] == 'neovim'
-    assert patch['steps'][1]['slot_key'] == 'sidebar:neovim'
-    assert patch['steps'][2]['slot_key'] == 'tool:neovim'
+    assert patch['steps'][0]['window'] == 'files'
+    assert patch['steps'][1]['slot_key'] == 'sidebar:files'
+    assert patch['steps'][2]['slot_key'] == 'tool:files'
 
 
 def test_namespace_patch_plan_remove_tool_window_kills_tool_window(tmp_path: Path) -> None:
@@ -206,9 +206,9 @@ def test_namespace_patch_plan_remove_tool_window_kills_tool_window(tmp_path: Pat
         tmp_path / 'current-tool-remove',
         BASE_CONFIG
         + """
-[tool_windows.neovim]
-command = "ccb-nvim"
-label = "neovim"
+[tool_windows.files]
+command = "ccb-workbench files"
+label = "files"
 """,
     )
     new = _load_config(tmp_path / 'new-tool-remove', BASE_CONFIG)
@@ -227,9 +227,9 @@ label = "neovim"
     assert patch['steps'] == [
         {
             'action': 'kill_tool_window',
-            'window': 'neovim',
+            'window': 'files',
             'role': 'tool',
-            'slot_key': 'tool:neovim',
+            'slot_key': 'tool:files',
             'managed_by': 'ccbd',
             'reason': 'managed tool window exists only in current published config',
         }
@@ -961,6 +961,43 @@ def test_cli_reload_non_dry_run_calls_socket_with_dry_run_false(tmp_path: Path, 
 
     assert calls == [False]
     assert payload == {'status': 'blocked', 'dry_run': False}
+
+
+def test_cli_reload_uses_operation_timeout_for_large_runtime_graphs(tmp_path: Path, monkeypatch) -> None:
+    project_root = _project(tmp_path / 'repo-cli-runtime-graph-timeout', BASE_CONFIG)
+    command = ParsedReloadCommand(project=None, dry_run=False)
+    context = CliContext(
+        command=command,
+        cwd=project_root,
+        project=bootstrap_project(project_root),
+        paths=PathLayout(project_root),
+    )
+
+    import cli.services.reload as reload_module
+
+    calls: list[object] = []
+
+    class _TimedClient:
+        def project_reload_config(self, *, dry_run: bool) -> dict:
+            calls.append(('reload', dry_run))
+            return {'status': 'published', 'dry_run': dry_run}
+
+    class _Client:
+        def with_timeout(self, timeout_s: float):
+            calls.append(('timeout', timeout_s))
+            return _TimedClient()
+
+    monkeypatch.setenv('CCB_RELOAD_RPC_TIMEOUT_S', '17.5')
+    monkeypatch.setattr(
+        reload_module,
+        'connect_current_mounted_daemon',
+        lambda _context: SimpleNamespace(client=_Client()),
+    )
+
+    payload = reload_config(context, command)
+
+    assert calls == [('timeout', 17.5), ('reload', False)]
+    assert payload == {'status': 'published', 'dry_run': False}
 
 
 def _namespace(project_id: str):

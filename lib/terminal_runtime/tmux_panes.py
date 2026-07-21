@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-from .tmux_panes_runtime.actions import set_pane_style, set_pane_title, set_pane_user_option, split_pane
+from .tmux_panes_runtime.actions import set_pane_identity, set_pane_style, set_pane_title, set_pane_user_option, split_pane
 from .tmux_panes_runtime.queries import (
     describe_pane,
     find_pane_by_title_marker,
@@ -57,6 +57,24 @@ class TmuxPaneService:
         active_border_style: str | None = None,
     ) -> None:
         set_pane_style(self, pane_id, border_style=border_style, active_border_style=active_border_style)
+
+    def set_pane_identity(
+        self,
+        pane_id: str,
+        *,
+        title: str,
+        user_options: dict[str, str],
+        border_style: str | None = None,
+        active_border_style: str | None = None,
+    ) -> None:
+        set_pane_identity(
+            self,
+            pane_id,
+            title=title,
+            user_options=user_options,
+            border_style=border_style,
+            active_border_style=active_border_style,
+        )
 
     def find_pane_by_title_marker(self, marker: str) -> str | None:
         return find_pane_by_title_marker(self, marker)

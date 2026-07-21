@@ -21,8 +21,10 @@ def test_execution_registry_can_build_core_only_registry() -> None:
         'cursor',
         'copilot',
         'crush',
+        'grok',
         'kiro',
         'pi',
+        'omp',
         'zai',
         'grok',
     }
@@ -39,8 +41,10 @@ def test_execution_registry_can_build_core_only_registry() -> None:
     assert registry.get('cursor') is None
     assert registry.get('copilot') is None
     assert registry.get('crush') is None
+    assert registry.get('grok') is None
     assert registry.get('kiro') is None
     assert registry.get('pi') is None
+    assert registry.get('omp') is None
     assert registry.get('zai') is None
     assert registry.get('grok') is None
     assert registry.get('fake') is None

@@ -18,6 +18,10 @@ _DEFAULT_PAIRING_EXPIRES_SECONDS = 10 * 60
 _DEFAULT_DEVICE_SCOPES = ('view',)
 _DEFAULT_TERMINAL_EXPIRES_SECONDS = 5 * 60
 _TERMINAL_LOG_COMPACT_BYTES = 8 * 1024 * 1024
+_HANDOFF_RECORD_TYPE = 'ccb_mobile_pairing_handoff'
+_PRESENCE_RECORD_TYPE = 'ccb_mobile_device_presence'
+_PUSH_TOKEN_RECORD_TYPE = 'ccb_mobile_device_push_tokens'
+_DEFAULT_PRESENCE_TTL_SECONDS = 90
 
 
 class MobileGatewayPairingError(RuntimeError):
@@ -51,11 +55,13 @@ class MobileGatewayPairingStore:
         clock: Callable[[], datetime] | None = None,
         token_factory: Callable[[int], str] | None = None,
         id_factory: Callable[[str], str] | None = None,
+        presence_ttl_seconds: int = _DEFAULT_PRESENCE_TTL_SECONDS,
     ) -> None:
         self._mobile_dir = Path(mobile_dir)
         self._clock = clock or _utc_now
         self._token_factory = token_factory or _token_urlsafe
         self._id_factory = id_factory or _random_id
+        self._presence_ttl_seconds = max(1, int(presence_ttl_seconds))
         self._lock = threading.RLock()
         self._terminal_state_cache: dict[str, dict[str, object]] | None = None
         self._terminal_state_cache_identity: tuple[int, int] | None = None
@@ -73,6 +79,19 @@ class MobileGatewayPairingStore:
     @property
     def pairing_tokens_path(self) -> Path:
         return self._mobile_dir / 'pairing-tokens.jsonl'
+
+    @property
+    def handoff_path(self) -> Path:
+        """Private local copy of the currently reusable handoff secret."""
+        return self._mobile_dir / 'pairing-handoff.json'
+
+    @property
+    def presence_path(self) -> Path:
+        return self._mobile_dir / 'device-presence.json'
+
+    @property
+    def push_tokens_path(self) -> Path:
+        return self._mobile_dir / 'push-tokens.json'
 
     @property
     def terminal_tokens_path(self) -> Path:
@@ -156,6 +175,174 @@ class MobileGatewayPairingStore:
             'expires_at': _iso(expires_at) if expires_at is not None else None,
             'reusable_claims': bool(reusable_claims),
         }
+
+    def ensure_reusable_pairing_payload(
+        self,
+        *,
+        project_id: str,
+        gateway_url: str,
+        route_provider: str,
+        scopes: Iterable[str],
+    ) -> dict[str, object]:
+        """Return the current manual-rotation handoff, creating it once."""
+        with self._lock:
+            handoff = self._read_handoff()
+            if handoff and self.pairing_code_is_claimable(str(handoff.get('pairing_code') or '')):
+                return self._public_handoff(handoff)
+            generation = max(0, _int(handoff.get('generation') if handoff else 0, 0)) + 1
+            payload = self.create_pairing_payload(
+                project_id=project_id,
+                gateway_url=gateway_url,
+                route_provider=route_provider,
+                scopes=scopes,
+                expires_seconds=None,
+                reusable_claims=True,
+            )
+            self._write_handoff({
+                'record_type': _HANDOFF_RECORD_TYPE,
+                'schema_version': _SCHEMA_VERSION,
+                'generation': generation,
+                **payload,
+                'rotated_at': _iso(self._clock()),
+            })
+            self._append_audit(
+                event='pairing_handoff_created',
+                result='ok',
+                project_id=str(project_id),
+                pairing_id=str(payload.get('pairing_id') or ''),
+                generation=generation,
+            )
+            return {**payload, 'generation': generation}
+
+    def rotate_reusable_pairing_payload(
+        self,
+        *,
+        project_id: str,
+        gateway_url: str,
+        route_provider: str,
+        scopes: Iterable[str],
+    ) -> dict[str, object]:
+        """Explicitly replace the handoff without revoking issued devices."""
+        with self._lock:
+            prior = self._read_handoff()
+            if prior:
+                prior_id = str(prior.get('pairing_id') or '').strip()
+                if prior_id:
+                    self.revoke_pairing(prior_id, reason='manual_handoff_rotation')
+            generation = max(0, _int(prior.get('generation') if prior else 0, 0)) + 1
+            payload = self.create_pairing_payload(
+                project_id=project_id,
+                gateway_url=gateway_url,
+                route_provider=route_provider,
+                scopes=scopes,
+                expires_seconds=None,
+                reusable_claims=True,
+            )
+            self._write_handoff({
+                'record_type': _HANDOFF_RECORD_TYPE,
+                'schema_version': _SCHEMA_VERSION,
+                'generation': generation,
+                **payload,
+                'rotated_at': _iso(self._clock()),
+            })
+            self._append_audit(
+                event='pairing_handoff_rotated',
+                result='ok',
+                project_id=str(project_id),
+                pairing_id=str(payload.get('pairing_id') or ''),
+                generation=generation,
+            )
+            return {**payload, 'generation': generation}
+
+    def record_presence(
+        self,
+        *,
+        device_id: str,
+        visible: bool,
+        focused_project_id: str | None = None,
+        focused_agent: str | None = None,
+        terminal_id: str | None = None,
+        user_activity: bool = False,
+    ) -> dict[str, object]:
+        """Persist redacted device presence; heartbeats never alter project activity."""
+        with self._lock:
+            presence = self._read_presence()
+            now = _iso(self._clock())
+            prior = dict(presence.get(device_id) or {})
+            updated = {
+                'device_id': device_id,
+                'visible': bool(visible),
+                'focused_project_id': (
+                    str(prior.get('focused_project_id') or '')
+                    if focused_project_id is None else _clean_id(focused_project_id)
+                ),
+                'focused_agent': (
+                    str(prior.get('focused_agent') or '')
+                    if focused_agent is None else _clean_id(focused_agent)
+                ),
+                'terminal_id': (
+                    str(prior.get('terminal_id') or '')
+                    if terminal_id is None else _clean_id(terminal_id)
+                ),
+                'last_heartbeat_at': now,
+                'last_user_activity_at': prior.get('last_user_activity_at'),
+            }
+            if user_activity:
+                updated['last_user_activity_at'] = now
+            presence[device_id] = updated
+            self._write_presence(presence)
+            self._append_audit(
+                event='device_presence_updated',
+                result='ok',
+                device_id=device_id,
+                visible=bool(visible),
+                user_activity=bool(user_activity),
+            )
+            return _public_presence(
+                updated,
+                now=self._clock(),
+                freshness_ttl_seconds=self._presence_ttl_seconds,
+            )
+
+    def presence_for_device(self, device_id: str) -> dict[str, object] | None:
+        with self._lock:
+            record = self._read_presence().get(str(device_id or ''))
+            return _public_presence(
+                record,
+                now=self._clock(),
+                freshness_ttl_seconds=self._presence_ttl_seconds,
+            ) if record else None
+
+    def register_push_token(self, *, device_id: str, token: str) -> None:
+        clean_token = str(token or '').strip()
+        if not clean_token or len(clean_token) > 4096:
+            raise MobileGatewayPairingError('push token is invalid', status_code=400, reason='invalid_push_token')
+        with self._lock:
+            if not any(record.get('device_id') == device_id and not record.get('revoked_at') for record in self._read_devices()):
+                raise MobileGatewayPairingError('device token revoked', status_code=401, reason='revoked')
+            tokens = self._read_push_tokens()
+            tokens[device_id] = {'device_id': device_id, 'token': clean_token, 'updated_at': _iso(self._clock())}
+            self._write_push_tokens(tokens)
+            self._append_audit(event='device_push_token_registered', result='ok', device_id=device_id)
+
+    def delete_push_token(self, *, device_id: str, reason: str = 'device_deleted') -> bool:
+        with self._lock:
+            tokens = self._read_push_tokens()
+            removed = tokens.pop(device_id, None) is not None
+            if removed:
+                self._write_push_tokens(tokens)
+                self._append_audit(event='device_push_token_deleted', result='ok', device_id=device_id, reason=reason)
+            return removed
+
+    def push_tokens_for_delivery(self) -> list[tuple[str, str]]:
+        """Internal-only provider tokens for active devices."""
+        with self._lock:
+            active_ids = {str(record.get('device_id') or '') for record in self._read_devices() if not record.get('revoked_at')}
+            return [
+                (device_id, str(record.get('token') or ''))
+                for device_id, record in self._read_push_tokens().items()
+                if device_id in active_ids and str(record.get('token') or '')
+            ]
 
     def revoke_pairing(self, pairing_id: str, *, reason: str = 'revoked') -> dict[str, object] | None:
         requested = str(pairing_id or '').strip()
@@ -825,6 +1012,84 @@ class MobileGatewayPairingStore:
             return []
         return [dict(item) for item in devices if isinstance(item, dict)]
 
+    def _read_handoff(self) -> dict[str, object] | None:
+        try:
+            payload = json.loads(self.handoff_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return None
+        if not isinstance(payload, dict) or payload.get('record_type') != _HANDOFF_RECORD_TYPE:
+            return None
+        if not str(payload.get('pairing_code') or '').strip():
+            return None
+        return dict(payload)
+
+    def _write_handoff(self, payload: dict[str, object]) -> None:
+        self._ensure_dir()
+        _write_json(self.handoff_path, payload)
+
+    def _public_handoff(self, handoff: dict[str, object]) -> dict[str, object]:
+        return {
+            'schema_version': _SCHEMA_VERSION,
+            'pairing_id': str(handoff.get('pairing_id') or ''),
+            'pairing_code': str(handoff.get('pairing_code') or ''),
+            'project_id': str(handoff.get('project_id') or ''),
+            'route_provider': str(handoff.get('route_provider') or ''),
+            'gateway_url': str(handoff.get('gateway_url') or ''),
+            'claim_endpoint': str(handoff.get('claim_endpoint') or ''),
+            'scopes': _scope_list(handoff.get('scopes')),
+            'expires_at': None,
+            'reusable_claims': True,
+            'generation': _int(handoff.get('generation'), 1),
+        }
+
+    def _read_presence(self) -> dict[str, dict[str, object]]:
+        try:
+            payload = json.loads(self.presence_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict) or payload.get('record_type') != _PRESENCE_RECORD_TYPE:
+            return {}
+        records = payload.get('devices')
+        if not isinstance(records, list):
+            return {}
+        return {
+            str(record.get('device_id') or ''): dict(record)
+            for record in records
+            if isinstance(record, dict) and str(record.get('device_id') or '')
+        }
+
+    def _write_presence(self, presence: dict[str, dict[str, object]]) -> None:
+        self._ensure_dir()
+        _write_json(self.presence_path, {
+            'schema_version': _SCHEMA_VERSION,
+            'record_type': _PRESENCE_RECORD_TYPE,
+            'devices': [presence[key] for key in sorted(presence)],
+        })
+
+    def _read_push_tokens(self) -> dict[str, dict[str, object]]:
+        try:
+            payload = json.loads(self.push_tokens_path.read_text(encoding='utf-8'))
+        except (OSError, json.JSONDecodeError):
+            return {}
+        if not isinstance(payload, dict) or payload.get('record_type') != _PUSH_TOKEN_RECORD_TYPE:
+            return {}
+        records = payload.get('devices')
+        if not isinstance(records, list):
+            return {}
+        return {
+            str(record.get('device_id') or ''): dict(record)
+            for record in records
+            if isinstance(record, dict) and str(record.get('device_id') or '')
+        }
+
+    def _write_push_tokens(self, tokens: dict[str, dict[str, object]]) -> None:
+        self._ensure_dir()
+        _write_json(self.push_tokens_path, {
+            'schema_version': _SCHEMA_VERSION,
+            'record_type': _PUSH_TOKEN_RECORD_TYPE,
+            'devices': [tokens[key] for key in sorted(tokens)],
+        })
+
     def _revoke_device_record(
         self,
         *,
@@ -842,11 +1107,16 @@ class MobileGatewayPairingStore:
                 updated['revoked_at'] = now
             devices[index] = updated
             _write_json(self.devices_path, {'schema_version': _SCHEMA_VERSION, 'devices': devices})
+            presence = self._read_presence()
+            presence_removed = presence.pop(device_id, None) is not None
+            if presence_removed:
+                self._write_presence(presence)
             revoked_terminal_count = self._revoke_terminal_handles_for_device(
                 device_id=device_id,
                 now=now,
                 reason=reason,
             )
+            push_token_removed = self.delete_push_token(device_id=device_id, reason='device_revoked')
             self._append_audit(
                 event='device_revoked',
                 result='ok',
@@ -855,12 +1125,16 @@ class MobileGatewayPairingStore:
                 revoked_by_device_id=revoked_by_device_id,
                 reason=reason,
                 revoked_terminal_count=revoked_terminal_count,
+                presence_removed=presence_removed,
+                push_token_removed=push_token_removed,
             )
             return {
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'revoked',
                 'device': _public_device(updated),
                 'revoked_terminal_count': revoked_terminal_count,
+                'presence_removed': presence_removed,
+                'push_token_removed': push_token_removed,
             }
         raise MobileGatewayPairingError('device not found', status_code=404, reason='not_found')
 
@@ -907,7 +1181,8 @@ class MobileGatewayPairingStore:
         _append_jsonl(self.audit_path, entry)
 
     def _ensure_dir(self) -> None:
-        self._mobile_dir.mkdir(parents=True, exist_ok=True)
+        self._mobile_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._mobile_dir.chmod(0o700)
 
 
 def _token_hash(prefix: str, value: str) -> str:
@@ -942,6 +1217,29 @@ def _public_device(record: dict[str, object]) -> dict[str, object]:
         'last_seen_at': record.get('last_seen_at'),
         'revoked': bool(record.get('revoked_at')),
         'revoked_at': record.get('revoked_at'),
+    }
+
+
+def _public_presence(
+    record: dict[str, object],
+    *,
+    now: datetime,
+    freshness_ttl_seconds: int,
+) -> dict[str, object]:
+    heartbeat_at = _parse_utc(record.get('last_heartbeat_at'))
+    fresh = (
+        heartbeat_at is not None
+        and now <= heartbeat_at + timedelta(seconds=max(1, int(freshness_ttl_seconds)))
+    )
+    return {
+        # These are authoritative effective values, not the last stale report.
+        'visible': bool(record.get('visible')) if fresh else False,
+        'freshness': 'fresh' if fresh else 'stale',
+        'focused_project_id': str(record.get('focused_project_id') or '') if fresh else '',
+        'focused_agent': str(record.get('focused_agent') or '') if fresh else '',
+        'terminal_id': str(record.get('terminal_id') or '') if fresh else '',
+        'last_heartbeat_at': record.get('last_heartbeat_at'),
+        'last_user_activity_at': record.get('last_user_activity_at'),
     }
 
 
@@ -1009,6 +1307,7 @@ def _append_jsonl(path: Path, payload: dict[str, object]) -> None:
     with path.open('a', encoding='utf-8') as handle:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True))
         handle.write('\n')
+    path.chmod(0o600)
 
 
 def _write_jsonl_records(path: Path, records: Iterable[dict[str, object]]) -> None:
@@ -1026,6 +1325,7 @@ def _write_json(path: Path, payload: dict[str, object]) -> None:
     tmp = path.with_name(f'.{path.name}.tmp')
     tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + '\n', encoding='utf-8')
     tmp.replace(path)
+    path.chmod(0o600)
 
 
 def _parse_utc(value: object) -> datetime | None:

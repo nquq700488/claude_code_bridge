@@ -66,6 +66,38 @@ def test_tmux_pane_service_sets_user_option_and_reads_content() -> None:
     assert alive is True
 
 
+def test_tmux_pane_service_batches_identity_updates_into_one_tmux_call() -> None:
+    calls: list[list[str]] = []
+
+    service = TmuxPaneService(
+        tmux_run_fn=lambda args, **kwargs: calls.append(list(args)) or _cp(),
+        looks_like_pane_id_fn=lambda value: value.startswith('%'),
+        normalize_split_direction_fn=lambda direction: ('-h', 'right'),
+        pane_exists_output_fn=lambda output: output.strip().startswith('%'),
+        pane_id_by_title_marker_output_fn=lambda text, marker: None,
+        pane_is_alive_fn=lambda output: output.strip() == '0',
+        normalize_user_option_fn=lambda name: '@' + name.strip('@'),
+        strip_ansi_fn=lambda text: text,
+    )
+
+    service.set_pane_identity(
+        '%3',
+        title='agent1',
+        user_options={'@ccb_role': 'agent', '@ccb_slot': 'agent1'},
+        border_style='fg=red',
+        active_border_style='fg=green',
+    )
+
+    assert len(calls) == 1
+    assert calls[0] == [
+        'select-pane', '-t', '%3', '-T', 'agent1',
+        ';', 'set-option', '-p', '-t', '%3', '@ccb_role', 'agent',
+        ';', 'set-option', '-p', '-t', '%3', '@ccb_slot', 'agent1',
+        ';', 'set-option', '-p', '-t', '%3', 'pane-border-style', 'fg=red',
+        ';', 'set-option', '-p', '-t', '%3', 'pane-active-border-style', 'fg=green',
+    ]
+
+
 def test_tmux_pane_service_describes_pane_with_user_options() -> None:
     def tmux_run(args, **kwargs):
         if args == ['display-message', '-p', '-t', '%3', '#{pane_id}\t#{pane_title}\t#{pane_dead}\t#{@ccb_agent}\t#{@ccb_project_id}']:

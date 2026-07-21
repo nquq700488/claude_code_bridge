@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 
 from provider_core.contracts import ProviderRuntimeIdentity
@@ -7,6 +9,12 @@ from provider_backends.codex.session_switch.diagnostics import read_diagnostics
 from provider_backends.codex.session_switch.models import STATE_AUTO_REBOUND
 
 from ..start_cmd import extract_resume_session_id
+
+
+_PROCESS_PARENT_MAP_SNAPSHOT: ContextVar[list[dict[int, int]] | None] = ContextVar(
+    'codex_process_parent_map_snapshot',
+    default=None,
+)
 
 
 def live_runtime_identity(session) -> ProviderRuntimeIdentity | None:
@@ -106,6 +114,15 @@ def _process_tree_cmdlines(root_pid: int) -> tuple[str, ...]:
 
 
 def _linux_process_parent_map() -> dict[int, int]:
+    snapshot_holder = _PROCESS_PARENT_MAP_SNAPSHOT.get()
+    if snapshot_holder is None:
+        return _scan_linux_process_parent_map()
+    if not snapshot_holder:
+        snapshot_holder.append(_scan_linux_process_parent_map())
+    return snapshot_holder[0]
+
+
+def _scan_linux_process_parent_map() -> dict[int, int]:
     proc = Path('/proc')
     if not proc.is_dir():
         return {}
@@ -118,6 +135,15 @@ def _linux_process_parent_map() -> dict[int, int]:
         if ppid is not None:
             parents[pid] = ppid
     return parents
+
+
+@contextmanager
+def process_parent_snapshot():
+    token = _PROCESS_PARENT_MAP_SNAPSHOT.set([])
+    try:
+        yield
+    finally:
+        _PROCESS_PARENT_MAP_SNAPSHOT.reset(token)
 
 
 def _linux_process_parent_pid(stat_path: Path) -> int | None:
@@ -167,4 +193,4 @@ def _positive_int(value: object) -> int | None:
     return number if number > 0 else None
 
 
-__all__ = ['live_runtime_identity']
+__all__ = ['live_runtime_identity', 'process_parent_snapshot']

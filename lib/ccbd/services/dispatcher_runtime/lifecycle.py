@@ -4,6 +4,8 @@ from ccbd.api_models import MessageEnvelope, SubmitReceipt
 from message_bureau import AttemptState, MessageStore
 
 from .lifecycle_start import tick_jobs
+from .frontdesk_direct_handoff import is_frontdesk_submission, submit_frontdesk_direct_handoff
+from .detailer_replan_handoff import is_task_detailer_submission, submit_detailer_replan_handoff
 from .submission import (
     _append_submission_job,
     _build_job_record,
@@ -34,8 +36,29 @@ _RETRY_SOURCE_JOB_ID_OPTION = 'retry_source_job_id'
 
 def submit_jobs(dispatcher, request: MessageEnvelope) -> SubmitReceipt:
     accepted_at = dispatcher._clock()
-    receipt, _ = _submit_plan(dispatcher, _plan_agent_submission(dispatcher, request), accepted_at=accepted_at)
-    return receipt
+    def submit(message: MessageEnvelope = request) -> SubmitReceipt:
+        receipt, _ = _submit_plan(
+            dispatcher,
+            _plan_agent_submission(dispatcher, message),
+            accepted_at=accepted_at,
+        )
+        return receipt
+
+    if is_frontdesk_submission(request):
+        return submit_frontdesk_direct_handoff(
+            dispatcher,
+            request,
+            accepted_at=accepted_at,
+            submit=submit,
+        )
+    if is_task_detailer_submission(request):
+        return submit_detailer_replan_handoff(
+            dispatcher,
+            request,
+            accepted_at=accepted_at,
+            submit=submit,
+        )
+    return submit()
 
 
 def resubmit_message(dispatcher, message_id: str) -> dict[str, object]:

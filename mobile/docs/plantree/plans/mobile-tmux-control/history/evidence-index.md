@@ -2,6 +2,20 @@
 
 Date: 2026-06-29
 
+## 2026-07-14: Paseo-Inspired Device-Bound Push Integration
+
+Evidence:
+
+- [paseo-push-integration-20260714.md](paseo-push-integration-20260714.md)
+
+Result:
+
+- Local source full tests, Flutter full tests, and debug/profile/release APK
+  builds passed.
+- Real Firebase delivery, emulator/physical-device lifecycle, screenshots,
+  logcat, and request-count evidence are BLOCKED because no Android device is
+  attached and Firebase operator credentials are not injected.
+
 ## 2026-07-10: Realtime Authority and Recovery
 
 - [Fresh profile-APK AVD evidence](/tmp/ccb-mobile-realtime-recovery-20260710/README.md):

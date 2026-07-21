@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from pathlib import Path
 
 from cli.services.runtime_launch_runtime import tmux_panes
 
@@ -11,11 +12,17 @@ class FakeBackend:
         self.socket_name = socket_name
         self.returncode = returncode
         self.calls: list[tuple[str, ...]] = []
+        self.respawned: list[tuple[str, str, str | None]] = []
 
     def _tmux_run(self, argv, **kwargs):
         del kwargs
         self.calls.append(tuple(argv))
-        return subprocess.CompletedProcess(args=argv, returncode=self.returncode, stdout='', stderr='')
+        stdout = '%7\n' if tuple(argv[:1]) == ('list-panes',) else ''
+        return subprocess.CompletedProcess(args=argv, returncode=self.returncode, stdout=stdout, stderr='')
+
+    def respawn_pane(self, pane_id: str, *, cmd: str, cwd: str | None = None, remain_on_exit: bool = True) -> None:
+        del remain_on_exit
+        self.respawned.append((pane_id, cmd, cwd))
 
 
 def setup_function() -> None:
@@ -32,6 +39,7 @@ def test_prepare_detached_tmux_server_reuses_same_socket_and_environment(monkeyp
 
     assert first_count > 0
     assert len(backend.calls) == first_count
+    assert ('start-server',) not in backend.calls
 
 
 def test_prepare_detached_tmux_server_does_not_share_different_sockets(monkeypatch) -> None:
@@ -68,3 +76,21 @@ def test_prepare_detached_tmux_server_retries_after_failed_prepare(monkeypatch) 
 
     assert first_count > 0
     assert len(backend.calls) == first_count * 2
+
+
+def test_create_detached_tmux_pane_creates_session_before_server_policy(tmp_path: Path) -> None:
+    backend = FakeBackend(socket_path='/tmp/ccb.sock')
+
+    pane_id = tmux_panes.create_detached_tmux_pane(
+        backend,
+        cmd='codex',
+        cwd=tmp_path,
+        session_name='ccb-agent1',
+    )
+
+    assert pane_id == '%7'
+    assert backend.calls[0][:1] == ('new-session',)
+    assert ('start-server',) not in backend.calls
+    policy_index = backend.calls.index(('set-option', '-g', 'destroy-unattached', 'off'))
+    assert policy_index > 0
+    assert backend.respawned == [('%7', 'codex', str(tmp_path))]
