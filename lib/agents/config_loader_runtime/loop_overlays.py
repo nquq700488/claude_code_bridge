@@ -324,6 +324,7 @@ def _copy_config(
         maintenance_heartbeat=config.maintenance_heartbeat,
         loop_capacity=config.loop_capacity,
         workflow=config.workflow,
+        custom_providers=config.custom_providers,
     )
 
 

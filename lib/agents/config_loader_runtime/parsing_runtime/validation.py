@@ -15,6 +15,11 @@ from agents.models import (
     parse_layout_spec,
 )
 from provider_custom.parsing import CustomProviderConfigError, parse_providers_section
+from provider_custom.wiring import (
+    restore_custom_provider_state,
+    snapshot_custom_provider_state,
+    sync_custom_provider_wirings,
+)
 
 from ..common import (
     ALLOWED_TOP_LEVEL_KEYS,
@@ -77,42 +82,51 @@ def validate_project_config(
         project_root=resolved_project_root,
     )
     _validate_document_shape(document)
+    # 全局状态纪律：snapshot 覆盖整个 parse 过程——AgentSpec.__post_init__ 在
+    # agents 解析时就会调 model shortcut，sync 必须先于 agents 解析；任何后续
+    # 校验失败都必须 restore，wiring 不得残留半份状态。
+    provider_state_snapshot = snapshot_custom_provider_state()
     try:
-        custom_providers = parse_providers_section(document.get('providers'))
-    except CustomProviderConfigError as exc:
-        raise ConfigValidationError(str(exc)) from exc
-    windows = parse_topology_windows(document.get('windows'))
-    tool_windows = parse_tool_windows(document.get('tool_windows'))
-    _validate_topology_presence(document, windows=windows, tool_windows=tool_windows)
-    if windows is not None:
-        default_agents = _parse_topology_default_agents(document, windows=windows)
-        parsed_agents = agents_from_topology_windows(windows, raw_agents=document.get('agents', {}))
-    else:
-        parsed_agents = parse_agents(document.get('agents'))
-        default_agents = _parse_default_agents(document)
-    cmd_enabled = _parse_cmd_enabled(document)
-    layout_spec = _parse_layout_spec(document)
-    sidebar = parse_sidebar(document.get('ui'))
-    sidebar_view = parse_sidebar_view(document.get('ui'))
-    maintenance_heartbeat = _parse_maintenance_heartbeat(document)
-    loop_capacity = parse_loop_capacity(document.get('loop'), project_root=resolved_project_root)
-    entry_window = _parse_entry_window(document)
-    _validate_legacy_and_windows_fields(document, windows=windows, tool_windows=tool_windows)
-    return _build_project_config(
-        default_agents=default_agents,
-        parsed_agents=parsed_agents,
-        cmd_enabled=cmd_enabled,
-        layout_spec=layout_spec,
-        windows=windows,
-        tool_windows=tool_windows,
-        entry_window=entry_window,
-        sidebar=sidebar,
-        sidebar_view=sidebar_view,
-        maintenance_heartbeat=maintenance_heartbeat,
-        loop_capacity=loop_capacity,
-        custom_providers=custom_providers,
-        source_path=source_path,
-    )
+        try:
+            custom_providers = parse_providers_section(document.get('providers'))
+        except CustomProviderConfigError as exc:
+            raise ConfigValidationError(str(exc)) from exc
+        sync_custom_provider_wirings(custom_providers)
+        windows = parse_topology_windows(document.get('windows'))
+        tool_windows = parse_tool_windows(document.get('tool_windows'))
+        _validate_topology_presence(document, windows=windows, tool_windows=tool_windows)
+        if windows is not None:
+            default_agents = _parse_topology_default_agents(document, windows=windows)
+            parsed_agents = agents_from_topology_windows(windows, raw_agents=document.get('agents', {}))
+        else:
+            parsed_agents = parse_agents(document.get('agents'))
+            default_agents = _parse_default_agents(document)
+        cmd_enabled = _parse_cmd_enabled(document)
+        layout_spec = _parse_layout_spec(document)
+        sidebar = parse_sidebar(document.get('ui'))
+        sidebar_view = parse_sidebar_view(document.get('ui'))
+        maintenance_heartbeat = _parse_maintenance_heartbeat(document)
+        loop_capacity = parse_loop_capacity(document.get('loop'), project_root=resolved_project_root)
+        entry_window = _parse_entry_window(document)
+        _validate_legacy_and_windows_fields(document, windows=windows, tool_windows=tool_windows)
+        return _build_project_config(
+            default_agents=default_agents,
+            parsed_agents=parsed_agents,
+            cmd_enabled=cmd_enabled,
+            layout_spec=layout_spec,
+            windows=windows,
+            tool_windows=tool_windows,
+            entry_window=entry_window,
+            sidebar=sidebar,
+            sidebar_view=sidebar_view,
+            maintenance_heartbeat=maintenance_heartbeat,
+            loop_capacity=loop_capacity,
+            custom_providers=custom_providers,
+            source_path=source_path,
+        )
+    except Exception:
+        restore_custom_provider_state(provider_state_snapshot)
+        raise
 
 
 def _validate_document_shape(document: dict[str, Any]) -> None:

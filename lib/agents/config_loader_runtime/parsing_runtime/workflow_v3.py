@@ -28,6 +28,11 @@ from agents.models import (
 )
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_custom.parsing import CustomProviderConfigError, parse_providers_section
+from provider_custom.wiring import (
+    restore_custom_provider_state,
+    snapshot_custom_provider_state,
+    sync_custom_provider_wirings,
+)
 from provider_model_shortcuts import provider_model_startup_args, startup_args_contain_model_flag
 from rolepacks.manifest import RoleManifestError, role_manifest_from_mapping
 
@@ -117,10 +122,34 @@ def validate_v3_project_config(
     project_root: Path | None,
     maintenance_heartbeat: MaintenanceHeartbeatConfig,
 ) -> ProjectConfig:
+    # 全局状态纪律：snapshot 覆盖整个 parse 过程（AgentSpec.__post_init__ 在
+    # agents/roles 解析时就会调 model shortcut），任何失败都必须 restore——
+    # wiring 不得残留半份状态，成功才发布。
+    provider_state_snapshot = snapshot_custom_provider_state()
+    try:
+        return _validate_v3_project_config_inner(
+            document,
+            source_path=source_path,
+            project_root=project_root,
+            maintenance_heartbeat=maintenance_heartbeat,
+        )
+    except Exception:
+        restore_custom_provider_state(provider_state_snapshot)
+        raise
+
+
+def _validate_v3_project_config_inner(
+    document: dict[str, Any],
+    *,
+    source_path: Path | None,
+    project_root: Path | None,
+    maintenance_heartbeat: MaintenanceHeartbeatConfig,
+) -> ProjectConfig:
     try:
         custom_providers = parse_providers_section(document.get('providers'))
     except CustomProviderConfigError as exc:
         _fail('v3_providers_invalid', 'providers', str(exc))
+    sync_custom_provider_wirings(custom_providers)
     _validate_top_level(document)
     workflow_raw = _mapping(document.get('workflow'), path='workflow')
     _reject_unknown(workflow_raw, _WORKFLOW_KEYS, path='workflow')

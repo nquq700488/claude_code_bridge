@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from provider_custom.wiring import custom_provider_names, custom_provider_wiring
+
 _PROVIDER_MODEL_FLAGS = {
     'codex': ('-m', '--model'),
     'claude': ('--model',),
@@ -22,15 +24,33 @@ _PROVIDER_MODEL_RUNTIME_ENV = {
 
 
 def supported_provider_model_shortcuts() -> tuple[str, ...]:
-    return tuple(sorted(set(_PROVIDER_MODEL_FLAGS) | set(_PROVIDER_MODEL_RUNTIME_ENV)))
+    names = set(_PROVIDER_MODEL_FLAGS) | set(_PROVIDER_MODEL_RUNTIME_ENV)
+    for name in custom_provider_names():
+        wiring = custom_provider_wiring(name)
+        if wiring is not None and (wiring.model_env or wiring.model_flag):
+            names.add(name)
+    return tuple(sorted(names))
 
 
 def provider_model_flag_tokens(provider: str) -> tuple[str, ...]:
+    wiring = custom_provider_wiring(provider)
+    if wiring is not None:
+        return (wiring.model_flag,) if wiring.model_flag else ()
     return _PROVIDER_MODEL_FLAGS.get(str(provider or '').strip().lower(), ())
 
 
 def provider_model_startup_args(provider: str, *, model: str) -> tuple[str, ...]:
     normalized = str(provider or '').strip().lower()
+    wiring = custom_provider_wiring(normalized)
+    if wiring is not None:
+        resolved_custom_model = str(model or '').strip()
+        if not resolved_custom_model:
+            raise ValueError('model cannot be empty')
+        if wiring.model_flag:
+            return (wiring.model_flag, resolved_custom_model)
+        if wiring.model_env:
+            return ()
+        raise ValueError(f'custom provider {normalized} does not declare model wiring')
     flag = _PROVIDER_MODEL_STARTUP_FLAGS.get(normalized)
     if flag is None and normalized not in _PROVIDER_MODEL_RUNTIME_ENV:
         supported = ', '.join(supported_provider_model_shortcuts())
@@ -45,6 +65,14 @@ def provider_model_startup_args(provider: str, *, model: str) -> tuple[str, ...]
 
 def provider_model_runtime_env(provider: str, *, model: str | None) -> dict[str, str]:
     normalized = str(provider or '').strip().lower()
+    wiring = custom_provider_wiring(normalized)
+    if wiring is not None:
+        if model is None:
+            return {}
+        resolved_custom_model = str(model).strip()
+        if not resolved_custom_model:
+            raise ValueError('model cannot be empty')
+        return {wiring.model_env: resolved_custom_model} if wiring.model_env else {}
     key = _PROVIDER_MODEL_RUNTIME_ENV.get(normalized)
     if key is None or model is None:
         return {}
@@ -55,6 +83,9 @@ def provider_model_runtime_env(provider: str, *, model: str | None) -> dict[str,
 
 
 def provider_model_runtime_env_keys(provider: str) -> set[str]:
+    wiring = custom_provider_wiring(provider)
+    if wiring is not None:
+        return {wiring.model_env} if wiring.model_env else set()
     key = _PROVIDER_MODEL_RUNTIME_ENV.get(str(provider or '').strip().lower())
     return {key} if key is not None else set()
 

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 from provider_profiles.models import ProviderProfileSpec, ResolvedProviderProfile
 from provider_profiles.codex_home_config import materialize_codex_home_config
 from provider_core.pathing import session_filename_for_agent
+from provider_custom.wiring import custom_provider_wiring
 from storage.atomic import atomic_write_json, atomic_write_json_if_changed
 from storage.paths import PathLayout
 
@@ -132,7 +133,12 @@ def load_resolved_provider_profile(runtime_dir: Path) -> ResolvedProviderProfile
 
 
 def provider_api_env_keys(provider: str) -> set[str]:
-    return set(_API_ENV_KEYS.get(str(provider or '').strip().lower(), set()))
+    normalized = str(provider or '').strip().lower()
+    keys = set(_API_ENV_KEYS.get(normalized, set()))
+    wiring = custom_provider_wiring(normalized)
+    if wiring is not None:
+        keys.update(k for k in (wiring.key_env, wiring.url_env) if k)
+    return keys
 
 
 def validate_provider_runtime_home_policy(spec: 'AgentSpec') -> None:
