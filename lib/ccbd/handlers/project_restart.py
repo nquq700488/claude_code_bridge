@@ -365,7 +365,10 @@ def _load_agent_provider_session(app, *, agent_name: str, runtime):
 def _session_binding_adapter(app, provider: str):
     bindings = getattr(getattr(app, 'runtime_service', None), '_session_bindings', None)
     if not isinstance(bindings, dict):
-        bindings = build_default_session_binding_map(include_optional=True)
+        bindings = build_default_session_binding_map(
+            include_optional=True,
+            extra_backends=list(getattr(app, 'custom_provider_backends', None) or []),
+        )
     return bindings.get(provider)
 
 

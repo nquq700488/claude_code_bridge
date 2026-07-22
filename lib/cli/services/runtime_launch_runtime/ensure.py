@@ -6,13 +6,16 @@ from time import monotonic_ns
 
 from agents.models import RuntimeMode
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES, build_default_runtime_launcher_map
+from provider_custom.project import load_project_custom_backends
 
 
 _PANE_BACKED_RUNTIME_PROVIDERS = frozenset(CORE_PROVIDER_NAMES + OPTIONAL_PROVIDER_NAMES)
 
 
-def runtime_launcher(provider: str):
-    return build_default_runtime_launcher_map(include_optional=True).get(str(provider or '').strip().lower())
+def runtime_launcher(provider: str, *, extra_backends=None):
+    return build_default_runtime_launcher_map(include_optional=True, extra_backends=extra_backends).get(
+        str(provider or '').strip().lower()
+    )
 
 
 def ensure_agent_runtime(
@@ -33,6 +36,8 @@ def ensure_agent_runtime(
     tmux_socket_path: str | None = None,
 ):
     launcher = _pane_backed_launcher(spec)
+    if launcher is None:
+        launcher = _custom_provider_launcher(context, spec)
     if launcher is None:
         return runtime_launch_result_cls(launched=False, binding=binding)
     if _binding_is_reusable(
@@ -103,6 +108,20 @@ def _pane_backed_launcher(spec):
     if spec.provider not in _PANE_BACKED_RUNTIME_PROVIDERS:
         return None
     return runtime_launcher(spec.provider)
+
+
+def _custom_provider_launcher(context, spec):
+    if spec.runtime_mode is not RuntimeMode.PANE_BACKED:
+        return None
+    provider = str(getattr(spec, 'provider', '') or '').strip().lower()
+    if not provider or provider in _PANE_BACKED_RUNTIME_PROVIDERS:
+        return None
+    project_root = getattr(getattr(context, 'paths', None), 'project_root', None)
+    if project_root is None:
+        return None
+    # 每次 launch 加载一次配置有 IO 开销——可接受（launch 是低频操作），不做缓存。
+    extra_backends, _errors = load_project_custom_backends(project_root)
+    return runtime_launcher(provider, extra_backends=extra_backends)
 
 
 def _binding_is_reusable(

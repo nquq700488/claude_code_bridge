@@ -29,6 +29,7 @@ from agents.models import (
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
 from provider_custom.parsing import CustomProviderConfigError, parse_providers_section
 from provider_custom.wiring import (
+    custom_provider_names,
     restore_custom_provider_state,
     snapshot_custom_provider_state,
     sync_custom_provider_wirings,
@@ -853,9 +854,13 @@ def _provider(value: object, *, path: str) -> str:
     if not isinstance(value, str):
         _fail('v3_type_invalid', path, 'provider must be a string')
     provider = value.strip().lower()
-    if provider not in _KNOWN_PROVIDERS and not _allows_source_test_fake_provider(provider):
-        _fail('v3_provider_unknown', path, f'unknown provider: {provider or "<empty>"}')
-    return provider
+    if (
+        provider in _KNOWN_PROVIDERS
+        or provider in custom_provider_names()
+        or _allows_source_test_fake_provider(provider)
+    ):
+        return provider
+    _fail('v3_provider_unknown', path, f'unknown provider: {provider or "<empty>"}')
 
 
 def _allows_source_test_fake_provider(provider: str) -> bool:
