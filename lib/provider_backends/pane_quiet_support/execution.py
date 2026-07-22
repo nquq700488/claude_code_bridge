@@ -17,7 +17,7 @@ from provider_core.protocol import DONE_PREFIX, request_anchor_for_job
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import error_submission, send_prompt_to_runtime_target
 
-from .protocol import extract_reply_for_req, pane_contains_req_anchor, wrap_pane_quiet_prompt
+from .protocol import REQ_ID_PREFIX, extract_reply_for_req, pane_contains_req_anchor, wrap_pane_quiet_prompt
 from .reader import PaneSnapshotReader
 
 
@@ -304,6 +304,18 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
 
     anchor_present = bool(content) and pane_contains_req_anchor(content, req_id)
     state["anchor_present"] = anchor_present
+
+    # quiet_only 模式不含 done 指令，extract_reply_for_req 需要 marker 才能
+    # 提取回复正文。静默完成时改为取锚点之后全部文本作为 reply。
+    if completion_mode == 'quiet_only' and not reply and anchor_present:
+        marker = f'{REQ_ID_PREFIX} {req_id}'
+        idx = content.rfind(marker)
+        if idx >= 0:
+            after = content[idx + len(marker):]
+            # 跳过锚点行换行符
+            reply = after.lstrip('\n').rstrip()
+            state['reply_chars'] = len(reply)
+            state['quiet_only_extracted'] = True
 
     if completion_mode != 'quiet_only' and done_seen and reply:
         return _terminal(
