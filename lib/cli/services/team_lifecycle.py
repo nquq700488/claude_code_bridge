@@ -86,23 +86,25 @@ def team_up(context, command) -> dict:
     protocols = render_team_protocol(team)
 
     # 逐成员写 lifecycle 状态 + 协议注入
+    ok_members = []
     for m in team.members:
         try:
             _write_member_lifecycle(context, root, m)
             _write_member_protocol(root, m.name, protocols.get(m.name, ''))
             member_results.append({'name': m.name, 'ok': True})
+            ok_members.append(m)
         except Exception as exc:
             member_results.append({'name': m.name, 'ok': False, 'error': str(exc)})
 
-    # 写 team 实例状态
+    # 写 team 实例状态（仅记录成功的成员，失败可重试）
     definition_hash = _team_definition_hash(team)
     _write_team_instance(root, team_name, {
         'team_name': team_name,
         'topology': team.topology,
         'upped_at': _utc_now(),
         'definition_hash': definition_hash,
-        'status': 'running',
-        'members': [{'name': m.name, 'provider': m.provider} for m in team.members],
+        'status': 'running' if ok_members else 'partial',
+        'members': [{'name': m.name, 'provider': m.provider} for m in ok_members],
     })
 
     # 触发 reload

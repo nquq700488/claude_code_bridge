@@ -184,9 +184,12 @@ def _make_handler(data: dict):
             self._send(status, body, 'application/json; charset=utf-8')
 
         def _read_json_body(self):
-            length = int(self.headers.get('Content-Length', '0') or '0')
-            if length > 65536:  # 64 KiB limit
-                raise ValueError('request body too large')
+            try:
+                length = int(self.headers.get('Content-Length', '0') or '0')
+            except (ValueError, TypeError):
+                length = 0
+            if length < 0 or length > 65536:  # 0-64 KiB
+                raise ValueError('invalid Content-Length')
             if length == 0:
                 return {}
             raw = self.rfile.read(length)
