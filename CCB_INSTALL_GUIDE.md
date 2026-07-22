@@ -486,6 +486,43 @@ timeout_secs = 30
 
 **marker 档适用条件**：目标 CLI 需能输出约定标记——通常靠 prompt 包装或 wrapper 脚本引导；不满足时用 `quiet` 档兜底（超时降级提取 pane 文本，置信度标注 DEGRADED）。
 
+#### 自定义 Team `[teams.<name>]`（v8.3.0+）
+
+定义多 Agent 编组预设，四种拓扑模板自动生成协作协议注入各成员：
+
+```toml
+[teams.review-squad]
+description = "多模型代码审查小组"
+topology = "review-loop"         # hub-spoke | review-loop | mesh | debate（必填）
+
+[[teams.review-squad.members]]
+name = "squad-leader"            # 全局唯一 agent 名（必填）
+provider = "claude"              # 内置或自定义 provider（必填）
+description = "接收任务、分派、汇总"
+
+[[teams.review-squad.members]]
+name = "squad-coder"
+provider = "codex"
+description = "实现与修改代码"
+model = "gpt-5"                  # 可选，agent 级覆盖
+
+[[teams.review-squad.members]]
+name = "squad-reviewer"
+provider = "aider"               # 自定义/内置 provider 混编
+description = "按 rubric 打分审查"
+
+[teams.review-squad.policy]
+leader = "squad-leader"          # hub-spoke/debate 的汇总者
+rounds_max = 3                   # review-loop 最大轮次
+pass_score = 7.0                 # review-loop 通过线
+```
+
+规则：
+- `members` 最少 2 个，`name` 不得与已有 agent 冲突
+- `provider` 必须是已注册 provider（内置或已 reload 生效的自定义），否则 `team up` 报错
+- `topology` 决定协议注入模板（hub-spoke/review-loop/mesh/debate）
+- team 定义变更走 reload；已 up 实例不受影响，`team status` 提示定义变更
+
 #### 项目级共享记忆 `.ccb/ccb_memory.md`（v6.2.1+）
 
 在项目根目录创建 `.ccb/ccb_memory.md`，写入项目级的工作流指南、代码规范、架构约定等。所有 Agent 在启动时都会读取这份共享记忆，无需在每个 Agent 的 `memory.md` 中重复定义。
@@ -1255,6 +1292,12 @@ ccb reinstall          # 重新安装
 ccb provider list [--json]                    # 列出 [providers.*] 定义
 ccb provider add <name> --mode pane|oneshot --command "..." [--completion ...] [--no-reload]
 ccb provider remove <name> [--no-reload]      # 有 agent 引用时拒绝
+
+# Team 编组（v8.3.0+）
+ccb team list [--json]                        # 列出 [teams.*] 定义与实例状态
+ccb team up <name> [--window NAME] [--parked] [--json]
+ccb team down <name> [--unload] [--json]
+ccb team status <name> [--json]
 
 # Agent 间通信（在 Agent 内部使用）
 /ask <agent> <message>            # 向指定 Agent 委派任务（默认同步等待回复）
