@@ -45,6 +45,7 @@ class ProjectConfig:
     loop_capacity: LoopCapacityConfig | None = None
     workflow: WorkflowConfig | None = None
     custom_providers: dict[str, CustomProviderSpec] = field(default_factory=dict)
+    teams: dict[str, object] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.version not in {CONFIG_SCHEMA_V2, CONFIG_SCHEMA_V3}:
@@ -111,6 +112,11 @@ class ProjectConfig:
                 for name, spec in dict(self.custom_providers or {}).items()
             },
         )
+        object.__setattr__(
+            self,
+            'teams',
+            {str(name).strip().lower(): spec for name, spec in dict(self.teams or {}).items()},
+        )
 
     def to_record(self) -> dict[str, Any]:
         payload = {
@@ -149,6 +155,8 @@ class ProjectConfig:
             payload['providers'] = {
                 name: spec.to_record() for name, spec in self.custom_providers.items()
             }
+        if self.teams:
+            payload['teams'] = {name: spec.to_record() for name, spec in self.teams.items()}
         if self.workflow is not None:
             payload['workflow'] = self.workflow.to_record()
         return payload

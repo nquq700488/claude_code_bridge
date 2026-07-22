@@ -325,6 +325,7 @@ def _copy_config(
         loop_capacity=config.loop_capacity,
         workflow=config.workflow,
         custom_providers=config.custom_providers,
+        teams=config.teams,
     )
 
 

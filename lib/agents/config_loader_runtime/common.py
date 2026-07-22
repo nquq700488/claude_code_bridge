@@ -27,6 +27,7 @@ ALLOWED_TOP_LEVEL_KEYS = {
     'maintenance',
     'loop',
     'providers',
+    'teams',
 }
 ALLOWED_PROVIDER_PROFILE_KEYS = {
     'mode',

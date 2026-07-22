@@ -30,6 +30,7 @@ from ..common import (
 from .agent_specs import parse_agents
 from .expectations import expect_bool, expect_mapping, expect_string, expect_string_list
 from .loop_capacity import parse_loop_capacity
+from .teams import parse_teams_section
 from .topology import agents_from_topology_windows, parse_sidebar, parse_sidebar_view, parse_tool_windows, parse_topology_windows
 
 _MAINTENANCE_TOP_LEVEL_KEYS = {'heartbeat'}
@@ -92,6 +93,11 @@ def validate_project_config(
         except CustomProviderConfigError as exc:
             raise ConfigValidationError(str(exc)) from exc
         sync_custom_provider_wirings(custom_providers)
+        raw_teams = document.get('teams')
+        if raw_teams is not None:
+            config_teams = parse_teams_section(raw_teams)
+        else:
+            config_teams = {}
         windows = parse_topology_windows(document.get('windows'))
         tool_windows = parse_tool_windows(document.get('tool_windows'))
         _validate_topology_presence(document, windows=windows, tool_windows=tool_windows)
@@ -122,6 +128,7 @@ def validate_project_config(
             maintenance_heartbeat=maintenance_heartbeat,
             loop_capacity=loop_capacity,
             custom_providers=custom_providers,
+            teams=config_teams,
             source_path=source_path,
         )
     except Exception:
@@ -284,6 +291,7 @@ def _build_project_config(
     maintenance_heartbeat: MaintenanceHeartbeatConfig,
     loop_capacity,
     custom_providers,
+    teams: dict | None = None,
     source_path: Path | None,
 ) -> ProjectConfig:
     try:
@@ -301,6 +309,7 @@ def _build_project_config(
             maintenance_heartbeat=maintenance_heartbeat,
             loop_capacity=loop_capacity,
             custom_providers=custom_providers,
+            teams=teams or {},
             source_path=str(source_path) if source_path else None,
             windows_explicit=windows is not None,
         )
