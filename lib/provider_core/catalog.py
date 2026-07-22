@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from agents.models import RuntimeMode
 
+from .contracts import ProviderBackend
 from .manifests import ProviderManifest
 from .registry import (
     CORE_PROVIDER_NAMES,
@@ -45,11 +46,13 @@ def build_default_provider_catalog(
     *,
     include_optional: bool = True,
     include_test_doubles: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
 ) -> ProviderCatalog:
     return ProviderCatalog(
         manifests=build_default_provider_manifests(
             include_optional=include_optional,
             include_test_doubles=include_test_doubles,
+            extra_backends=extra_backends,
         )
     )
 

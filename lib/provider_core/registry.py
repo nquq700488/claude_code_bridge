@@ -53,11 +53,13 @@ def build_default_backend_registry(
     *,
     include_optional: bool = True,
     include_test_doubles: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
 ) -> ProviderBackendRegistry:
     backends: list[ProviderBackend] = []
     if include_test_doubles:
         backends.extend(build_test_double_backends())
     backends.extend(build_builtin_backends(include_optional=include_optional))
+    backends.extend(extra_backends or [])
     return ProviderBackendRegistry(backends)
 
 
@@ -65,10 +67,12 @@ def build_default_provider_manifests(
     *,
     include_optional: bool = True,
     include_test_doubles: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
 ) -> list[ProviderManifest]:
     return build_default_backend_registry(
         include_optional=include_optional,
         include_test_doubles=include_test_doubles,
+        extra_backends=extra_backends,
     ).manifests()
 
 
@@ -76,24 +80,36 @@ def build_default_execution_adapters(
     *,
     include_optional: bool = True,
     include_test_doubles: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
 ) -> list[ProviderExecutionAdapter]:
     return build_default_backend_registry(
         include_optional=include_optional,
         include_test_doubles=include_test_doubles,
+        extra_backends=extra_backends,
     ).execution_adapters()
 
 
-def build_default_session_binding_map(*, include_optional: bool = True) -> dict[str, ProviderSessionBinding]:
+def build_default_session_binding_map(
+    *,
+    include_optional: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
+) -> dict[str, ProviderSessionBinding]:
     return build_default_backend_registry(
         include_optional=include_optional,
         include_test_doubles=False,
+        extra_backends=extra_backends,
     ).session_bindings()
 
 
-def build_default_runtime_launcher_map(*, include_optional: bool = True) -> dict[str, ProviderRuntimeLauncher]:
+def build_default_runtime_launcher_map(
+    *,
+    include_optional: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
+) -> dict[str, ProviderRuntimeLauncher]:
     return build_default_backend_registry(
         include_optional=include_optional,
         include_test_doubles=False,
+        extra_backends=extra_backends,
     ).runtime_launchers()
 
 

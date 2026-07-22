@@ -29,6 +29,7 @@ from heartbeat import HeartbeatPolicy, HeartbeatStateStore
 from mobile_gateway.project_registry import publish_mobile_gateway_project
 from project.ids import compute_project_id
 from provider_core.catalog import build_default_provider_catalog
+from provider_custom.factory import build_custom_backends
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionService
 from provider_execution.state_store import ExecutionStateStore
@@ -60,6 +61,9 @@ def initialize_app(
     app.clock = clock
     app.pid = pid or os.getpid()
     config = load_project_config(app.project_root).config
+    custom_backends, custom_backend_errors = build_custom_backends(config.custom_providers)
+    app.custom_provider_backends = custom_backends
+    app.custom_provider_errors = custom_backend_errors
     keeper_pid = str(os.environ.get('CCB_KEEPER_PID') or '').strip()
     app.keeper_pid = int(keeper_pid) if keeper_pid.isdigit() and int(keeper_pid) > 0 else None
     app.daemon_instance_id = uuid.uuid4().hex
@@ -67,7 +71,7 @@ def initialize_app(
     app.keeper_startup_checkpoint = keeper_startup_checkpoint
     app.start_maintenance_lock = threading.Lock()
     app._service_graph_publish_lock = threading.Lock()
-    app.provider_catalog = build_default_provider_catalog()
+    app.provider_catalog = build_default_provider_catalog(extra_backends=custom_backends)
     app.mount_manager = MountManager(app.paths, clock=app.clock)
     app.lifecycle_store = CcbdLifecycleStore(app.paths)
     app.restore_report_store = CcbdRestoreReportStore(app.paths)
@@ -82,7 +86,7 @@ def initialize_app(
     app.restore_store = AgentRestoreStore(app.paths)
     app.project_namespace = ProjectNamespaceController(app.paths, app.project_id, clock=app.clock)
     app.snapshot_writer = SnapshotWriter(app.paths, clock=app.clock)
-    app.execution_registry = build_default_execution_registry()
+    app.execution_registry = build_default_execution_registry(extra_backends=custom_backends)
     app.fault_injection = FaultInjectionService(app.paths, clock=app.clock)
     app.execution_service = ExecutionService(
         app.execution_registry,
@@ -121,6 +125,7 @@ def initialize_app(
             remount_project_fn=app._remount_project_from_policy,
             mount_missing_runtime_fn=lambda agent_name: app._mount_missing_runtime_requested(agent_name),
             supervision_suspended_fn=lambda: lifecycle_is_stopping(_safe_load_lifecycle(app)),
+            extra_provider_backends=tuple(custom_backends),
             version=1,
         )
     )

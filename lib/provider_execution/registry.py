@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .base import ProviderExecutionAdapter
+from provider_core.contracts import ProviderBackend
 from provider_core.registry import (
     CORE_PROVIDER_NAMES,
     OPTIONAL_PROVIDER_NAMES,
@@ -33,10 +34,12 @@ def build_default_execution_registry(
     *,
     include_optional: bool = True,
     include_test_doubles: bool = True,
+    extra_backends: list[ProviderBackend] | None = None,
 ) -> ProviderExecutionRegistry:
     return ProviderExecutionRegistry(
         build_default_execution_adapters(
             include_optional=include_optional,
             include_test_doubles=include_test_doubles,
+            extra_backends=extra_backends,
         )
     )

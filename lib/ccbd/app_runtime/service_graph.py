@@ -11,6 +11,7 @@ from ccbd.services import AgentRegistry, HealthMonitor, JobDispatcher, RuntimeSe
 from ccbd.supervision import RuntimeSupervisionLoop
 from ccbd.supervisor import RuntimeSupervisor
 from completion.tracker import CompletionTrackerService
+from provider_core.registry import build_default_session_binding_map
 
 SERVICE_GRAPH_RETAINED_COUNT_SCOPE = 'published_graph_count_not_inflight_retention'
 
@@ -67,6 +68,7 @@ class CcbdServiceGraphDependencies:
     remount_project_fn: Callable[[str], None] | None = None
     mount_missing_runtime_fn: Callable[[str], bool] | None = None
     supervision_suspended_fn: Callable[[], bool] | None = None
+    extra_provider_backends: tuple = ()
     version: int = 1
     created_at: str | None = None
 
@@ -79,6 +81,7 @@ def build_ccbd_service_graph(deps: CcbdServiceGraphDependencies) -> CcbdServiceG
         registry,
         deps.project_id,
         deps.restore_store,
+        session_bindings=build_default_session_binding_map(extra_backends=list(deps.extra_provider_backends)),
         daemon_generation_getter=deps.daemon_generation_getter,
         clock=deps.clock,
     )
