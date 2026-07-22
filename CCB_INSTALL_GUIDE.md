@@ -434,6 +434,58 @@ Agent 配置字段：
 | `queue_policy` | string | 任务队列策略，如 `"serial-per-agent"`（串行单 Agent） |
 | `permission` | string | 权限模式：`"auto"` / `"manual"` |
 
+#### 自定义 Provider `[providers.<name>]`（v8.3.0+）
+
+注册任意已安装的 AI CLI 为一等 Provider，无需修改 CCB 源码。支持的两种运行模式：
+
+- **`pane`（常驻交互式）**：Provider 运行在独立 tmux pane 中，通过 CCB 向 pane 发送 prompt，监听文本变化检测完成（marker 标记 / quiet 静默超时）
+- **`oneshot`（一次性问答）**：每次请求启动新进程，stdout 输出即为回复（进程退出 / marker 标记 / 超时兜底）
+
+完整 Schema（pane 模式）：
+
+```toml
+[providers.aider]
+mode = "pane"                         # 必需："pane" 或 "oneshot"
+command = "aider --dark-mode"         # 必需：启动 CLI 的完整命令
+completion = "marker"                 # 完成检测方式："marker"（默认）/ "quiet" / "exit"（仅 oneshot）
+marker = "DONE_MARKER:"               # marker 模式下的完成标记（默认 "CCB_DONE:"）
+quiet_secs = 4.0                      # quiet 模式下的静默超时秒数（默认 4.0）
+timeout_secs = 300                    # oneshot 整体超时秒数（默认 300）
+description = "Aider AI coding assistant"
+home_env = "/path/to/aider/home"      # 自定义 home 目录环境变量
+
+key = "sk-..."                        # API Key（明文，生产环境建议用 $ENV）
+url = "https://api.example.com/v1"    # API Base URL
+model = "gpt-5"                       # 默认模型名称
+model_flag = "--model"                # 模型参数 CLI 标志（如 --model / -m）
+
+key_env = "AIDER_API_KEY"             # 从环境变量读取 key（$ENV 间接引用）
+url_env = "AIDER_API_URL"             # 从环境变量读取 url
+
+# 额外环境变量注入
+env = { "CUSTOM" = "value" }
+```
+
+Oneshot 模式额外字段：
+
+```toml
+[providers.px]
+mode = "oneshot"
+command = "px run --format text"
+prompt_mode = "arg"                   # "arg" 命令行参数 / "stdin" 标准输入
+completion = "marker"                 # "marker" / "exit"（exit 即进程退出完成）
+timeout_secs = 30
+```
+
+**字段规则**：
+
+- `mode` 和 `command` 必需；pane 默认 `completion = "marker"`（`marker` 与 `quiet_secs` 共存，`quiet_secs` 超时降级提取 pane 全部文本）
+- `$ENV` 间接引用：`key = "$OPENAI_API_KEY"` 从环境变量读取（保护凭据不入 git）
+- `model_env` 与 `model_flag` 互斥：前者走环境变量注入，后者走 CLI `--flag value` 装配
+- Agent 级 `key`/`url`/`model` 可覆盖 Provider 默认值；Agent 未声明接线时使用配置时会报错
+
+**marker 档适用条件**：目标 CLI 需能输出约定标记——通常靠 prompt 包装或 wrapper 脚本引导；不满足时用 `quiet` 档兜底（超时降级提取 pane 文本，置信度标注 DEGRADED）。
+
 #### 项目级共享记忆 `.ccb/ccb_memory.md`（v6.2.1+）
 
 在项目根目录创建 `.ccb/ccb_memory.md`，写入项目级的工作流指南、代码规范、架构约定等。所有 Agent 在启动时都会读取这份共享记忆，无需在每个 Agent 的 `memory.md` 中重复定义。
@@ -1019,6 +1071,14 @@ export CCB_PYTHON_BIN=/opt/homebrew/bin/python3.12
 
 ---
 
+### Q18: 自定义 CLI 接 CCB 用 pane 还是 oneshot？（v8.3.0+）
+
+- **常驻交互式 CLI**（如 aider、kimi、自定义 chat）→ 用 **pane** 模式。CCB 为其创建 tmux pane，通过 `send-keys` 发送 prompt。无需每次启动新进程，适合多轮对话。
+- **一次性问答 CLI**（如自定义脚本、curl 包装）→ 用 **oneshot** 模式。每次请求启动新进程，stdout 作为回复。进程退出或输出完成标记即完成。
+- 不确定时先试 oneshot——它不依赖 tmux，集成最简单。确认基础通信可行后再迁到 pane 以获得更好的多轮体验。
+
+---
+
 ## 配置文件速查
 
 | 文件 | 位置 | 作用 |
@@ -1190,6 +1250,11 @@ ccb tools doctor <tool>          # 诊断托管工具健康状态
 ./install.sh uninstall # 卸载
 ccb update             # 更新到最新版
 ccb reinstall          # 重新安装
+
+# 自定义 Provider（v8.3.0+）
+ccb provider list [--json]                    # 列出 [providers.*] 定义
+ccb provider add <name> --mode pane|oneshot --command "..." [--completion ...] [--no-reload]
+ccb provider remove <name> [--no-reload]      # 有 agent 引用时拒绝
 
 # Agent 间通信（在 Agent 内部使用）
 /ask <agent> <message>            # 向指定 Agent 委派任务（默认同步等待回复）
