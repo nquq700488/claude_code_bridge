@@ -38,6 +38,7 @@ from .handlers_ops import (
     handle_question,
     handle_reload,
     handle_restart,
+    handle_team,
 )
 from .handlers_start import handle_config_ui, handle_config_validate, handle_start
 
@@ -78,6 +79,7 @@ _HANDLERS = {
     'restart': handle_restart,
     'retry': handle_retry,
     'start': handle_start,
+    'team': handle_team,
     'trace': handle_trace,
     'wait': handle_wait,
     'watch': handle_watch,

@@ -86,6 +86,18 @@ class ParsedProviderCommand:
 
 
 @dataclass(frozen=True)
+class ParsedTeamCommand:
+    project: str | None
+    action: str              # list | up | down | status
+    team_name: str | None = None
+    window: str | None = None
+    parked: bool = False
+    unload: bool = False
+    json_output: bool = False
+    kind: str = 'team'
+
+
+@dataclass(frozen=True)
 class ParsedLayoutCommand:
     project: str | None
     action: str
@@ -294,6 +306,7 @@ __all__ = [
     'ParsedPingCommand',
     'ParsedProviderCommand',
     'ParsedPsCommand',
+    'ParsedTeamCommand',
     'ParsedQuestionCommand',
     'ParsedReloadCommand',
     'ParsedRestartCommand',

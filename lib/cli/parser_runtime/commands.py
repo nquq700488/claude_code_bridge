@@ -27,6 +27,7 @@ from cli.models import (
     ParsedPingCommand,
     ParsedProviderCommand,
     ParsedPsCommand,
+    ParsedTeamCommand,
     ParsedQuestionCommand,
     ParsedQueueCommand,
     ParsedReloadCommand,
@@ -1174,6 +1175,50 @@ def parse_provider(tokens: list[str], *, project: str | None, error_type) -> Par
     raise error_type(f'unknown provider action: {action}')
 
 
+def parse_team(tokens: list[str], *, project: str | None, error_type) -> ParsedTeamCommand:
+    if not tokens:
+        raise error_type('team requires one of: list, up, down, status')
+    action = str(tokens[0] or '').strip().lower()
+    rest = tokens[1:]
+    if action == 'list':
+        parser = argparse.ArgumentParser(prog='ccb team list', add_help=False)
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid team list command', error_type=error_type)
+        return ParsedTeamCommand(project=project, action='list', json_output=bool(namespace.json))
+    if action == 'up':
+        parser = argparse.ArgumentParser(prog='ccb team up', add_help=False)
+        parser.add_argument('name')
+        parser.add_argument('--window', default=None)
+        parser.add_argument('--parked', action='store_true')
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid team up command', error_type=error_type)
+        return ParsedTeamCommand(
+            project=project, action='up', team_name=namespace.name,
+            window=namespace.window, parked=bool(namespace.parked),
+            json_output=bool(namespace.json),
+        )
+    if action == 'down':
+        parser = argparse.ArgumentParser(prog='ccb team down', add_help=False)
+        parser.add_argument('name')
+        parser.add_argument('--unload', action='store_true')
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid team down command', error_type=error_type)
+        return ParsedTeamCommand(
+            project=project, action='down', team_name=namespace.name,
+            unload=bool(namespace.unload), json_output=bool(namespace.json),
+        )
+    if action == 'status':
+        parser = argparse.ArgumentParser(prog='ccb team status', add_help=False)
+        parser.add_argument('name')
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid team status command', error_type=error_type)
+        return ParsedTeamCommand(
+            project=project, action='status', team_name=namespace.name,
+            json_output=bool(namespace.json),
+        )
+    raise error_type(f'unknown team action: {action}')
+
+
 def _parse_csv_values(text: str) -> tuple[str, ...]:
     values = tuple(item.strip() for item in str(text or '').split(',') if item.strip())
     return values
@@ -1199,11 +1244,13 @@ __all__ = [
     'parse_provider',
     'parse_ps',
     'parse_queue',
+    'parse_question',
     'parse_repair',
     'parse_reload',
     'parse_resubmit',
     'parse_restart',
     'parse_retry',
+    'parse_team',
     'parse_trace',
     'parse_wait',
     'parse_watch',

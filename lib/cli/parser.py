@@ -33,6 +33,7 @@ from .parser_runtime import (
     parse_provider,
     parse_ps,
     parse_question,
+    parse_team,
     parse_queue,
     parse_repair,
     parse_reload,
@@ -80,6 +81,7 @@ _COMMAND_PARSERS = {
     'fault': parse_fault,
     'reload': parse_reload,
     'provider': parse_provider,
+    'team': parse_team,
 }
 
 

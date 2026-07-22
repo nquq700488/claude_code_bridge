@@ -253,6 +253,46 @@ def write_provider_admin_text(out, command, result) -> int:
     return 0
 
 
+def handle_team(context, command, out, services) -> int:
+    result = services.team_lifecycle(context, command)
+    if getattr(command, 'json_output', False):
+        out.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+        out.write('\n')
+        return 0
+    action = str(getattr(command, 'action', '') or '')
+    lines: list[str] = []
+    if action == 'list':
+        teams = result.get('teams') or {}
+        if not teams:
+            lines.append('no teams defined')
+        for name in sorted(teams):
+            info = teams[name]
+            lines.append(f'{name}: topology={info.get("topology")} members={info.get("member_count", 0)}')
+            status = info.get('instance_status')
+            if status:
+                lines.append(f'  status: {status}')
+    elif action == 'up':
+        lines.append(f'team up: {result.get("team")}')
+        for member_result in result.get('members') or []:
+            status = 'OK' if member_result.get('ok') else f'FAILED: {member_result.get("error")}'
+            lines.append(f'  {member_result["name"]}: {status}')
+    elif action == 'down':
+        lines.append(f'team down: {result.get("team")}')
+    elif action == 'status':
+        lines.append(f'team: {result.get("team")}')
+        lines.append(f'status: {result.get("status")}')
+        if result.get('definition_changed'):
+            lines.append('warning: team definition has changed since up')
+        for m in result.get('members') or []:
+            lines.append(f'  {m["name"]} ({m["provider"]}): {m.get("state", "unknown")}')
+    else:
+        lines.append(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    for line in lines:
+        out.write(line)
+        out.write('\n')
+    return 0
+
+
 __all__ = [
     'handle_agent',
     'handle_cleanup',
@@ -277,4 +317,5 @@ __all__ = [
     'handle_ps',
     'handle_question',
     'handle_reload',
+    'handle_team',
 ]

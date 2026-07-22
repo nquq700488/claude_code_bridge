@@ -35,6 +35,7 @@ SUBCOMMANDS = {
     'restart',
     'reload',
     'provider',
+    'team',
 }
 
 ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode'}

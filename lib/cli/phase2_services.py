@@ -71,6 +71,7 @@ from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.provider_admin import ProviderAdminError, provider_add, provider_list, provider_remove
 from cli.services.ps import ps_summary
+from cli.services.team_lifecycle import team_list, team_up, team_down, team_status
 from cli.services.queue import queue_target
 from cli.services.reload import reload_config
 from cli.services.restart import restart_agent
@@ -91,6 +92,19 @@ def _provider_admin(context, command):
     if action == 'remove':
         return provider_remove(context, command)
     raise ProviderAdminError(f'unknown provider action: {action}')
+
+
+def _team_lifecycle(context, command):
+    action = str(getattr(command, 'action', '') or '')
+    if action == 'list':
+        return team_list(context, command)
+    if action == 'up':
+        return team_up(context, command)
+    if action == 'down':
+        return team_down(context, command)
+    if action == 'status':
+        return team_status(context, command)
+    raise ValueError(f'unknown team action: {action}')
 
 
 def build_phase2_dispatch_services(**overrides):
@@ -175,6 +189,7 @@ def build_phase2_dispatch_services(**overrides):
         retry_attempt=retry_attempt,
         start_agents=start_agents,
         submit_ask=submit_ask,
+        team_lifecycle=_team_lifecycle,
         trace_target=trace_target,
         validate_config_context=validate_config_context,
         wait_for_replies=wait_for_replies,
