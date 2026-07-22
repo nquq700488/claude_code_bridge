@@ -16,6 +16,8 @@ from provider_core.caller_env import (
 )
 from provider_core.contracts import ProviderRuntimeLauncher
 from provider_core.runtime_shared import apply_provider_command_template, provider_start_parts
+from provider_model_shortcuts import provider_model_runtime_env
+from provider_profiles.materializer import load_resolved_provider_profile
 from workspace.models import WorkspacePlan
 
 
@@ -119,9 +121,15 @@ def build_start_cmd(
     ]
     cmd = " ".join(shlex.quote(str(part)) for part in cmd_parts)
     cmd = apply_provider_command_template(cmd, spec.provider_command_template)
+    # profile 文件不存在时 load_resolved_provider_profile 返回 None（materializer 已核实）；
+    # 优先级保持 deepseek 既有语义：profile < spec.env < model runtime env。
+    resolved_profile = load_resolved_provider_profile(runtime_dir)
+    profile_env = dict(resolved_profile.env) if resolved_profile is not None else {}
     env_prefix = join_env_prefix(
         export_env_clause(provider_user_session_env()),
+        export_env_clause(profile_env),
         export_env_clause(spec.env),
+        export_env_clause(provider_model_runtime_env(spec.provider, model=spec.model)),
         export_env_clause(_provider_home_env(config, home_dir)),
         export_env_clause(_dynamic_visible_env(config, launch_context)),
         export_env_clause(

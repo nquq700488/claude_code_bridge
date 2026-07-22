@@ -79,6 +79,7 @@ class NativeCliExecutionConfig:
     timeout_reason: str = ""
     run_timeout_s: float = 900.0
     terminal_on_process_exit: bool = True
+    prompt_via_stdin: bool = False
 
     def reason(self, name: str) -> str:
         explicit = str(getattr(self, name) or "").strip()
@@ -189,12 +190,20 @@ def _start_submission(
     cmd = config.command_builder(request)
     env = _native_cli_env(config, request)
 
+    stdin_handle = None
     try:
+        if config.prompt_via_stdin:
+            # 文件重定向（非管道写）：prompt 先落临时文件再以文件句柄作 stdin，
+            # 避免向管道写大 prompt 阻塞调用线程。
+            prompt_stdin_path = stdout_path.with_suffix('.stdin.txt')
+            prompt_stdin_path.write_text(prompt, encoding='utf-8')
+            stdin_handle = prompt_stdin_path.open('r', encoding='utf-8')
         with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
             proc = subprocess.Popen(
                 cmd,
                 cwd=str(work_dir),
                 env=env,
+                stdin=stdin_handle,
                 stdout=stdout,
                 stderr=stderr,
                 text=True,
@@ -209,6 +218,9 @@ def _start_submission(
             reason=config.reason("start_failed_reason"),
             error=f"{type(exc).__name__}: {exc}",
         )
+    finally:
+        if stdin_handle is not None:
+            stdin_handle.close()  # Popen 已 dup fd，关闭句柄不影响子进程
 
     _RUN_PROCS[_proc_key(provider, job.job_id)] = proc
     state = {
