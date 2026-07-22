@@ -52,6 +52,37 @@ def team_up(context, command) -> dict:
             ],
             'status': 'already_running',
         }
+    if existing and existing.get('status') == 'partial':
+        # 重试失败成员：只添加缺失的
+        existing_names = {m['name'] for m in existing.get('members', [])}
+        retry_members = [m for m in team.members if m.name not in existing_names]
+        protocols = render_team_protocol(team)
+        retry_results = []
+        for m in retry_members:
+            try:
+                _write_member_lifecycle(context, root, m)
+                _write_member_protocol(root, m.name, protocols.get(m.name, ''))
+                retry_results.append({'name': m.name, 'ok': True})
+            except Exception as exc:
+                retry_results.append({'name': m.name, 'ok': False, 'error': str(exc)})
+        # 更新 instance 状态
+        all_members = existing.get('members', []) + [
+            {'name': r['name'], 'provider': team.members[0].provider}
+            for r in retry_results if r.get('ok')
+        ]
+        all_ok = len(all_members) == len(team.members)
+        existing['members'] = all_members
+        existing['status'] = 'running' if all_ok else 'partial'
+        existing['upped_at'] = _utc_now()
+        _write_team_instance(root, team_name, existing)
+        _trigger_reload(context)
+        return {
+            'team': team_name,
+            'members': retry_results + [
+                {'name': m['name'], 'ok': True, 'state': 'existing'} for m in existing.get('members', [])
+            ],
+            'status': 'retried_partial',
+        }
     if existing and existing.get('status') == 'parked':
         # 恢复 parked team：重新激活所有成员
         for m in existing.get('members', []):
@@ -98,12 +129,13 @@ def team_up(context, command) -> dict:
 
     # 写 team 实例状态（仅记录成功的成员，失败可重试）
     definition_hash = _team_definition_hash(team)
+    all_ok = len(ok_members) == len(team.members)
     _write_team_instance(root, team_name, {
         'team_name': team_name,
         'topology': team.topology,
         'upped_at': _utc_now(),
         'definition_hash': definition_hash,
-        'status': 'running' if ok_members else 'partial',
+        'status': 'running' if all_ok else 'partial',
         'members': [{'name': m.name, 'provider': m.provider} for m in ok_members],
     })
 
