@@ -120,10 +120,16 @@ def _validate_config_text(root: Path, text: str) -> None:
 
 
 def _provider_references(root: Path, name: str) -> list[str]:
-    # M1 范围说明：只检查 config.agents（含动态 agent overlay）。
-    # [teams.*] 数据模型在 M2 才存在，届时本函数扩展为 agents ∪ team 成员（M2 计划须回填此点）。
+    # 检查 config.agents（含动态 agent overlay）+ team 成员引用
     config = load_project_config(root).config
-    return [agent_name for agent_name, spec in config.agents.items() if spec.provider == name]
+    refs = [agent_name for agent_name, spec in config.agents.items() if spec.provider == name]
+    for team_name, team_spec in (config.teams or {}).items():
+        for member in (getattr(team_spec, 'members', None) or ()):
+            member_name = getattr(member, 'name', None)
+            member_provider = getattr(member, 'provider', None)
+            if member_provider == name and member_name is not None:
+                refs.append(f'{member_name} (team {team_name})')
+    return refs
 
 
 def _maybe_reload(context, command) -> str:
