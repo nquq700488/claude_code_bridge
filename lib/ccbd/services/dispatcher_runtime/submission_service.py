@@ -106,9 +106,34 @@ def _drafts_for_agents(dispatcher, request: MessageEnvelope, targets) -> list[_J
                 request=_message_for_agent(request, agent_name=agent_name),
                 target_kind=TargetKind.AGENT,
                 target_name=agent_name,
+                provider_options=_custom_provider_options(spec),
             )
         )
     return drafts
+
+
+def _custom_provider_options(spec) -> dict:
+    """为自定义 provider 作业注入 agent 级 model 覆盖。
+
+    与 callbacks._build_custom_provider_options 保持同步。
+    """
+    provider = str(getattr(spec, 'provider', '') or '').strip().lower()
+    agent_model = str(getattr(spec, 'model', '') or '').strip()
+    if not agent_model or not provider:
+        return {}
+    try:
+        from provider_custom.wiring import custom_provider_wiring
+
+        wiring = custom_provider_wiring(provider)
+        if wiring is None:
+            return {}
+        if wiring.model_flag:
+            return {'model': agent_model, 'model_flag': wiring.model_flag}
+        if wiring.model_env:
+            return {'model': agent_model, 'model_env': wiring.model_env}
+    except ImportError:
+        pass
+    return {}
 
 
 def _require_original_message(dispatcher, message_id: str):

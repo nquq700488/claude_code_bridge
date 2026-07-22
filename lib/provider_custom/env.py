@@ -25,7 +25,6 @@ def provider_level_env(spec: CustomProviderSpec) -> dict[str, str]:
 
 def build_oneshot_env_builder(spec: CustomProviderSpec):
     base = provider_level_env(spec)
-    _model_env = spec.model_env
 
     def env_builder(request) -> dict[str, str]:
         env = dict(base)
