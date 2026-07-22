@@ -185,6 +185,8 @@ def _make_handler(data: dict):
 
         def _read_json_body(self):
             length = int(self.headers.get('Content-Length', '0') or '0')
+            if length > 65536:  # 64 KiB limit
+                raise ValueError('request body too large')
             if length == 0:
                 return {}
             raw = self.rfile.read(length)
@@ -315,15 +317,15 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         from_actor = request.get('from_actor', '') if isinstance(request, dict) else ''
         to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
 
-        # Ask event
-        if request_body:
+        # Ask event — only emit if the job itself is new (created_at after cursor)
+        if request_body and (not cursor or job.get('created_at', '') > cursor):
             events.append({
                 'type': 'ask',
                 'from': from_actor or 'user',
                 'from_provider': 'human' if from_actor == 'human' else provider,
                 'to': to_agent,
                 'body': str(request_body)[:2000],
-                'time': ts,
+                'time': job.get('created_at', ts),
                 'job_id': jid,
             })
 
