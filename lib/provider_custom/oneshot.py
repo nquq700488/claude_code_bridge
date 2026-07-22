@@ -31,13 +31,25 @@ def build_custom_oneshot_backend(spec: CustomProviderSpec) -> ProviderBackend:
     # （agent 级 model shortcut 经 startup_args 仍优先生效于 pane 启动；
     #  oneshot 每次执行都是新进程，provider 默认值必须进 command_builder）
     default_model = resolve_env_value(spec.model)
-    if spec.model_flag and default_model:
-        argv = [*argv, spec.model_flag, default_model]
+    # 保存 provider 默认值以便 command_builder 按需重建
+    _base_argv = list(argv)
+    _provider_model_flag = spec.model_flag
+    _provider_default_model = default_model
 
     def command_builder(request) -> list[str]:
+        # agent 级 model 覆盖：job.provider_options 中 model/model_flag 替代 provider 默认值
+        provider_opts = dict(getattr(request.job, 'provider_options', None) or {})
+        agent_model = str(provider_opts.get('model') or '').strip()
+        agent_model_flag = str(provider_opts.get('model_flag') or '').strip()
+        if agent_model and agent_model_flag:
+            argv_override = [*_base_argv, agent_model_flag, agent_model]
+        elif _provider_model_flag and _provider_default_model:
+            argv_override = [*_base_argv, _provider_model_flag, _provider_default_model]
+        else:
+            argv_override = list(_base_argv)
         if prompt_via_stdin:
-            return list(argv)
-        return [*argv, request.prompt]
+            return argv_override
+        return [*argv_override, request.prompt]
 
     observer = observe_stdout_output
     if spec.completion == 'marker':

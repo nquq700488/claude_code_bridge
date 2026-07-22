@@ -133,6 +133,7 @@ def test_provider_level_model_flag_assembled_into_command():
 
     class _Req:
         prompt = 'hello'
+        job = None  # 无 agent 覆盖时 job 为 None，回退 provider 默认值
 
     cmd = backend.execution_adapter.config.command_builder(_Req())
     assert cmd[:2] == ['px', 'run']

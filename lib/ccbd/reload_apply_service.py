@@ -173,6 +173,11 @@ def _run_locked(
             app.custom_provider_errors = candidates['errors']
             app.provider_catalog = candidates['provider_catalog']
             app.execution_registry = candidates['execution_registry']
+            # ExecutionService 在启动时持有 registry 快照；reload 后需同步更新，
+            # 否则新 provider 的作业无法获取 execution adapter（Code Review 修正）。
+            execution_service = getattr(app, 'execution_service', None)
+            if execution_service is not None:
+                execution_service._runtime_state.registry = candidates['execution_registry']
         return result
     finally:
         if handoff is not None:

@@ -380,6 +380,9 @@ def _submit_continuation_job(dispatcher, *, request: MessageEnvelope, parent_mes
     dispatcher._registry.spec_for(request.to_agent)
     dispatcher._validate_targets_available((request.to_agent,))
     spec = dispatcher._registry.spec_for(request.to_agent)
+    # 自定义 provider 的 agent 级 model 覆盖：将 AgentSpec.model 注入
+    # provider_options，oneshot adapter 在执行时以此替代 provider 默认值。
+    provider_options = _build_custom_provider_options(spec)
     parent_job_id = str(request.route_options.get('chain_parent_job_id') or '').strip()
     parent_job = get_job(dispatcher, parent_job_id) if parent_job_id else None
     parent_runtime = dispatcher._registry.get(request.to_agent)
@@ -391,7 +394,7 @@ def _submit_continuation_job(dispatcher, *, request: MessageEnvelope, parent_mes
         agent_name=request.to_agent,
         provider=spec.provider,
         provider_instance=None,
-        provider_options={},
+        provider_options=provider_options,
         workspace_path=(
             getattr(parent_job, 'workspace_path', None)
             or getattr(parent_runtime, 'workspace_path', None)
@@ -793,3 +796,29 @@ __all__ = [
     'validate_nested_ask_request',
     'validate_callback_request',
 ]
+
+
+def _build_custom_provider_options(spec) -> dict:
+    """为自定义 provider 作业注入 agent 级 model/model_flag 覆盖。
+
+    oneshot adapter 的 command_builder 会读取 provider_options 中的
+    model/model_flag 以替代 provider 默认值。此函数在 job 创建时从 AgentSpec
+    提取相关字段。
+    """
+    provider = str(getattr(spec, 'provider', '') or '').strip().lower()
+    agent_model = str(getattr(spec, 'model', '') or '').strip()
+    if not agent_model or not provider:
+        return {}
+    try:
+        from provider_custom.wiring import custom_provider_wiring
+
+        wiring = custom_provider_wiring(provider)
+        if wiring is None:
+            return {}
+        if wiring.model_flag:
+            return {'model': agent_model, 'model_flag': wiring.model_flag}
+        if wiring.model_env:
+            return {'model': agent_model, 'model_env': wiring.model_env}
+    except Exception:
+        pass
+    return {}
