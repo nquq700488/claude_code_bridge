@@ -251,106 +251,95 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
     upped_at = instance.get('upped_at', '')
     members = instance.get('members', [])
 
-    events: list[dict] = []
+    # Phase 1: collect latest JobRecord per job_id across ALL members
+    jobs_by_id: dict[str, dict] = {}
     for m in members:
         name = m.get('name', '')
-        provider = m.get('provider', '')
-        if not name:
+        if not name or '..' in name or '/' in name or '\\' in name:
             continue
-        if '..' in name or '/' in name or '\\' in name:
+        jobs_path = root / '.ccb' / 'runtime' / 'agents' / name / 'jobs.jsonl'
+        if not jobs_path.is_file():
             continue
+        for record in _read_jsonl(jobs_path):
+            jid = record.get('job_id', '')
+            ts = record.get('created_at', '')
+            if not jid or not ts:
+                continue
+            if cursor and ts <= cursor:
+                continue
+            if upped_at and ts < upped_at:
+                continue
+            prev = jobs_by_id.get(jid)
+            if prev is None or ts >= prev.get('created_at', ''):
+                jobs_by_id[jid] = record
 
-        agent_dir = root / '.ccb' / 'runtime' / 'agents' / name
+    # Phase 2: collect completion_terminal replies from events.jsonl
+    replies_by_job: dict[str, str] = {}
+    for m in members:
+        name = m.get('name', '')
+        if not name or '..' in name or '/' in name or '\\' in name:
+            continue
+        events_path = root / '.ccb' / 'runtime' / 'agents' / name / 'events.jsonl'
+        if not events_path.is_file():
+            continue
+        for line in _read_jsonl(events_path):
+            if line.get('event') != 'completion_terminal':
+                continue
+            jid = line.get('job_id', '')
+            if not jid:
+                continue
+            ts = line.get('created_at') or line.get('timestamp') or ''
+            if cursor and ts <= cursor:
+                continue
+            if upped_at and ts < upped_at:
+                continue
+            payload = line.get('payload') or {}
+            reply = payload.get('reply', '') if isinstance(payload, dict) else ''
+            if reply and jid not in replies_by_job:
+                replies_by_job[jid] = reply
 
-        # Read jobs.jsonl for ask/status records
-        jobs_path = agent_dir / 'jobs.jsonl'
-        jobs_by_id: dict[str, dict] = {}
-        if jobs_path.is_file():
-            for record in _read_jsonl(jobs_path):
-                job_id = record.get('job_id', '')
-                ts = record.get('created_at', '')
-                if not ts:
-                    continue
-                if cursor and ts <= cursor:
-                    continue
-                if upped_at and ts < upped_at:
-                    continue
-                jobs_by_id[job_id] = record
+    # Phase 3: build deduplicated event list
+    events: list[dict] = []
+    for jid, job in sorted(jobs_by_id.items()):
+        ts = job.get('created_at', '')
+        agent_name = job.get('agent_name', '')
+        provider = ''
+        for m in members:
+            if m.get('name') == agent_name:
+                provider = m.get('provider', '')
+                break
+        request = job.get('request') or {}
+        request_body = request.get('body', '') if isinstance(request, dict) else ''
+        from_actor = request.get('from_actor', '') if isinstance(request, dict) else ''
+        to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
 
-                request = record.get('request') or {}
-                request_body = request.get('body', '') if isinstance(request, dict) else ''
-                status = record.get('status', '')
+        # Ask event
+        if request_body:
+            events.append({
+                'type': 'ask',
+                'from': from_actor or 'user',
+                'from_provider': 'human' if from_actor == 'human' else provider,
+                'to': to_agent,
+                'body': str(request_body)[:2000],
+                'time': ts,
+                'job_id': jid,
+            })
 
-                # Ask event: job has request.body and is not completed
-                if request_body and status not in ('completed', 'terminal'):
-                    body_text = str(request_body)
-                    if len(body_text) > 2000:
-                        body_text = body_text[:2000] + '…'
-                    events.append({
-                        'type': 'ask',
-                        'from': name,
-                        'from_provider': provider,
-                        'body': body_text,
-                        'time': ts,
-                        'job_id': job_id,
-                    })
-
-                # System event: status change
-                if status and status not in ('pending',):
-                    events.append({
-                        'type': 'system',
-                        'from': name,
-                        'from_provider': provider,
-                        'body': f'{name}: job {status}',
-                        'time': ts,
-                        'job_id': job_id,
-                    })
-
-        # Read events.jsonl for reply records
-        events_path = agent_dir / 'events.jsonl'
-        if events_path.is_file():
-            for line in _read_jsonl(events_path):
-                job_id = line.get('job_id', '')
-                ts = line.get('created_at') or line.get('timestamp') or ''
-                if not ts:
-                    continue
-                if cursor and ts <= cursor:
-                    continue
-                if upped_at and ts < upped_at:
-                    continue
-
-                reply = line.get('reply', '')
-                if reply:
-                    body_text = str(reply)
-                    if len(body_text) > 2000:
-                        body_text = body_text[:2000] + '…'
-                    events.append({
-                        'type': 'reply',
-                        'from': name,
-                        'from_provider': provider,
-                        'body': body_text,
-                        'time': ts,
-                        'job_id': job_id,
-                    })
-
-        # Also check jobs for terminal_decision.reply
-        for job_id, record in jobs_by_id.items():
-            terminal_decision = record.get('terminal_decision')
-            if isinstance(terminal_decision, dict):
-                reply = terminal_decision.get('reply', '')
-                if reply:
-                    ts = record.get('created_at', '')
-                    body_text = str(reply)
-                    if len(body_text) > 2000:
-                        body_text = body_text[:2000] + '…'
-                    events.append({
-                        'type': 'reply',
-                        'from': name,
-                        'from_provider': provider,
-                        'body': body_text,
-                        'time': ts,
-                        'job_id': job_id,
-                    })
+        # Reply from events.jsonl or terminal_decision
+        reply = replies_by_job.get(jid, '')
+        if not reply:
+            term = job.get('terminal_decision') or {}
+            reply = term.get('reply', '') if isinstance(term, dict) else ''
+        if reply:
+            events.append({
+                'type': 'reply',
+                'from': agent_name,
+                'from_provider': provider,
+                'body': str(reply)[:2000],
+                'time': ts,
+                'job_id': jid,
+                'reply_to': str(request_body)[:120] if request_body else '',
+            })
 
     events.sort(key=lambda e: e.get('time', ''))
     new_cursor = events[-1]['time'] if events else (cursor or '')

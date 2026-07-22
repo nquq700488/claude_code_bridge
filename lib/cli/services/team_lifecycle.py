@@ -43,7 +43,7 @@ def team_up(context, command) -> dict:
 
     # 幂等检查
     existing = _load_team_instance(root, team_name)
-    if existing:
+    if existing and existing.get('status') == 'running':
         return {
             'team': team_name,
             'members': [
@@ -51,6 +51,19 @@ def team_up(context, command) -> dict:
                 for m in existing.get('members', [])
             ],
             'status': 'already_running',
+        }
+    if existing and existing.get('status') == 'parked':
+        # 恢复 parked team：重新激活所有成员
+        for m in existing.get('members', []):
+            _mark_member_active(root, m['name'])
+        existing['status'] = 'running'
+        existing['upped_at'] = _utc_now()
+        _write_team_instance(root, team_name, existing)
+        _trigger_reload(context)
+        return {
+            'team': team_name,
+            'members': [{'name': m['name'], 'ok': True, 'state': 'resumed'} for m in existing.get('members', [])],
+            'status': 'resumed_from_parked',
         }
 
     # 校验成员名不与已有 agent 冲突（静态 + 动态 overlay）
@@ -327,6 +340,23 @@ def _mark_member_down(context, root: Path, agent_name: str, *, unload: bool = Fa
             else:
                 payload['lifecycle_state'] = 'parked'
                 payload['dispatch_disabled'] = True
+            payload['updated_at'] = _utc_now()
+            _atomic_write_json(lifecycle_path, payload)
+    except Exception:
+        pass
+
+
+def _mark_member_active(root: Path, agent_name: str) -> None:
+    """重新激活被 park 的 team 成员。"""
+    lifecycle_path = _member_lifecycle_path(root, agent_name)
+    if not lifecycle_path.is_file():
+        return
+    try:
+        payload = json.loads(lifecycle_path.read_text(encoding='utf-8'))
+        if isinstance(payload, dict):
+            payload['lifecycle_state'] = 'visible'
+            payload['dispatch_disabled'] = False
+            payload['agent_lifecycle_status'] = 'active'
             payload['updated_at'] = _utc_now()
             _atomic_write_json(lifecycle_path, payload)
     except Exception:

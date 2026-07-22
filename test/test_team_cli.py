@@ -240,3 +240,27 @@ provider = "codex"
         assert result['status'] == 'running'
         assert len(result['members']) == 2
         assert result['definition_changed'] is False
+
+    def test_parked_team_can_resume(self, tmp_path):
+        """park 后的 team 可以重新 up 恢复激活。"""
+        root = _project(tmp_path, _TEAM_CONFIG)
+        ctx = _Ctx(root)
+        team_up(ctx, _Cmd(action='up', team_name='t'))
+        team_down(ctx, _Cmd(action='down', team_name='t'))  # default park
+
+        # 验证 park 状态
+        for name in ('team-a', 'team-b'):
+            lc = root / '.ccb' / 'runtime' / 'agents' / name / 'lifecycle.json'
+            data = json.loads(lc.read_text(encoding='utf-8'))
+            assert data['lifecycle_state'] == 'parked'
+
+        # 重新 up
+        result = team_up(ctx, _Cmd(action='up', team_name='t'))
+        assert result['status'] == 'resumed_from_parked'
+
+        # 验证恢复 active
+        for name in ('team-a', 'team-b'):
+            lc = root / '.ccb' / 'runtime' / 'agents' / name / 'lifecycle.json'
+            data = json.loads(lc.read_text(encoding='utf-8'))
+            assert data['lifecycle_state'] == 'visible'
+            assert data['dispatch_disabled'] is False
