@@ -7,15 +7,16 @@ from ccbd.app_runtime.service_graph import (
 )
 
 
-def build_reload_service_graph(app, new_config):
+def build_reload_service_graph(app, new_config, *, provider_catalog=None, extra_provider_backends=()):
     current = app.current_service_graph()
+    catalog = provider_catalog if provider_catalog is not None else app.provider_catalog
     return build_ccbd_service_graph(
         CcbdServiceGraphDependencies(
             project_root=app.project_root,
             project_id=app.project_id,
             paths=app.paths,
             config=new_config,
-            provider_catalog=app.provider_catalog,
+            provider_catalog=catalog,
             mount_manager=app.mount_manager,
             lifecycle_store=app.lifecycle_store,
             restore_store=app.restore_store,
@@ -36,6 +37,7 @@ def build_reload_service_graph(app, new_config):
             remount_project_fn=getattr(app, '_remount_project_from_policy', None),
             mount_missing_runtime_fn=_mount_missing_runtime_fn(app),
             supervision_suspended_fn=_supervision_suspended_fn(app),
+            extra_provider_backends=tuple(extra_provider_backends),
             version=_next_graph_version(current),
         )
     )

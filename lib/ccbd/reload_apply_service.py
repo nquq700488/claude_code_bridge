@@ -38,6 +38,7 @@ def run_additive_reload_apply(
     publish_graph_fn=None,
     update_lease_config_signature_fn=None,
     update_lifecycle_config_signature_fn=None,
+    reload_provider_candidates=None,
 ):
     if lock_already_held:
         return _run_locked(
@@ -51,6 +52,7 @@ def run_additive_reload_apply(
             publish_graph_fn=publish_graph_fn,
             update_lease_config_signature_fn=update_lease_config_signature_fn,
             update_lifecycle_config_signature_fn=update_lifecycle_config_signature_fn,
+            reload_provider_candidates=reload_provider_candidates,
         )
     lock = getattr(app, 'start_maintenance_lock', None)
     if lock is None:
@@ -65,6 +67,7 @@ def run_additive_reload_apply(
             publish_graph_fn=publish_graph_fn,
             update_lease_config_signature_fn=update_lease_config_signature_fn,
             update_lifecycle_config_signature_fn=update_lifecycle_config_signature_fn,
+            reload_provider_candidates=reload_provider_candidates,
         )
     with lock:
         return _run_locked(
@@ -78,6 +81,7 @@ def run_additive_reload_apply(
             publish_graph_fn=publish_graph_fn,
             update_lease_config_signature_fn=update_lease_config_signature_fn,
             update_lifecycle_config_signature_fn=update_lifecycle_config_signature_fn,
+            reload_provider_candidates=reload_provider_candidates,
         )
 
 
@@ -93,6 +97,7 @@ def _run_locked(
     publish_graph_fn,
     update_lease_config_signature_fn,
     update_lifecycle_config_signature_fn,
+    reload_provider_candidates=None,
 ):
     old_graph = app.current_service_graph()
     namespace, namespace_diagnostics = current_namespace_for_apply(app, current_namespace)
@@ -113,8 +118,14 @@ def _run_locked(
         return noop_result(old_graph, plan)
 
     handoff = begin_reload_handoff(app, target_config_identity=project_config_identity_payload(new_config))
+    candidates = reload_provider_candidates or {}
     try:
-        target_graph = build_reload_service_graph(app, new_config)
+        target_graph = build_reload_service_graph(
+            app,
+            new_config,
+            provider_catalog=candidates.get('provider_catalog'),
+            extra_provider_backends=tuple(candidates.get('backends') or ()),
+        )
         namespace_patch = _namespace_patch_stage(
             app,
             old_graph,
@@ -143,7 +154,7 @@ def _run_locked(
                 runtime_mount,
             )
 
-        return publish_stage(
+        result = publish_stage(
             app,
             old_graph,
             target_graph,
@@ -156,6 +167,13 @@ def _run_locked(
             update_lease_config_signature_fn=update_lease_config_signature_fn,
             update_lifecycle_config_signature_fn=update_lifecycle_config_signature_fn,
         )
+        if candidates and status_of(result) == 'published':
+            # 与 graph 发布同一边界提交 provider 注册表（持锁中，原子）
+            app.custom_provider_backends = candidates['backends']
+            app.custom_provider_errors = candidates['errors']
+            app.provider_catalog = candidates['provider_catalog']
+            app.execution_registry = candidates['execution_registry']
+        return result
     finally:
         if handoff is not None:
             clear_reload_handoff(app)
