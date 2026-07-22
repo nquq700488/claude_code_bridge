@@ -67,7 +67,7 @@ def team_up(context, command) -> dict:
                 retry_results.append({'name': m.name, 'ok': False, 'error': str(exc)})
         # 更新 instance 状态
         all_members = existing.get('members', []) + [
-            {'name': r['name'], 'provider': team.members[0].provider}
+            {'name': r['name'], 'provider': _team_member(team, r['name']).provider}
             for r in retry_results if r.get('ok')
         ]
         all_ok = len(all_members) == len(team.members)
@@ -76,11 +76,14 @@ def team_up(context, command) -> dict:
         existing['upped_at'] = _utc_now()
         _write_team_instance(root, team_name, existing)
         _trigger_reload(context)
+        existing_entries = [
+            {'name': m['name'], 'ok': True, 'state': 'existing'}
+            for m in existing.get('members', [])
+            if m['name'] not in {r['name'] for r in retry_results}
+        ]
         return {
             'team': team_name,
-            'members': retry_results + [
-                {'name': m['name'], 'ok': True, 'state': 'existing'} for m in existing.get('members', [])
-            ],
+            'members': retry_results + existing_entries,
             'status': 'retried_partial',
         }
     if existing and existing.get('status') == 'parked':
@@ -273,6 +276,14 @@ def _valid_provider_names() -> frozenset[str]:
     from provider_command_defaults import SUPPORTED_PROVIDER_NAMES
 
     return frozenset(SUPPORTED_PROVIDER_NAMES) | frozenset(custom_provider_names())
+
+
+def _team_member(team, name: str):
+    """Find a TeamMember by name."""
+    for m in team.members:
+        if m.name == name:
+            return m
+    raise ValueError(f'member {name!r} not in team {team.name!r}')
 
 
 def _team_definition_hash(team) -> str:
