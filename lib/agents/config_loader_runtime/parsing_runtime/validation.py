@@ -14,6 +14,7 @@ from agents.models import (
     normalize_agent_name,
     parse_layout_spec,
 )
+from provider_custom.parsing import CustomProviderConfigError, parse_providers_section
 
 from ..common import (
     ALLOWED_TOP_LEVEL_KEYS,
@@ -76,6 +77,10 @@ def validate_project_config(
         project_root=resolved_project_root,
     )
     _validate_document_shape(document)
+    try:
+        custom_providers = parse_providers_section(document.get('providers'))
+    except CustomProviderConfigError as exc:
+        raise ConfigValidationError(str(exc)) from exc
     windows = parse_topology_windows(document.get('windows'))
     tool_windows = parse_tool_windows(document.get('tool_windows'))
     _validate_topology_presence(document, windows=windows, tool_windows=tool_windows)
@@ -105,6 +110,7 @@ def validate_project_config(
         sidebar_view=sidebar_view,
         maintenance_heartbeat=maintenance_heartbeat,
         loop_capacity=loop_capacity,
+        custom_providers=custom_providers,
         source_path=source_path,
     )
 
@@ -263,6 +269,7 @@ def _build_project_config(
     sidebar_view,
     maintenance_heartbeat: MaintenanceHeartbeatConfig,
     loop_capacity,
+    custom_providers,
     source_path: Path | None,
 ) -> ProjectConfig:
     try:
@@ -279,6 +286,7 @@ def _build_project_config(
             sidebar_view=sidebar_view,
             maintenance_heartbeat=maintenance_heartbeat,
             loop_capacity=loop_capacity,
+            custom_providers=custom_providers,
             source_path=str(source_path) if source_path else None,
             windows_explicit=windows is not None,
         )

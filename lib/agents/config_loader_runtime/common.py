@@ -26,6 +26,7 @@ ALLOWED_TOP_LEVEL_KEYS = {
     'entry_window',
     'maintenance',
     'loop',
+    'providers',
 }
 ALLOWED_PROVIDER_PROFILE_KEYS = {
     'mode',

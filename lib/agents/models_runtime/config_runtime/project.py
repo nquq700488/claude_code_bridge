@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from provider_custom.spec import CustomProviderSpec
 
 from ..names import SCHEMA_VERSION, AgentValidationError
 from .loop_capacity import LoopCapacityConfig
@@ -42,6 +44,7 @@ class ProjectConfig:
     maintenance_heartbeat: MaintenanceHeartbeatConfig | None = None
     loop_capacity: LoopCapacityConfig | None = None
     workflow: WorkflowConfig | None = None
+    custom_providers: dict[str, CustomProviderSpec] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if self.version not in {CONFIG_SCHEMA_V2, CONFIG_SCHEMA_V3}:
@@ -100,6 +103,14 @@ class ProjectConfig:
         object.__setattr__(self, 'loop_capacity', loop_capacity)
         object.__setattr__(self, 'topology_signature_payload', signature_payload)
         object.__setattr__(self, 'topology_signature', topology_signature(signature_payload))
+        object.__setattr__(
+            self,
+            'custom_providers',
+            {
+                str(name).strip().lower(): spec
+                for name, spec in dict(self.custom_providers or {}).items()
+            },
+        )
 
     def to_record(self) -> dict[str, Any]:
         payload = {
@@ -134,6 +145,10 @@ class ProjectConfig:
             'topology_signature': self.topology_signature,
             'source_path': self.source_path,
         }
+        if self.custom_providers:
+            payload['providers'] = {
+                name: spec.to_record() for name, spec in self.custom_providers.items()
+            }
         if self.workflow is not None:
             payload['workflow'] = self.workflow.to_record()
         return payload

@@ -27,6 +27,7 @@ from agents.models import (
     normalize_agent_name,
 )
 from provider_core.registry import CORE_PROVIDER_NAMES, OPTIONAL_PROVIDER_NAMES
+from provider_custom.parsing import CustomProviderConfigError, parse_providers_section
 from provider_model_shortcuts import provider_model_startup_args, startup_args_contain_model_flag
 from rolepacks.manifest import RoleManifestError, role_manifest_from_mapping
 
@@ -36,7 +37,7 @@ from .provider_profiles import parse_provider_profile
 from .topology import parse_sidebar, parse_sidebar_view, parse_tool_windows
 
 
-_TOP_LEVEL_KEYS = frozenset({'version', 'workflow', 'ui', 'tool_windows', 'maintenance'})
+_TOP_LEVEL_KEYS = frozenset({'version', 'workflow', 'ui', 'tool_windows', 'maintenance', 'providers'})
 _FORBIDDEN_STATIC_KEYS = frozenset({'windows', 'agents', 'default_agents', 'layout', 'cmd_enabled', 'loop'})
 _WORKFLOW_KEYS = frozenset(
     {'mode', 'profile', 'entry_role', 'defaults', 'provider_defaults', 'runtime', 'resident', 'dynamic'}
@@ -116,6 +117,10 @@ def validate_v3_project_config(
     project_root: Path | None,
     maintenance_heartbeat: MaintenanceHeartbeatConfig,
 ) -> ProjectConfig:
+    try:
+        custom_providers = parse_providers_section(document.get('providers'))
+    except CustomProviderConfigError as exc:
+        _fail('v3_providers_invalid', 'providers', str(exc))
     _validate_top_level(document)
     workflow_raw = _mapping(document.get('workflow'), path='workflow')
     _reject_unknown(workflow_raw, _WORKFLOW_KEYS, path='workflow')
@@ -214,6 +219,7 @@ def validate_v3_project_config(
             maintenance_heartbeat=maintenance_heartbeat,
             loop_capacity=loop_capacity,
             workflow=workflow,
+            custom_providers=custom_providers,
             source_path=str(source_path) if source_path else None,
             windows_explicit=True,
         )
