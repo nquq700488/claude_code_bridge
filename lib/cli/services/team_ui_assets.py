@@ -75,8 +75,8 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
     <span id="status-text">-</span>
   </div>
   <div style="flex:1"></div>
-  <button id="btn-up" onclick="teamAction('up')">▲ Up</button>
-  <button id="btn-down" onclick="teamAction('down')">■ Down</button>
+  <button id="btn-up">▲ Up</button>
+  <button id="btn-down">■ Down</button>
 </header>
 <div class="error-bar" id="error-bar"></div>
 <main>
@@ -86,8 +86,8 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
 <footer>
   <div class="input-row">
     <select id="send-target"></select>
-    <input id="send-input" placeholder="输入消息… (@名字 / @all)" disabled onkeydown="onInputKey(event)">
-    <button id="send-btn" disabled onclick="sendMessage()">发送</button>
+    <input id="send-input" placeholder="输入消息… (@名字 / @all)" disabled>
+    <button id="send-btn" disabled>发送</button>
   </div>
   <div class="mention-chips" id="mention-chips"></div>
 </footer>
@@ -130,7 +130,7 @@ function renderSidebar(s){
   s.members.forEach(m=>{
     let color=PROVIDER_COLORS[m.provider]||defaultColor(m.provider);
     let cls=m.state==='visible'?'active':(m.state==='hidden'?'idle':'working');
-    html+='<div class="member-card" onclick="fillMention(\''+m.name+'\')">'+
+    html+='<div class="member-card" data-member="'+esc(m.name)+'">'+
       '<span class="indicator '+cls+'" style="background:'+color+'"></span>'+
       '<div class="info"><div class="name">'+esc(m.name)+'</div>'+
       '<div class="meta">'+esc(m.provider)+(m.model?' · '+esc(m.model):'')+'</div></div></div>';
@@ -141,7 +141,7 @@ function renderSidebar(s){
 function renderInput(s){
   let sel=$('send-target');sel.innerHTML='<option value="@all">@all (广播)</option>';
   s.members.forEach(m=>sel.innerHTML+='<option value="'+esc(m.name)+'">@'+esc(m.name)+'</option>');
-  let chips='';s.members.forEach(m=>chips+='<span onclick="fillMention(\''+esc(m.name)+'\')">@'+esc(m.name)+'</span>');
+  let chips='';s.members.forEach(m=>chips+='<span class="mention-chip" data-member="'+esc(m.name)+'">@'+esc(m.name)+'</span>');
   $('mention-chips').innerHTML=chips;
 }
 
@@ -173,7 +173,7 @@ function formatBody(text){
   let lines=text.split('\n');
   if(lines.length>10){
     let id='expand-'+Math.random().toString(36).slice(2,8);
-    return esc(lines.slice(0,10).join('\n'))+'<br><span class="expand" onclick="this.parentNode.innerHTML=formatBody(\`'+esc(text).replace(/`/g,'\\`')+'\`)">▼ 展开全文 ('+lines.length+' 行)</span>';
+    return esc(lines.slice(0,10).join('\n'))+'<br><span class="expand" data-expand-text="'+esc(text).replace(/"/g,'&quot;')+'">▼ 展开全文 ('+lines.length+' 行)</span>';
   }
   let out='',inCode=false,codeBuf='';
   for(let l of lines){
@@ -210,6 +210,35 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function fmtTime(t){try{return new Date(t).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}catch(e){return''}}
 function defaultColor(name){let h=0;for(let i=0;i<name.length;i++)h=name.charCodeAt(i)+((h<<5)-h);return 'hsl('+(h%360)+',60%,55%)'}
 function showError(msg){let t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',4000)}
+
+	// Event bindings (event delegation — no inline onclick)
+	document.addEventListener('DOMContentLoaded',function(){
+	  // Send button and input
+	  $('send-btn').addEventListener('click',sendMessage);
+	  $('send-input').addEventListener('keydown',function(ev){
+	    if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();sendMessage();}
+	  });
+	  // Up/Down buttons
+	  $('btn-up').addEventListener('click',function(){teamAction('up')});
+	  $('btn-down').addEventListener('click',function(){teamAction('down')});
+	  // Sidebar member card clicks (event delegation)
+	  $('sidebar').addEventListener('click',function(e){
+	    let card=e.target.closest('.member-card');
+	    if(card&&card.dataset.member){fillMention(card.dataset.member);}
+	  });
+	  // Mention chips (event delegation)
+	  $('mention-chips').addEventListener('click',function(e){
+	    let chip=e.target.closest('.mention-chip');
+	    if(chip&&chip.dataset.member){fillMention(chip.dataset.member);}
+	  });
+	  // Expand text (event delegation)
+	  $('timeline').addEventListener('click',function(e){
+	    let expand=e.target.closest('.expand');
+	    if(expand&&expand.dataset.expandText){
+	      expand.parentElement.innerHTML=formatBody(expand.dataset.expandText.replace(/&quot;/g,'\"'));
+	    }
+	  });
+	});
 
 state.token=new URLSearchParams(location.search).get('token')||'';
 loadState().then(()=>{loadTimeline();pollTimer=setInterval(loadTimeline,2000);setInterval(loadState,5000)});

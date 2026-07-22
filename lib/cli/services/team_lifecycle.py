@@ -110,12 +110,17 @@ def team_down(context, command) -> dict:
     if not instance:
         raise ValueError(f'team {team_name!r} is not up')
 
-    # 逐成员移除动态 agent（写 unloaded 状态）
+    # 逐成员处理：默认 park，--unload 则标记为 unloaded
     for m in instance.get('members', []):
-        _mark_member_unloaded(context, root, m['name'])
+        _mark_member_down(context, root, m['name'], unload=unload)
 
-    # 清除实例状态
-    _remove_team_instance(root, team_name)
+    if unload:
+        # --unload: 清除实例状态
+        _remove_team_instance(root, team_name)
+    else:
+        # 默认 park: 保留实例状态，更新 status 为 parked
+        instance['status'] = 'parked'
+        _write_team_instance(root, team_name, instance)
 
     reload_note = _trigger_reload(context)
     return {
@@ -195,15 +200,24 @@ def _agents_dir(root: Path) -> Path:
     return _runtime_dir(root) / _AGENTS_DIR
 
 
+def _validate_name_safe(name: str, label: str) -> None:
+    """Raise ValueError if name contains path traversal sequences."""
+    if '..' in name or '/' in name or '\\' in name:
+        raise ValueError(f'{label} contains forbidden path characters: {name!r}')
+
+
 def _team_state_path(root: Path, team_name: str) -> Path:
+    _validate_name_safe(team_name, 'team name')
     return _teams_dir(root) / team_name / 'state.json'
 
 
 def _member_lifecycle_path(root: Path, agent_name: str) -> Path:
+    _validate_name_safe(agent_name, 'agent name')
     return _agents_dir(root) / agent_name / 'lifecycle.json'
 
 
 def _member_memory_path(root: Path, agent_name: str) -> Path:
+    _validate_name_safe(agent_name, 'agent name')
     return root / '.ccb' / _AGENTS_DIR / agent_name / _MEMORY_FILE
 
 
@@ -295,16 +309,24 @@ def _write_member_protocol(root: Path, agent_name: str, protocol_text: str) -> N
     memory_path.write_text(content, encoding='utf-8')
 
 
-def _mark_member_unloaded(context, root: Path, agent_name: str) -> None:
-    """标记 team 成员为 unloaded 状态。"""
+def _mark_member_down(context, root: Path, agent_name: str, *, unload: bool = False) -> None:
+    """标记 team 成员状态。
+
+    unload=False（默认）: park 成员（lifecycle_state='parked', dispatch_disabled=True）
+    unload=True: 标记为 unloaded
+    """
     lifecycle_path = _member_lifecycle_path(root, agent_name)
     if not lifecycle_path.is_file():
         return
     try:
         payload = json.loads(lifecycle_path.read_text(encoding='utf-8'))
         if isinstance(payload, dict):
-            payload['agent_lifecycle_status'] = 'unloaded'
-            payload['lifecycle_state'] = 'unloaded'
+            if unload:
+                payload['agent_lifecycle_status'] = 'unloaded'
+                payload['lifecycle_state'] = 'unloaded'
+            else:
+                payload['lifecycle_state'] = 'parked'
+                payload['dispatch_disabled'] = True
             payload['updated_at'] = _utc_now()
             _atomic_write_json(lifecycle_path, payload)
     except Exception:

@@ -183,12 +183,34 @@ provider = "codex"
         with pytest.raises(ValueError, match='conflicts'):
             team_up(ctx, _Cmd(action='up', team_name='t'))
 
-    def test_team_down_marks_unloaded(self, tmp_path):
+    def test_team_down_park_default(self, tmp_path):
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
         team_up(ctx, _Cmd(action='up', team_name='t'))
         result = team_down(ctx, _Cmd(action='down', team_name='t'))
         assert result['team'] == 't'
+        assert result['parked'] is True
+
+        # 成员 lifecycle 应为 parked（默认行为）
+        for name in ('team-a', 'team-b'):
+            lc = root / '.ccb' / 'runtime' / 'agents' / name / 'lifecycle.json'
+            data = json.loads(lc.read_text(encoding='utf-8'))
+            assert data['lifecycle_state'] == 'parked'
+            assert data['dispatch_disabled'] is True
+
+        # team 实例状态应保留（status 应为 parked）
+        state = root / '.ccb' / 'runtime' / 'teams' / 't' / 'state.json'
+        assert state.is_file()
+        state_data = json.loads(state.read_text(encoding='utf-8'))
+        assert state_data['status'] == 'parked'
+
+    def test_team_down_unload(self, tmp_path):
+        root = _project(tmp_path, _TEAM_CONFIG)
+        ctx = _Ctx(root)
+        team_up(ctx, _Cmd(action='up', team_name='t'))
+        result = team_down(ctx, _Cmd(action='down', team_name='t', unload=True))
+        assert result['team'] == 't'
+        assert result['parked'] is False
 
         # 成员 lifecycle 应为 unloaded
         for name in ('team-a', 'team-b'):

@@ -238,8 +238,10 @@ def _build_state_payload(root: Path, team_name: str) -> dict:
 
 
 def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
-    """Read events from team instance and member event logs.
+    """Build timeline events from mailbox jobs and events for each team member.
 
+    Reads .ccb/runtime/agents/<name>/jobs.jsonl for ask/reply records,
+    and .ccb/runtime/agents/<name>/events.jsonl for completion replies.
     Returns incremental events since the cursor timestamp.
     """
     instance = _load_json(_team_state_path(root, team_name))
@@ -247,35 +249,111 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         return {'events': [], 'cursor': cursor or ''}
 
     upped_at = instance.get('upped_at', '')
-    member_names = {m.get('name', '') for m in instance.get('members', [])}
+    members = instance.get('members', [])
 
     events: list[dict] = []
-    for name in member_names:
+    for m in members:
+        name = m.get('name', '')
+        provider = m.get('provider', '')
         if not name:
             continue
-        events_path = root / '.ccb' / 'runtime' / 'agents' / name / 'events.jsonl'
-        if not events_path.is_file():
+        if '..' in name or '/' in name or '\\' in name:
             continue
-        for line in _read_jsonl(events_path):
-            ts = line.get('timestamp') or line.get('updated_at') or line.get('created_at') or ''
-            if cursor and ts <= cursor:
-                continue
-            if upped_at and ts < upped_at:
-                continue
-            evt = line.get('event', '')
-            body = line.get('body') or line.get('reply') or json.dumps(line, ensure_ascii=False)
-            if isinstance(body, str) and len(body) > 2000:
-                body = body[:2000] + '…'
-            events.append({
-                'type': 'system' if evt in ('add', 'remove', 'up', 'down') else 'message',
-                'from': line.get('agent') or line.get('from_actor') or name,
-                'from_provider': line.get('provider') or instance.get('members', [{}])[0].get('provider', '') if instance.get('members') else '',
-                'body': str(body),
-                'time': ts,
-            })
+
+        agent_dir = root / '.ccb' / 'runtime' / 'agents' / name
+
+        # Read jobs.jsonl for ask/status records
+        jobs_path = agent_dir / 'jobs.jsonl'
+        jobs_by_id: dict[str, dict] = {}
+        if jobs_path.is_file():
+            for record in _read_jsonl(jobs_path):
+                job_id = record.get('job_id', '')
+                ts = record.get('created_at', '')
+                if not ts:
+                    continue
+                if cursor and ts <= cursor:
+                    continue
+                if upped_at and ts < upped_at:
+                    continue
+                jobs_by_id[job_id] = record
+
+                request = record.get('request') or {}
+                request_body = request.get('body', '') if isinstance(request, dict) else ''
+                status = record.get('status', '')
+
+                # Ask event: job has request.body and is not completed
+                if request_body and status not in ('completed', 'terminal'):
+                    body_text = str(request_body)
+                    if len(body_text) > 2000:
+                        body_text = body_text[:2000] + '…'
+                    events.append({
+                        'type': 'ask',
+                        'from': name,
+                        'from_provider': provider,
+                        'body': body_text,
+                        'time': ts,
+                        'job_id': job_id,
+                    })
+
+                # System event: status change
+                if status and status not in ('pending',):
+                    events.append({
+                        'type': 'system',
+                        'from': name,
+                        'from_provider': provider,
+                        'body': f'{name}: job {status}',
+                        'time': ts,
+                        'job_id': job_id,
+                    })
+
+        # Read events.jsonl for reply records
+        events_path = agent_dir / 'events.jsonl'
+        if events_path.is_file():
+            for line in _read_jsonl(events_path):
+                job_id = line.get('job_id', '')
+                ts = line.get('created_at') or line.get('timestamp') or ''
+                if not ts:
+                    continue
+                if cursor and ts <= cursor:
+                    continue
+                if upped_at and ts < upped_at:
+                    continue
+
+                reply = line.get('reply', '')
+                if reply:
+                    body_text = str(reply)
+                    if len(body_text) > 2000:
+                        body_text = body_text[:2000] + '…'
+                    events.append({
+                        'type': 'reply',
+                        'from': name,
+                        'from_provider': provider,
+                        'body': body_text,
+                        'time': ts,
+                        'job_id': job_id,
+                    })
+
+        # Also check jobs for terminal_decision.reply
+        for job_id, record in jobs_by_id.items():
+            terminal_decision = record.get('terminal_decision')
+            if isinstance(terminal_decision, dict):
+                reply = terminal_decision.get('reply', '')
+                if reply:
+                    ts = record.get('created_at', '')
+                    body_text = str(reply)
+                    if len(body_text) > 2000:
+                        body_text = body_text[:2000] + '…'
+                    events.append({
+                        'type': 'reply',
+                        'from': name,
+                        'from_provider': provider,
+                        'body': body_text,
+                        'time': ts,
+                        'job_id': job_id,
+                    })
 
     events.sort(key=lambda e: e.get('time', ''))
-    new_cursor = events[-1]['time'] if events else cursor
+    new_cursor = events[-1]['time'] if events else (cursor or '')
     return {'events': events, 'cursor': new_cursor}
 
 
@@ -288,6 +366,14 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
 
     if to == '@all':
         return _broadcast(root, team_name, msg)
+
+    # Validate target is a member of this team instance
+    instance = _load_json(_team_state_path(root, team_name))
+    if not instance:
+        return {'status': 'error', 'error': 'team not up'}
+    member_names = {m.get('name', '') for m in instance.get('members', [])}
+    if to not in member_names:
+        return {'status': 'error', 'error': 'target is not a member of this team'}
 
     # Single target: use ccb ask via subprocess
     return _ask_member(root, to, msg)
@@ -374,11 +460,19 @@ def _project_root(context) -> Path:
     return Path(context.project.project_root)
 
 
+def _validate_name_safe(name: str, label: str) -> None:
+    """Raise ValueError if name contains path traversal sequences."""
+    if '..' in name or '/' in name or '\\' in name:
+        raise ValueError(f'{label} contains forbidden path characters: {name!r}')
+
+
 def _team_state_path(root: Path, team_name: str) -> Path:
+    _validate_name_safe(team_name, 'team name')
     return root / '.ccb' / 'runtime' / 'teams' / team_name / 'state.json'
 
 
 def _member_lifecycle_path(root: Path, agent_name: str) -> Path:
+    _validate_name_safe(agent_name, 'agent name')
     return root / '.ccb' / 'runtime' / 'agents' / agent_name / 'lifecycle.json'
 
 

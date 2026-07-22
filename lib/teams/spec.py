@@ -1,8 +1,13 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
+from agents.models_runtime.names import normalize_agent_name
+
 _VALID_TOPOLOGIES = frozenset({'hub-spoke', 'review-loop', 'mesh', 'debate'})
+_TEAM_NAME_PATTERN = re.compile(r'^[\x20-\x7e]{1,64}$')
+_TEAM_NAME_FORBIDDEN = ('..', '/', '\\')
 
 
 @dataclass(frozen=True)
@@ -18,7 +23,7 @@ class TeamMember:
             raise ValueError('team member name cannot be empty')
         if not str(self.provider).strip():
             raise ValueError('team member provider cannot be empty')
-        object.__setattr__(self, 'name', str(self.name).strip())
+        object.__setattr__(self, 'name', normalize_agent_name(str(self.name).strip()))
         object.__setattr__(self, 'provider', str(self.provider).strip().lower())
         if self.role is not None:
             object.__setattr__(self, 'role', str(self.role).strip() or None)
@@ -55,9 +60,18 @@ class TeamSpec:
     policy: TeamPolicy = field(default_factory=TeamPolicy)
 
     def __post_init__(self) -> None:
-        if not str(self.name).strip():
+        raw_name = str(self.name).strip()
+        if not raw_name:
             raise TeamValidationError('team name cannot be empty')
-        object.__setattr__(self, 'name', str(self.name).strip())
+        if not _TEAM_NAME_PATTERN.fullmatch(raw_name):
+            raise TeamValidationError(
+                'team name must be 1-64 printable ASCII characters'
+            )
+        if any(forbidden in raw_name for forbidden in _TEAM_NAME_FORBIDDEN):
+            raise TeamValidationError(
+                'team name must not contain .., /, or \\'
+            )
+        object.__setattr__(self, 'name', raw_name)
 
         topology = str(self.topology or '').strip().lower()
         if topology not in _VALID_TOPOLOGIES:
