@@ -10,14 +10,22 @@ from provider_core.protocol import (
 )
 
 
-def wrap_pane_quiet_prompt(message: str, req_id: str) -> str:
+def wrap_pane_quiet_prompt(
+    message: str,
+    req_id: str,
+    *,
+    done_prefix: str = DONE_PREFIX,
+    emit_done_instruction: bool = True,
+) -> str:
     rendered = (message or "").rstrip()
+    if not emit_done_instruction:
+        return f"{REQ_ID_PREFIX} {req_id}\n\n{rendered}\n"
     return (
         f"{REQ_ID_PREFIX} {req_id}\n\n"
         f"{rendered}\n\n"
         "IMPORTANT: when you finish answering, write this exact line on its "
         "own line as the final line of your reply (no quoting, no code fence):\n"
-        f"{DONE_PREFIX} {req_id}\n"
+        f"{done_prefix} {req_id}\n"
     )
 
 
@@ -42,11 +50,11 @@ def pane_contains_req_anchor(text: str, req_id: str) -> bool:
     return _req_anchor_re(req_id).search(text) is not None
 
 
-def _done_anywhere_re(req_id: str) -> re.Pattern[str]:
-    return re.compile(rf"{re.escape(DONE_PREFIX)}\s*{re.escape(req_id)}")
+def _done_anywhere_re(req_id: str, done_prefix: str = DONE_PREFIX) -> re.Pattern[str]:
+    return re.compile(rf"{re.escape(done_prefix)}\s*{re.escape(req_id)}")
 
 
-def extract_reply_for_req(text: str, req_id: str) -> tuple[str, bool]:
+def extract_reply_for_req(text: str, req_id: str, *, done_prefix: str = DONE_PREFIX) -> tuple[str, bool]:
     if not text or not req_id:
         return "", False
 
@@ -56,16 +64,16 @@ def extract_reply_for_req(text: str, req_id: str) -> tuple[str, bool]:
         return "", False
 
     after_anchor = text[anchor_matches[-1].end():]
-    done_matches = list(_done_anywhere_re(req_id).finditer(after_anchor))
+    done_matches = list(_done_anywhere_re(req_id, done_prefix).finditer(after_anchor))
     if not done_matches:
         return "", False
 
     if len(done_matches) == 1:
         body = after_anchor[:done_matches[0].start()]
-        if _contains_banner_fragment(body):
+        if _contains_banner_fragment(body, done_prefix=done_prefix):
             return "", False
-        cleaned = _clean_body(body, req_id)
-        if cleaned and not _contains_banner_fragment(cleaned):
+        cleaned = _clean_body(body, req_id, done_prefix=done_prefix)
+        if cleaned and not _contains_banner_fragment(cleaned, done_prefix=done_prefix):
             return cleaned, True
         return "", False
 
@@ -74,8 +82,8 @@ def extract_reply_for_req(text: str, req_id: str) -> tuple[str, bool]:
     reply_start = echo_line_end + 1 if echo_line_end < len(after_anchor) else echo_line_end
     body = after_anchor[reply_start:model_line_start]
 
-    cleaned = _clean_body(body, req_id)
-    if _contains_banner_fragment(cleaned):
+    cleaned = _clean_body(body, req_id, done_prefix=done_prefix)
+    if _contains_banner_fragment(cleaned, done_prefix=done_prefix):
         return "", False
     return cleaned, True
 
@@ -88,18 +96,18 @@ def _line_bounds(text: str, pos: int) -> tuple[int, int]:
     return start, end
 
 
-def _contains_banner_fragment(text: str) -> bool:
+def _contains_banner_fragment(text: str, *, done_prefix: str = DONE_PREFIX) -> bool:
     blob = text or ""
     for marker in _BANNER_INSTRUCTIONS:
         if marker in blob:
             return True
-    for marker in _BANNER_KEYWORDS:
+    for marker in tuple(_BANNER_KEYWORDS) + (done_prefix,):
         if marker in blob:
             return True
     return False
 
 
-def _clean_body(body: str, req_id: str) -> str:
+def _clean_body(body: str, req_id: str, *, done_prefix: str = DONE_PREFIX) -> str:
     text = (body or "").replace("\r\n", "\n").replace("\r", "\n")
     try:
         text = strip_done_text(text, req_id)
@@ -110,7 +118,7 @@ def _clean_body(body: str, req_id: str) -> str:
     cleaned_lines: list[str] = []
     for raw in text.split("\n"):
         stripped = _LINE_PREFIX_RE.sub("", raw).rstrip()
-        if _is_banner_line(stripped):
+        if _is_banner_line(stripped, done_prefix=done_prefix):
             continue
         cleaned_lines.append(stripped)
 
@@ -127,11 +135,11 @@ def _clean_body(body: str, req_id: str) -> str:
     return "\n".join(cleaned_lines).strip()
 
 
-def _is_banner_line(line: str) -> bool:
+def _is_banner_line(line: str, *, done_prefix: str = DONE_PREFIX) -> bool:
     text = (line or "").strip()
     if not text:
         return False
-    for marker in _BANNER_KEYWORDS:
+    for marker in tuple(_BANNER_KEYWORDS) + (done_prefix,):
         if marker in text:
             return True
     for marker in _BANNER_INSTRUCTIONS:

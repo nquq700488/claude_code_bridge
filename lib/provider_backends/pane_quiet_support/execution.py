@@ -13,7 +13,7 @@ from completion.models import (
     CompletionSourceKind,
     CompletionStatus,
 )
-from provider_core.protocol import request_anchor_for_job
+from provider_core.protocol import DONE_PREFIX, request_anchor_for_job
 from provider_execution.base import ProviderPollResult, ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import error_submission, send_prompt_to_runtime_target
 
@@ -36,7 +36,13 @@ def start_submission(
     now: str,
     provider: str,
     load_project_session_fn,
+    quiet_secs: float = QUIET_SECS,
+    max_wait_secs: float = MAX_WAIT_SECS,
+    done_prefix: str = DONE_PREFIX,
+    completion_mode: str = 'marker_quiet',  # 'marker_quiet' | 'marker_only' | 'quiet_only'
 ) -> ProviderSubmission:
+    if completion_mode not in ('marker_quiet', 'marker_only', 'quiet_only'):
+        raise ValueError(f'unknown completion_mode: {completion_mode}')
     work_dir = _resolve_work_dir(job, context)
     if work_dir is None:
         return error_submission(
@@ -99,7 +105,12 @@ def start_submission(
         )
 
     req_id = request_anchor_for_job(job.job_id)
-    prompt = wrap_pane_quiet_prompt(job.request.body or "", req_id)
+    prompt = wrap_pane_quiet_prompt(
+        job.request.body or "",
+        req_id,
+        done_prefix=done_prefix,
+        emit_done_instruction=completion_mode != 'quiet_only',
+    )
     reader = PaneSnapshotReader(backend=backend, pane_id=pane_id, lines=PANE_LINES_DEFAULT)
 
     send_error: str | None = None
@@ -146,6 +157,10 @@ def start_submission(
             "last_hash": None,
             "last_change_at": now,
             "last_poll_at": now,
+            "quiet_secs_limit": float(quiet_secs),
+            "max_wait_secs": float(max_wait_secs),
+            "done_prefix": done_prefix,
+            "completion_mode": completion_mode,
             "prompt_sent": prompt_sent,
             "pending_prompt": prompt,
             "prompt_deferred_until_ready": prompt_deferred_until_ready,
@@ -278,14 +293,19 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
     state["quiet_secs"] = quiet_secs
     state["total_secs"] = total_secs
 
-    reply, done_seen = extract_reply_for_req(content, req_id)
+    quiet_limit = _state_float(state, "quiet_secs_limit", QUIET_SECS)
+    max_wait = _state_float(state, "max_wait_secs", MAX_WAIT_SECS)
+    done_prefix = _state_str(state, "done_prefix") or DONE_PREFIX
+    completion_mode = _state_str(state, "completion_mode") or 'marker_quiet'
+
+    reply, done_seen = extract_reply_for_req(content, req_id, done_prefix=done_prefix)
     state["done_seen"] = done_seen
     state["reply_chars"] = len(reply)
 
     anchor_present = bool(content) and pane_contains_req_anchor(content, req_id)
     state["anchor_present"] = anchor_present
 
-    if done_seen and reply:
+    if completion_mode != 'quiet_only' and done_seen and reply:
         return _terminal(
             submission,
             state,
@@ -296,7 +316,7 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
             confidence=CompletionConfidence.OBSERVED,
         )
 
-    if done_seen and not reply:
+    if completion_mode != 'quiet_only' and done_seen and not reply:
         return _terminal(
             submission,
             state,
@@ -308,7 +328,7 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
             diagnostics_extra=_empty_reply_diagnostics(provider),
         )
 
-    if total_secs >= MAX_WAIT_SECS:
+    if total_secs >= max_wait:
         return _terminal(
             submission,
             state,
@@ -319,7 +339,7 @@ def poll_submission(submission: ProviderSubmission, *, now: str) -> ProviderPoll
             confidence=CompletionConfidence.DEGRADED,
         )
 
-    if reply and total_secs >= MIN_OBSERVED_SECS and quiet_secs >= QUIET_SECS:
+    if completion_mode != 'marker_only' and reply and total_secs >= MIN_OBSERVED_SECS and quiet_secs >= quiet_limit:
         return _terminal(
             submission,
             state,
@@ -482,6 +502,16 @@ def _state_int(state: dict[str, object], key: str, default: int) -> int:
         return default
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _state_float(state: dict[str, object], key: str, default: float) -> float:
+    value = state.get(key)
+    if value is None:
+        return default
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return default
 
