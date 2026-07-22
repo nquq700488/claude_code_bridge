@@ -262,15 +262,16 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             continue
         for record in _read_jsonl(jobs_path):
             jid = record.get('job_id', '')
-            ts = record.get('created_at', '')
-            if not jid or not ts:
+            rec_ts = record.get('updated_at') or record.get('created_at', '')
+            if not jid or not rec_ts:
                 continue
-            if cursor and ts <= cursor:
+            if cursor and rec_ts <= cursor:
                 continue
-            if upped_at and ts < upped_at:
+            if upped_at and rec_ts < upped_at:
                 continue
             prev = jobs_by_id.get(jid)
-            if prev is None or ts >= prev.get('created_at', ''):
+            prev_ts = (prev.get('updated_at') or prev.get('created_at', '')) if prev else ''
+            if prev is None or rec_ts >= prev_ts:
                 jobs_by_id[jid] = record
 
     # Phase 2: collect completion_terminal replies from events.jsonl
@@ -283,7 +284,8 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         if not events_path.is_file():
             continue
         for line in _read_jsonl(events_path):
-            if line.get('event') != 'completion_terminal':
+            evt_type = line.get('type') or line.get('event') or ''
+            if evt_type != 'completion_terminal':
                 continue
             jid = line.get('job_id', '')
             if not jid:
@@ -331,12 +333,14 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             term = job.get('terminal_decision') or {}
             reply = term.get('reply', '') if isinstance(term, dict) else ''
         if reply:
+            term = job.get('terminal_decision') or {}
+            reply_ts = (term.get('finished_at') or job.get('updated_at') or ts) if isinstance(term, dict) else ts
             events.append({
                 'type': 'reply',
                 'from': agent_name,
                 'from_provider': provider,
                 'body': str(reply)[:2000],
-                'time': ts,
+                'time': reply_ts,
                 'job_id': jid,
                 'reply_to': str(request_body)[:120] if request_body else '',
             })
