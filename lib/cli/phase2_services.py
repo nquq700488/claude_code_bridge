@@ -69,6 +69,7 @@ from cli.services.plan_tasks import plan_task
 from cli.services.questions import question_command
 from cli.services.pend import pend_target
 from cli.services.ping import ping_target
+from cli.services.provider_admin import ProviderAdminError, provider_add, provider_list, provider_remove
 from cli.services.ps import ps_summary
 from cli.services.queue import queue_target
 from cli.services.reload import reload_config
@@ -79,6 +80,17 @@ from cli.services.start import start_agents
 from cli.services.trace import trace_target
 from cli.services.wait import wait_for_replies
 from cli.services.watch import watch_target
+
+
+def _provider_admin(context, command):
+    action = str(getattr(command, 'action', '') or '')
+    if action == 'list':
+        return provider_list(context, command)
+    if action == 'add':
+        return provider_add(context, command)
+    if action == 'remove':
+        return provider_remove(context, command)
+    raise ProviderAdminError(f'unknown provider action: {action}')
 
 
 def build_phase2_dispatch_services(**overrides):
@@ -115,6 +127,7 @@ def build_phase2_dispatch_services(**overrides):
         prepare_mobile_gateway=prepare_mobile_gateway,
         pend_target=pend_target,
         ping_target=ping_target,
+        provider_admin=_provider_admin,
         ps_summary=ps_summary,
         question_command=question_command,
         queue_target=queue_target,

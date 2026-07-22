@@ -25,6 +25,7 @@ from cli.models import (
     ParsedPlanTaskCommand,
     ParsedPendCommand,
     ParsedPingCommand,
+    ParsedProviderCommand,
     ParsedPsCommand,
     ParsedQuestionCommand,
     ParsedQueueCommand,
@@ -1106,6 +1107,73 @@ def parse_reload(tokens: list[str], *, project: str | None, error_type) -> Parse
     return ParsedReloadCommand(project=project, dry_run=bool(namespace.dry_run))
 
 
+def parse_provider(tokens: list[str], *, project: str | None, error_type) -> ParsedProviderCommand:
+    if not tokens:
+        raise error_type('provider requires one of: list, add, remove')
+    action = str(tokens[0] or '').strip().lower()
+    rest = tokens[1:]
+    if action == 'list':
+        parser = argparse.ArgumentParser(prog='ccb provider list', add_help=False)
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid provider list command', error_type=error_type)
+        return ParsedProviderCommand(project=project, action='list', json=bool(namespace.json))
+    if action == 'add':
+        parser = argparse.ArgumentParser(prog='ccb provider add', add_help=False)
+        parser.add_argument('name')
+        parser.add_argument('--mode', required=True, choices=['pane', 'oneshot'])
+        parser.add_argument('--command', required=True)
+        parser.add_argument('--completion', default=None)
+        parser.add_argument('--marker', default=None)
+        parser.add_argument('--quiet-secs', type=float, default=None)
+        parser.add_argument('--prompt-mode', default=None, choices=['arg', 'stdin'])
+        parser.add_argument('--timeout-secs', type=int, default=None)
+        parser.add_argument('--home-env', default=None)
+        parser.add_argument('--description', default=None)
+        parser.add_argument('--key', default=None)
+        parser.add_argument('--url', default=None)
+        parser.add_argument('--model', default=None)
+        parser.add_argument('--key-env', default=None)
+        parser.add_argument('--url-env', default=None)
+        parser.add_argument('--model-env', default=None)
+        parser.add_argument('--model-flag', default=None)
+        parser.add_argument('--env', action='append', default=[])
+        parser.add_argument('--no-reload', action='store_true')
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid provider add command', error_type=error_type)
+        env = {}
+        for pair in namespace.env:
+            if '=' not in pair:
+                raise error_type(f'invalid --env entry (expect K=V): {pair}')
+            env_key, _, env_value = pair.partition('=')
+            env[env_key.strip()] = env_value
+        options = {
+            'mode': namespace.mode, 'command': namespace.command,
+            'completion': namespace.completion, 'marker': namespace.marker,
+            'quiet_secs': namespace.quiet_secs, 'prompt_mode': namespace.prompt_mode,
+            'timeout_secs': namespace.timeout_secs, 'home_env': namespace.home_env,
+            'description': namespace.description, 'key': namespace.key,
+            'url': namespace.url, 'model': namespace.model,
+            'key_env': namespace.key_env, 'url_env': namespace.url_env,
+            'model_env': namespace.model_env, 'model_flag': namespace.model_flag,
+            'env': env,
+        }
+        return ParsedProviderCommand(
+            project=project, action='add', provider_name=namespace.name,
+            options=options, json=bool(namespace.json), no_reload=bool(namespace.no_reload),
+        )
+    if action == 'remove':
+        parser = argparse.ArgumentParser(prog='ccb provider remove', add_help=False)
+        parser.add_argument('name')
+        parser.add_argument('--no-reload', action='store_true')
+        parser.add_argument('--json', action='store_true')
+        namespace = parse_args(parser, rest, error_message='invalid provider remove command', error_type=error_type)
+        return ParsedProviderCommand(
+            project=project, action='remove', provider_name=namespace.name,
+            json=bool(namespace.json), no_reload=bool(namespace.no_reload),
+        )
+    raise error_type(f'unknown provider action: {action}')
+
+
 def _parse_csv_values(text: str) -> tuple[str, ...]:
     values = tuple(item.strip() for item in str(text or '').split(',') if item.strip())
     return values
@@ -1128,6 +1196,7 @@ __all__ = [
     'parse_mobile',
     'parse_pend',
     'parse_ping',
+    'parse_provider',
     'parse_ps',
     'parse_queue',
     'parse_repair',

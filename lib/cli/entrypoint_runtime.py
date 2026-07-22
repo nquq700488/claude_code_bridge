@@ -51,7 +51,7 @@ def _is_start_help(tokens: list[str]) -> bool:
         return False
     if tokens[0] in {"-h", "--help", "help"}:
         return True
-    if tokens[0] in SUBCOMMANDS or tokens[0] in {"install", "version", "update", "uninstall", "reinstall", "droid", "tools", "roles", "mail", "provider", "up", "rich", "rich-install", "theme"}:
+    if tokens[0] in SUBCOMMANDS or tokens[0] in {"install", "version", "update", "uninstall", "reinstall", "droid", "tools", "roles", "mail", "up", "rich", "rich-install", "theme"}:
         return False
     return any(token in {"-h", "--help", "help"} for token in tokens)
 
@@ -127,7 +127,7 @@ def _handle_removed_commands(tokens: list[str], *, stderr: TextIO) -> int | None
         print("💡 Use: ccb  (agents are configured by .ccb/ccb.config)", file=stderr)
         return 2
 
-    if tokens and tokens[0] in {"mail", "provider"}:
+    if tokens and tokens[0] in {"mail"}:
         return _write_removed_command_error(
             stderr,
             command=tokens[0],

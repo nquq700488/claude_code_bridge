@@ -1441,7 +1441,9 @@ def test_run_cli_entrypoint_prints_ask_help() -> None:
     assert stderr.getvalue() == ""
 
 
-def test_run_cli_entrypoint_rejects_removed_provider_command() -> None:
+def test_run_cli_entrypoint_routes_provider_command_to_real_parser() -> None:
+    # `ccb provider` 已恢复为真实命令（custom providers M1 Task 8）：
+    # 不再走 removed-command 拦截，未知 action 由 parser 报错。
     stdout = StringIO()
     stderr = StringIO()
 
@@ -1456,8 +1458,8 @@ def test_run_cli_entrypoint_rejects_removed_provider_command() -> None:
 
     assert result == 2
     assert stdout.getvalue() == ""
-    assert "`ccb provider` has been removed" in stderr.getvalue()
-    assert "Use `ccb ask` for task submission/results, `ccb doctor` for diagnostics, and `ccb trace` for lineage details." in stderr.getvalue()
+    assert "`ccb provider` has been removed" not in stderr.getvalue()
+    assert "unknown provider action: ping" in stderr.getvalue()
 
 
 def test_run_cli_entrypoint_rejects_removed_mail_command() -> None:

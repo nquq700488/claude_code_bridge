@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -72,6 +72,17 @@ class ParsedAgentCommand:
     reason: str | None = None
     json_output: bool = False
     kind: str = 'agent'
+
+
+@dataclass(frozen=True)
+class ParsedProviderCommand:
+    project: str | None
+    action: str
+    provider_name: str | None = None
+    options: dict[str, object] = field(default_factory=dict)
+    json: bool = False
+    no_reload: bool = False
+    kind: str = 'provider'
 
 
 @dataclass(frozen=True)
@@ -281,6 +292,7 @@ __all__ = [
     'ParsedMobileCommand',
     'ParsedPlanTaskCommand',
     'ParsedPingCommand',
+    'ParsedProviderCommand',
     'ParsedPsCommand',
     'ParsedQuestionCommand',
     'ParsedReloadCommand',

@@ -30,6 +30,7 @@ from .parser_runtime import (
     parse_plan,
     parse_pend,
     parse_ping,
+    parse_provider,
     parse_ps,
     parse_question,
     parse_queue,
@@ -78,6 +79,7 @@ _COMMAND_PARSERS = {
     'config': parse_config,
     'fault': parse_fault,
     'reload': parse_reload,
+    'provider': parse_provider,
 }
 
 

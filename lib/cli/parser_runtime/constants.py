@@ -34,6 +34,7 @@ SUBCOMMANDS = {
     'frontdesk',
     'restart',
     'reload',
+    'provider',
 }
 
 ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode'}

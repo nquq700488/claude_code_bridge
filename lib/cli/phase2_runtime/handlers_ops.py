@@ -214,6 +214,45 @@ def handle_reload(context, command, out, services) -> int:
     return 0 if str(payload.get('status') or '') in {'ok', 'published', 'noop'} else 1
 
 
+def handle_provider(context, command, out, services) -> int:
+    result = services.provider_admin(context, command)
+    return write_json_result(out, result) if command.json else write_provider_admin_text(out, command, result)
+
+
+def write_json_result(out, result) -> int:
+    out.write(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    out.write('\n')
+    return 0
+
+
+def write_provider_admin_text(out, command, result) -> int:
+    action = str(getattr(command, 'action', '') or '')
+    lines: list[str] = []
+    if action == 'list':
+        if not result:
+            lines.append('no custom providers defined')
+        for name in sorted(result):
+            record = result[name]
+            status = str(record.get('status') or 'ok')
+            lines.append(f'{name}: mode={record.get("mode")} command={record.get("command")!r} status={status}')
+            if status != 'ok' and record.get('error'):
+                lines.append(f'  error: {record["error"]}')
+    elif action == 'add':
+        lines.append(f'added provider: {result.get("added")}')
+        for warning in result.get('warnings') or ():
+            lines.append(f'warning: {warning}')
+        lines.append(f'reload: {result.get("reload")}')
+    elif action == 'remove':
+        lines.append(f'removed provider: {result.get("removed")}')
+        lines.append(f'reload: {result.get("reload")}')
+    else:
+        lines.append(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    for line in lines:
+        out.write(line)
+        out.write('\n')
+    return 0
+
+
 __all__ = [
     'handle_agent',
     'handle_cleanup',
@@ -234,6 +273,7 @@ __all__ = [
     'handle_maintenance',
     'handle_mobile',
     'handle_plan_task',
+    'handle_provider',
     'handle_ps',
     'handle_question',
     'handle_reload',
