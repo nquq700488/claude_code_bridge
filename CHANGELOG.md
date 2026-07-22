@@ -6,6 +6,7 @@
 
 - **Custom Providers Via Project Config**: `[providers.<name>]` sections register any installed AI CLI as a first-class provider (pane and oneshot modes, marker/quiet/exit completion detection, key/url/model wiring with `$ENV` indirection) — no CCB source changes required. Includes `ccb provider list/add/remove` with automatic additive reload.
 - **Team Configuration And Orchestration**: `[teams.<name>]` sections define named multi-agent teams (hub-spoke/review-loop/mesh/debate topologies). `ccb team up` instantiates all members as dynamic agents with protocol injection into agent private memory; `ccb team down` tears them down. `ccb team list/status` show definitions and runtime state. Providers referenced by team members are protected from removal.
+- **Team Group Chat UI**: `ccb team ui <name>` launches a local loopback web page with a group-chat interface — timeline with message bubbles colored by provider, member sidebar with live status, @mention input with broadcast support, and up/down controls.
 
 ## v8.2.1 (2026-07-17)
 

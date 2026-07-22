@@ -71,7 +71,7 @@ from cli.services.pend import pend_target
 from cli.services.ping import ping_target
 from cli.services.provider_admin import ProviderAdminError, provider_add, provider_list, provider_remove
 from cli.services.ps import ps_summary
-from cli.services.team_lifecycle import team_list, team_up, team_down, team_status
+from cli.services.team_lifecycle import team_down, team_list, team_status, team_ui, team_up
 from cli.services.queue import queue_target
 from cli.services.reload import reload_config
 from cli.services.restart import restart_agent
@@ -104,6 +104,8 @@ def _team_lifecycle(context, command):
         return team_down(context, command)
     if action == 'status':
         return team_status(context, command)
+    if action == 'ui':
+        return team_ui(context, command)
     raise ValueError(f'unknown team action: {action}')
 
 

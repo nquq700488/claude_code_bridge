@@ -88,12 +88,13 @@ class ParsedProviderCommand:
 @dataclass(frozen=True)
 class ParsedTeamCommand:
     project: str | None
-    action: str              # list | up | down | status
+    action: str              # list | up | down | status | ui
     team_name: str | None = None
     window: str | None = None
     parked: bool = False
     unload: bool = False
     json_output: bool = False
+    port: int = 0            # team ui --port
     kind: str = 'team'
 
 

@@ -366,8 +366,18 @@ def _atomic_write_json(path: Path, payload: dict) -> None:
     os.replace(tmp, path)
 
 
+def team_ui(context, command) -> dict:
+    """启动 team 群聊 UI Web 页面。"""
+    from .team_ui import open_team_ui_url, prepare_team_ui
+
+    handle = prepare_team_ui(context, command)
+    open_team_ui_url(handle.url)
+    handle.serve_forever()
+    return handle.summary
+
+
 def _utc_now() -> str:
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
 
-__all__ = ['team_list', 'team_up', 'team_down', 'team_status']
+__all__ = ['team_list', 'team_up', 'team_down', 'team_status', 'team_ui']

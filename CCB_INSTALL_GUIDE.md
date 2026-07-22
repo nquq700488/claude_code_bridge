@@ -1298,6 +1298,7 @@ ccb team list [--json]                        # 列出 [teams.*] 定义与实例
 ccb team up <name> [--window NAME] [--parked] [--json]
 ccb team down <name> [--unload] [--json]
 ccb team status <name> [--json]
+ccb team ui <name> [--port PORT]                # 启动群聊 UI 页面
 
 # Agent 间通信（在 Agent 内部使用）
 /ask <agent> <message>            # 向指定 Agent 委派任务（默认同步等待回复）

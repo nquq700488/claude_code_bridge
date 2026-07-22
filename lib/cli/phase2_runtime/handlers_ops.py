@@ -285,6 +285,8 @@ def handle_team(context, command, out, services) -> int:
             lines.append('warning: team definition has changed since up')
         for m in result.get('members') or []:
             lines.append(f'  {m["name"]} ({m["provider"]}): {m.get("state", "unknown")}')
+    elif action == 'ui':
+        lines.append(f'team ui started: {result.get("url", "")}')
     else:
         lines.append(json.dumps(result, ensure_ascii=False, sort_keys=True))
     for line in lines:

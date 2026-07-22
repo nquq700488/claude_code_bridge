@@ -1177,7 +1177,7 @@ def parse_provider(tokens: list[str], *, project: str | None, error_type) -> Par
 
 def parse_team(tokens: list[str], *, project: str | None, error_type) -> ParsedTeamCommand:
     if not tokens:
-        raise error_type('team requires one of: list, up, down, status')
+        raise error_type('team requires one of: list, up, down, status, ui')
     action = str(tokens[0] or '').strip().lower()
     rest = tokens[1:]
     if action == 'list':
@@ -1215,6 +1215,15 @@ def parse_team(tokens: list[str], *, project: str | None, error_type) -> ParsedT
         return ParsedTeamCommand(
             project=project, action='status', team_name=namespace.name,
             json_output=bool(namespace.json),
+        )
+    if action == 'ui':
+        parser = argparse.ArgumentParser(prog='ccb team ui', add_help=False)
+        parser.add_argument('name')
+        parser.add_argument('--port', type=int, default=0)
+        namespace = parse_args(parser, rest, error_message='invalid team ui command', error_type=error_type)
+        return ParsedTeamCommand(
+            project=project, action='ui', team_name=namespace.name,
+            port=int(namespace.port or 0),
         )
     raise error_type(f'unknown team action: {action}')
 
