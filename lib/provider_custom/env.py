@@ -25,10 +25,18 @@ def provider_level_env(spec: CustomProviderSpec) -> dict[str, str]:
 
 def build_oneshot_env_builder(spec: CustomProviderSpec):
     base = provider_level_env(spec)
+    _model_env = spec.model_env
 
     def env_builder(request) -> dict[str, str]:
         env = dict(base)
         env.update(_profile_env(request.session_data))
+        # agent 级 model_env 覆盖：job.provider_options 中 model_env+model
+        # 替代 provider 默认值（Code Review R1 critical #2 — env builder 侧）
+        provider_opts = dict(getattr(getattr(request, 'job', None), 'provider_options', None) or {})
+        agent_model_env = str(provider_opts.get('model_env') or '').strip()
+        agent_model = str(provider_opts.get('model') or '').strip()
+        if agent_model_env and agent_model:
+            env[agent_model_env] = agent_model
         return env
 
     return env_builder

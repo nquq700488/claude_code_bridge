@@ -141,6 +141,42 @@ def test_provider_level_model_flag_assembled_into_command():
     assert cmd[-1] == 'hello'  # prompt 仍居末位（arg 模式）
 
 
+def test_agent_model_override_via_provider_options():
+    """agent 级 model_flag 覆盖：provider_options 中 model+model_flag 替代 provider 默认。"""
+    spec = _spec(model='gpt-5', model_flag='--model')
+    backend = build_custom_oneshot_backend(spec)
+
+    class _Job:
+        provider_options = {'model': 'gpt-4', 'model_flag': '--model'}
+
+    class _Req:
+        prompt = 'hello'
+        job = _Job()
+
+    cmd = backend.execution_adapter.config.command_builder(_Req())
+    assert cmd[:2] == ['px', 'run']
+    assert '--model' in cmd and 'gpt-4' in cmd
+    assert 'gpt-5' not in cmd  # provider 默认被 agent 覆盖
+    assert cmd[-1] == 'hello'
+
+
+def test_agent_model_env_override_via_provider_options():
+    """agent 级 model_env 覆盖：provider_options 中 model_env+model 注入环境变量。"""
+    spec = _spec(model='gpt-5', model_env='PX_MODEL')
+    backend = build_custom_oneshot_backend(spec)
+
+    class _Job:
+        provider_options = {'model': 'gpt-4o', 'model_env': 'PX_MODEL'}
+
+    class _Req:
+        prompt = 'hello'
+        job = _Job()
+        session_data = {}
+
+    env = backend.execution_adapter.config.env_builder(_Req())
+    assert env['PX_MODEL'] == 'gpt-4o'
+
+
 def test_marker_finish_terminates_running_process(monkeypatch, tmp_path):
     # oneshot marker 档的提前完成语义：observer 报 finished 时，
     # NativeCliSubprocessAdapter._terminal 会 terminate 仍在运行的子进程
