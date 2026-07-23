@@ -385,6 +385,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
     # Phase 3: build timeline — only reply events from job records.
     # Ask events are shown by the frontend immediately from the send response.
     events: list[dict] = []
+    seen_reply_jobs = set()
     for jid, job in sorted(jobs_by_id.items()):
         agent_name = job.get('agent_name', '')
         provider = ''
@@ -397,12 +398,15 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         from_actor = request.get('from_actor', '') if isinstance(request, dict) else ''
         is_human = from_actor in ('human', 'user')
 
+        if jid in seen_reply_jobs:
+            continue
         # Reply from events.jsonl or terminal_decision
         reply = replies_by_job.get(jid, '')
         if not reply:
             term = job.get('terminal_decision') or {}
             reply = term.get('reply', '') if isinstance(term, dict) else ''
         if reply:
+            seen_reply_jobs.add(jid)
             term = job.get('terminal_decision') or {}
             reply_ts = (term.get('finished_at') or job.get('updated_at') or job.get('created_at', '')) if isinstance(term, dict) else job.get('created_at', '')
 

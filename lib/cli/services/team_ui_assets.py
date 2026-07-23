@@ -212,7 +212,7 @@ function teamAction(action){
 function fillMention(name){$('send-target').value=name;$('send-input').focus();}
 function scrollBottom(){var tl=$('timeline');tl.scrollTop=tl.scrollHeight;}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
-function fmtTime(t){try{return new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
+function fmtTime(t){try{return new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});}catch(e){return'';}}
 function defaultColor(name){var h=0;for(var i=0;i<name.length;i++)h=name.charCodeAt(i)+((h<<5)-h);return 'hsl('+(h%360)+',60%,55%)';}
 function showError(msg){var t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(function(){t.style.display='none';},4000);}
 
