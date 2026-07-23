@@ -210,18 +210,20 @@ def _build_state_payload(root: Path, team_name: str) -> dict:
     members = []
     for m in instance.get('members', []):
         name = m.get('name', '')
-        lc = _load_json(_member_lifecycle_path(root, name))
         provider = m.get('provider', '?')
-        model = None
-        if lc:
-            model = lc.get('model')
+        # Check for real agent data (any jobs/events file) or lifecycle state
+        has_data = _find_agent_file(root, name, 'jobs.jsonl').is_file() or \
+                   _find_agent_file(root, name, 'events.jsonl').is_file()
+        lc = _load_json(_member_lifecycle_path(root, name))
+        state = lc.get('lifecycle_state', 'visible') if lc else ('visible' if has_data else 'missing')
+        model = lc.get('model') if lc else None
         members.append({
             'name': name,
             'provider': provider,
             'model': model,
             'description': m.get('description'),
-            'state': lc.get('lifecycle_state', 'unknown') if lc else 'missing',
-            'status': lc.get('agent_lifecycle_status', 'unknown') if lc else 'missing',
+            'state': state,
+            'status': lc.get('agent_lifecycle_status', 'active') if lc else ('active' if has_data else 'missing'),
         })
 
     # Try to get topology from config
@@ -515,12 +517,11 @@ def _team_state_path(root: Path, team_name: str) -> Path:
 
 
 def _find_agent_file(root: Path, agent_name: str, filename: str) -> Path:
-    """Find data file for a real agent (.ccb/agents/) or dynamic agent (runtime)."""
-    primary = root / '.ccb' / 'runtime' / 'agents' / agent_name / filename
+    """Find data file — check both .ccb/agents/<name>/ (real) and runtime/ (dynamic)."""
+    primary = root / '.ccb' / 'agents' / agent_name / filename
     if primary.is_file():
         return primary
-    secondary = root / '.ccb' / 'agents' / agent_name / filename
-    return secondary
+    return root / '.ccb' / 'runtime' / 'agents' / agent_name / filename
 
 
 def _member_lifecycle_path(root: Path, agent_name: str) -> Path:
