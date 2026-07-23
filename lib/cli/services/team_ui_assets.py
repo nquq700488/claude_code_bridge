@@ -87,8 +87,8 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
     <span id="status-text">-</span>
   </div>
   <div style="flex:1"></div>
-  <button id="btn-up">Up</button>
-  <button id="btn-down">Down</button>
+  <button id="btn-up">Start</button>
+  <button id="btn-down">Stop</button>
 </header>
 <div class="error-bar" id="error-bar"></div>
 <main>
