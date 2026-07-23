@@ -70,6 +70,12 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
 .toast{position:fixed;top:12px;right:12px;padding:8px 16px;background:#ef4444;color:#fff;border-radius:6px;font-size:13px;z-index:100;animation:fadeIn .2s}
 @keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
 .error-bar{background:rgba(239,68,68,.1);color:#fca5a5;text-align:center;padding:6px;font-size:12px;display:none}
+.msg.thinking .bubble{opacity:.5;font-style:italic}
+.msg.thinking .dots{color:var(--text-dim)}
+.dot-pulse{animation:pulse 1.4s infinite}
+.dot-pulse::after{content:'';animation:dots 1.4s infinite}
+@keyframes pulse{0%,20%{opacity:0}50%{opacity:1}80%,100%{opacity:0}}
+@keyframes dots{0%{content:'.'}33%{content:'..'}66%{content:'...'}100%{content:'.'}}
 </style>
 </head>
 <body>
@@ -165,6 +171,8 @@ function renderInput(s){
 function appendEvents(events){
   var tl=$('timeline');
   events.forEach(function(ev){if(ev.job_id&&seenJids[ev.job_id])return;if(ev.job_id)seenJids[ev.job_id]=true;
+    // When a real reply arrives, remove thinking indicators
+    if(ev.type==='reply'||ev.type==='system'){clearThinking();}
     var div=document.createElement('div');
     var isYou=ev.from==='human'||ev.from==='You';
     div.className='msg '+(isYou?'user':(ev.type==='system'?'system':''));
@@ -197,9 +205,11 @@ function sendMessage(){
   api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:to,body:body})})
     .then(function(r){
       input.value='';
-      // Use server-rendered ask event for immediate display
       if(r.ask_event){appendEvents([r.ask_event]);}
-      scrollBottom();
+      // Show thinking indicator for the target agent
+      var targets=r.targets||(to==='@all'?[]:[to]);
+      targets.forEach(function(t){showThinking(t);});
+      setTimeout(scrollBottom,50);
     }).catch(function(e){showError('Send failed: '+e);});
 }
 
@@ -216,6 +226,18 @@ function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').repl
 function fmtTime(t){try{return new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit',second:'2-digit'});}catch(e){return'';}}
 function defaultColor(name){var h=0;for(var i=0;i<name.length;i++)h=name.charCodeAt(i)+((h<<5)-h);return 'hsl('+(h%360)+',60%,55%)';}
 function showError(msg){var t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(function(){t.style.display='none';},4000);}
+function showThinking(name){
+  clearThinking();
+  var div=document.createElement('div');div.className='msg thinking';div.setAttribute('data-target',name);
+  var color=PROVIDER_COLORS[name]||defaultColor(name);
+  div.innerHTML='<div class="sender"><span class="badge" style="background:'+color+'">...</span></div>'+
+    '<div class="bubble"><span class="dots">'+esc(name)+' 思考中</span><span class="dot-pulse">.</span></div>';
+  $('timeline').appendChild(div);
+}
+function clearThinking(){
+  var nodes=$('timeline').querySelectorAll('.msg.thinking');
+  for(var i=0;i<nodes.length;i++)nodes[i].remove();
+}
 
 $('send-btn').addEventListener('click',sendMessage);
 $('send-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
