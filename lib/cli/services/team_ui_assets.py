@@ -7,7 +7,7 @@ TEAM_UI_HTML = """<!DOCTYPE html>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CCB Team UI</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#090c10;--surface:#0d1117;--surface2:#111820;--border:#1c2333;--border-light:#253049;
   --text:#c9d1d9;--text-mid:#8b949e;--text-dim:#484f58;
@@ -15,22 +15,20 @@ TEAM_UI_HTML = """<!DOCTYPE html>
   --radius:6px;--font:system-ui,-apple-system,sans-serif;--mono:'SF Mono',JetBrains Mono,Menlo,monospace;
   --transition:150ms ease
 }
-body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column;font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
-
-/* ── header ── */
-header{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;backdrop-filter:blur(8px)}
+html,body{height:100%;overflow:hidden}
+body{font-family:var(--font);background:var(--bg);color:var(--text);display:flex;flex-direction:column;font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased}
+header{flex-shrink:0;display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--surface);border-bottom:1px solid var(--border)}
 header h1{font-size:14px;font-weight:600;letter-spacing:-.01em;color:var(--text);white-space:nowrap}
 header .meta{font-size:11px;color:var(--text-mid);display:flex;gap:10px;align-items:center;font-variant-numeric:tabular-nums}
-header .dot{width:7px;height:7px;border-radius:50%;display:inline-block;box-shadow:0 0 6px}
+header .dot{width:7px;height:7px;border-radius:50%;display:inline-block}
 header .dot.running{background:#3fb950;box-shadow:0 0 8px rgba(63,185,80,.4)}
 header .dot.stopped{background:#f85149;box-shadow:0 0 8px rgba(248,81,73,.3)}
-header button{font-size:11px;font-weight:500;padding:5px 12px;border:1px solid var(--border-light);border-radius:4px;background:transparent;color:var(--text-mid);cursor:pointer;transition:all var(--transition);letter-spacing:.02em}
+header button{font-size:11px;font-weight:500;padding:5px 12px;border:1px solid var(--border-light);border-radius:4px;background:transparent;color:var(--text-mid);cursor:pointer;transition:all var(--transition)}
 header button:hover{border-color:var(--text-dim);color:var(--text)}
-
-/* ── sidebar ── */
+main{flex:1;display:flex;min-height:0}
 aside.sidebar{width:188px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);overflow-y:auto;padding:6px 0}
 aside.sidebar h2{font-size:10px;font-weight:600;text-transform:uppercase;color:var(--text-dim);padding:10px 14px 6px;letter-spacing:.08em}
-.member-card{display:flex;align-items:center;gap:10px;padding:7px 14px;cursor:pointer;font-size:12px;transition:background var(--transition);margin:0 4px;border-radius:4px;position:relative}
+.member-card{display:flex;align-items:center;gap:10px;padding:7px 14px;cursor:pointer;font-size:12px;transition:background var(--transition);margin:0 4px;border-radius:4px}
 .member-card:hover{background:var(--surface2)}
 .member-card .indicator{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .member-card .indicator.active{background:#3fb950;box-shadow:0 0 6px rgba(63,185,80,.5)}
@@ -39,28 +37,20 @@ aside.sidebar h2{font-size:10px;font-weight:600;text-transform:uppercase;color:v
 .member-card .info{flex:1;min-width:0}
 .member-card .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:12px}
 .member-card .meta{font-size:10px;color:var(--text-dim);margin-top:1px;font-variant-numeric:tabular-nums}
-
-/* ── timeline ── */
-.timeline{flex:1;overflow-y:auto;padding:20px 24px;display:flex;flex-direction:column;gap:8px;
-  background-image:radial-gradient(circle,var(--border) 1px,transparent 1px);
-  background-size:20px 20px}
-.timeline::before{content:'';position:absolute;inset:0;background:linear-gradient(to bottom,var(--bg),transparent 40px);pointer-events:none;z-index:1}
-
-/* ── messages ── */
-.msg{display:flex;flex-direction:column;max-width:76%;animation:msgIn .25s ease;position:relative;z-index:2}
+.timeline{flex:1;overflow-y:auto;overflow-x:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:10px;
+  background-color:var(--bg);
+  background-image:radial-gradient(circle at 1px 1px,var(--border) 1px,transparent 0);
+  background-size:24px 24px}
+.msg{display:flex;flex-direction:column;max-width:76%;animation:msgIn .25s ease}
 .msg.user{align-self:flex-end;align-items:flex-end}
 .msg.system{align-self:center;align-items:center;max-width:100%}
 .msg .sender{font-size:10.5px;color:var(--text-mid);margin-bottom:3px;display:flex;gap:5px;align-items:center;font-weight:500}
 .msg .sender .badge{font-size:9.5px;padding:1px 6px;border-radius:3px;color:#fff;font-weight:600;letter-spacing:.03em}
-.msg .bubble{padding:10px 14px;border-radius:var(--radius);font-size:13px;line-height:1.55;word-break:break-word;
-  background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border)}
-.msg .bubble{border-left-color:var(--border)}
-.msg.user .bubble{background:rgba(88,166,255,.06);border-color:rgba(88,166,255,.15);border-left-color:var(--human)}
+.msg .bubble{padding:10px 14px;border-radius:var(--radius);font-size:13px;line-height:1.55;word-break:break-word;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border)}
+.msg.user .bubble{background:rgba(88,166,255,.06);border-color:rgba(88,166,255,.12);border-left-color:var(--human)}
 .msg.system .bubble{background:transparent;border:none;color:var(--text-dim);font-size:11px;text-align:center;padding:3px 8px}
 .msg .time{font-size:9.5px;color:var(--text-dim);margin-top:3px;font-variant-numeric:tabular-nums}
 .msg .reply-ctx{font-size:10.5px;color:var(--text-dim);border-left:2px solid var(--text-dim);padding-left:8px;margin-bottom:5px;max-height:3em;overflow:hidden;opacity:.7}
-
-/* ── message content ── */
 .msg .bubble code{font-family:var(--mono);font-size:11.5px;background:rgba(110,118,129,.15);padding:1.5px 5px;border-radius:3px}
 .msg .bubble pre{background:rgba(0,0,0,.5);padding:12px 16px;border-radius:var(--radius);font-family:var(--mono);font-size:11.5px;overflow-x:auto;margin:8px 0;line-height:1.5;white-space:pre-wrap;border:1px solid rgba(255,255,255,.04)}
 .msg .bubble pre code{background:none;padding:0;font-size:inherit}
@@ -73,26 +63,20 @@ aside.sidebar h2{font-size:10px;font-weight:600;text-transform:uppercase;color:v
 .msg .bubble a:hover{text-decoration:underline}
 .msg .bubble strong{color:var(--text);font-weight:700}
 .msg .bubble em{color:var(--text-mid)}
-
-/* ── thinking ── */
 .msg.thinking .bubble{border-left-color:var(--text-dim);opacity:.6;font-style:italic}
 .msg.thinking .dots{color:var(--text-mid);font-size:12px}
-
-/* ── input ── */
-footer{border-top:1px solid var(--border);padding:12px 18px;background:var(--surface);flex-shrink:0}
+footer{flex-shrink:0;border-top:1px solid var(--border);padding:12px 18px;background:var(--surface)}
 .input-row{display:flex;gap:8px;align-items:center}
 .input-row select{background:var(--bg);color:var(--text-mid);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font-size:11.5px;min-width:130px;cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%238b949e' d='M0 0h8L4 5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:26px}
 .input-row input{flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:7px 14px;font-size:13px;outline:none;transition:border-color var(--transition)}
 .input-row input:focus{border-color:var(--human);box-shadow:0 0 0 2px rgba(88,166,255,.1)}
 .input-row input::placeholder{color:var(--text-dim)}
-.input-row button{padding:7px 20px;background:var(--codex);color:#fff;border:none;border-radius:var(--radius);font-size:12.5px;cursor:pointer;font-weight:600;transition:all var(--transition);letter-spacing:.01em}
+.input-row button{padding:7px 20px;background:var(--codex);color:#fff;border:none;border-radius:var(--radius);font-size:12.5px;cursor:pointer;font-weight:600;transition:all var(--transition)}
 .input-row button:hover{background:#7378f5;transform:translateY(-1px)}
 .input-row button:disabled{opacity:.3;cursor:not-allowed;transform:none}
 .mention-chips{display:flex;gap:4px;flex-wrap:wrap;padding:6px 0 0}
 .mention-chips span{font-size:10.5px;padding:3px 10px;border-radius:12px;background:var(--surface2);border:1px solid var(--border);cursor:pointer;color:var(--text-mid);transition:all var(--transition)}
 .mention-chips span:hover{background:var(--border-light);color:var(--text)}
-
-/* ── toast, error, animations ── */
 .toast{position:fixed;top:16px;right:16px;padding:10px 18px;background:rgba(248,81,73,.95);color:#fff;border-radius:var(--radius);font-size:12px;z-index:100;animation:msgIn .2s;box-shadow:0 4px 12px rgba(0,0,0,.3)}
 .error-bar{background:rgba(248,81,73,.08);color:#f85149;text-align:center;padding:5px;font-size:11px;display:none;border-bottom:1px solid rgba(248,81,73,.15)}
 @keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
