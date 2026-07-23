@@ -178,7 +178,7 @@ function appendEvents(events){
       if(ev.to){
         senderHtml+='<span style="font-size:10px;color:var(--text-dim)">→ '+esc(ev.to)+'</span>';
       }
-      var body=ev.body_html||('<div>'+esc(ev.body||'').replace(/\n/g,'<br>')+'</div>');
+      var body=ev.body_html||('<div>'+esc(ev.body||'').split(new RegExp(String.fromCharCode(10))).join('<br>')+'</div>');
       if(ev.reply_to){
         body='<div class="reply-ctx">↳ '+esc((ev.reply_to||'').substring(0,120))+'</div>'+body;
       }
