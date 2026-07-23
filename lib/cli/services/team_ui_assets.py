@@ -37,10 +37,7 @@ aside.sidebar h2{font-size:10px;font-weight:600;text-transform:uppercase;color:v
 .member-card .info{flex:1;min-width:0}
 .member-card .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:12px}
 .member-card .meta{font-size:10px;color:var(--text-dim);margin-top:1px;font-variant-numeric:tabular-nums}
-.timeline{flex:1;overflow-y:auto;overflow-x:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:10px;
-  background-color:var(--bg);
-  background-image:radial-gradient(circle at 1px 1px,var(--border) 1px,transparent 0);
-  background-size:24px 24px}
+.timeline{flex:1;overflow-y:auto;overflow-x:hidden;padding:20px 24px;display:flex;flex-direction:column;gap:10px}
 .msg{display:flex;flex-direction:column;max-width:76%;animation:msgIn .25s ease}
 .msg.user{align-self:flex-end;align-items:flex-end}
 .msg.system{align-self:center;align-items:center;max-width:100%}
@@ -135,7 +132,7 @@ function loadState(){
 
 function loadTimeline(){
   var qs=state.cursor?'?since='+state.cursor:'';
-  api('/api/timeline'+qs).then(function(t){
+  return api('/api/timeline'+qs).then(function(t){
     if(t.events&&t.events.length){appendEvents(t.events);state.cursor=t.cursor;scrollBottom();}
   }).catch(function(){});
 }
@@ -261,7 +258,7 @@ $('mention-chips').addEventListener('click',function(e){
 
 state.token=new URLSearchParams(location.search).get('token')||'';
 loadState();
-loadTimeline();
+loadTimeline().then(function(){setTimeout(scrollBottom,100);});
 pollTimer=setInterval(loadTimeline,2000);
 setInterval(loadState,5000);
 })();
