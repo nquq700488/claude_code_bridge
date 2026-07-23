@@ -29,13 +29,16 @@ def _render_body_html(text: str) -> str:
     """Render message body text to HTML using markdown-it-py.
 
     Handles CCB artifact format (strips file-path/SHA256 header, keeps content
-    preview). Auto-detects JSON blocks and fenced code.
+    preview). Auto-detects JSON blocks and fenced code. Strips CCB reply
+    guidance boilerplate from ask messages.
     """
     global _md
     if not text:
         return ''
     # Strip CCB artifact header (large-reply artifact reference)
     text = _strip_artifact_header(text)
+    # Strip CCB reply guidance prefix (auto-added by ccb ask)
+    text = _strip_ccb_guidance(text)
     if _md is None:
         try:
             from markdown_it import MarkdownIt
@@ -49,6 +52,25 @@ def _render_body_html(text: str) -> str:
             text = '```json\n' + text + '\n```'
         return (_md.render(text) if callable(getattr(_md, 'render', None)) else text)
     return _escape_html(text)
+
+
+def _strip_ccb_guidance(text: str) -> str:
+    """Strip CCB guidance boilerplate auto-added by ccb ask."""
+    pattern = (
+        r'CCB reply guidance:\n'
+        r'- Answer directly and concisely\.\n'
+        r'- Include only relevant conclusions, blockers, risks, evidence, and next actions\.\n'
+        r'- Avoid raw logs and background unless explicitly requested\.\n\n'
+    )
+    text = re.sub(pattern, '', text)
+    if text.startswith('CCB reply guidance:\n'):
+        # Fallback: try to find where the actual message begins after guidance
+        lines = text.split('\n')
+        for i, line in enumerate(lines):
+            if not line.startswith('- ') and not line.startswith('CCB ') and i > 3:
+                text = '\n'.join(lines[i:])
+                break
+    return text
 
 
 def _strip_artifact_header(text: str) -> str:
@@ -333,8 +355,9 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             if prev is None or rec_ts >= prev_ts:
                 jobs_by_id[jid] = record
 
-    # Phase 2: collect completion_terminal replies from events.jsonl
+    # Phase 2: collect completion_terminal replies + _ui_ask events from events.jsonl
     replies_by_job: dict[str, str] = {}
+    ui_asks: list[dict] = []
     for m in members:
         name = m.get('name', '')
         if not name or '..' in name or '/' in name or '\\' in name:
@@ -347,21 +370,40 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             if evt_type != 'completion_terminal':
                 continue
             jid = line.get('job_id', '')
-            if not jid:
-                continue
             ts = line.get('created_at') or line.get('timestamp') or ''
+            if not ts:
+                continue
             if cursor and ts <= cursor:
                 continue
             if upped_at and ts < upped_at:
                 continue
             payload = line.get('payload') or {}
-            reply = payload.get('reply', '') if isinstance(payload, dict) else ''
+            if not isinstance(payload, dict):
+                continue
+            # UI-generated ask events (lightweight markers)
+            if payload.get('_ui_ask') and payload.get('_ui_body'):
+                ui_asks.append({
+                    'type': 'ask',
+                    'from': 'You',
+                    'from_provider': 'human',
+                    'to': payload.get('_ui_to', ''),
+                    'body': str(payload['_ui_body'])[:2000],
+                    'body_html': _render_body_html(str(payload['_ui_body'])[:2000]),
+                    'time': ts,
+                    'job_id': jid,
+                })
+                continue
+            # Real agent reply
+            reply = payload.get('reply', '')
             if reply and jid not in replies_by_job:
                 replies_by_job[jid] = reply
 
     # Phase 3: build deduplicated event list
     events: list[dict] = []
     for jid, job in sorted(jobs_by_id.items()):
+        # Skip lightweight UI ask markers (these are handled via events.jsonl)
+        if str(jid).startswith('job-ui-'):
+            continue
         ts = job.get('created_at', '')
         agent_name = job.get('agent_name', '')
         provider = ''
@@ -410,6 +452,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
                 'reply_to': str(request_body)[:120] if request_body else '',
             })
 
+    events.extend(ui_asks)
     events.sort(key=lambda e: e.get('time', ''))
     new_cursor = events[-1]['time'] if events else (cursor or '')
     return {'events': events, 'cursor': new_cursor}
@@ -449,54 +492,39 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
 
 
 def _submit_or_record(root, team_name, target, msg, instance):
-    """Send message via ccb ask; write job record so timeline shows it.
-
-    Tries ccb ask first for real agent response. Falls back to local-only
-    record if ccb is unavailable.
-    """
+    """Send via ccb ask; write a lightweight ask event so timeline shows it
+    immediately. The real agent reply will be picked up by polling events.jsonl."""
     now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
-    jid = f'job-ui-{int(time.time())}'
-    agent_dir = root / '.ccb' / 'agents' / target
-    agent_dir.mkdir(parents=True, exist_ok=True)
     provider = ''
     for m in instance.get('members', []):
         if m.get('name') == target:
             provider = m.get('provider', '')
             break
+    # Write a single ask event so the sender sees their message immediately
+    events_path = root / '.ccb' / 'agents' / target / 'events.jsonl'
+    events_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(events_path, 'a') as f:
+        f.write(json.dumps({
+            'type': 'completion_terminal',
+            'job_id': f'ui-ask-{int(time.time())}',
+            'created_at': now,
+            'payload': {
+                'reply': '',  # empty reply = this is just the ask echo
+                '_ui_ask': True,
+                '_ui_body': msg,
+                '_ui_from': 'human',
+                '_ui_to': target,
+            },
+        }, ensure_ascii=False) + '\n')
 
-    # Write ask record (status=running — reply comes from real agent)
-    job = {
-        'job_id': jid, 'agent_name': target,
-        'provider': provider, 'status': 'running',
-        'created_at': now, 'updated_at': now,
-        'request': {'body': msg, 'from_actor': 'human', 'to_agent': target},
-    }
-    jobs_path = agent_dir / 'jobs.jsonl'
-    with open(jobs_path, 'a') as f:
-        f.write(json.dumps(job, ensure_ascii=False) + '\n')
-
-    # Try real ccb ask — agent will write its own reply to events.jsonl
+    # Let ccb ask handle the real job
     try:
         result = _ask_member(root, target, msg)
         if result.get('status') == 'sent':
-            return jid
+            return result.get('job_id', 'unknown')
     except Exception:
         pass
-
-    # ccb ask failed — write a fallback note so user isn't left hanging
-    fallback_reply = f'[Message sent to {target}. Waiting for response...]'
-    with open(jobs_path, 'a') as f:
-        job['status'] = 'completed'
-        job['terminal_decision'] = {'reply': fallback_reply, 'finished_at': now}
-        f.write(json.dumps(job, ensure_ascii=False) + '\n')
-    events_path = agent_dir / 'events.jsonl'
-    with open(events_path, 'a') as f:
-        f.write(json.dumps({
-            'type': 'completion_terminal', 'job_id': jid,
-            'created_at': now,
-            'payload': {'reply': fallback_reply},
-        }, ensure_ascii=False) + '\n')
-    return jid
+    return 'queued'
 
 
 def _broadcast(root: Path, team_name: str, msg: str) -> dict:
