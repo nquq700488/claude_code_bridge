@@ -320,8 +320,13 @@ def load_project_config(project_root: Path, *, include_loop_overlays: bool = Tru
     resolved = resolve_config_profile_path(project_root)
     project_path = resolved or project_config_path(project_root)
     if project_path.exists():
+        document = _load_config_document(project_path, project_root=Path(project_root).expanduser().resolve())
+        # 当使用 config_profile 路由时，ccb.config 可承载 teams/providers 等共享配置，
+        # 避免每个 profile 文件重复定义。profile 文件中的同名字段优先。
+        if resolved is not None:
+            document = _overlay_shared_config(project_root, document)
         config = validate_project_config(
-            _load_config_document(project_path, project_root=Path(project_root).expanduser().resolve()),
+            document,
             source_path=project_path,
             project_root=project_root,
         )
@@ -348,6 +353,38 @@ def load_project_config(project_root: Path, *, include_loop_overlays: bool = Tru
         source_kind=CONFIG_SOURCE_BUILTIN_DEFAULT,
         used_default=True,
     )
+
+
+def _overlay_shared_config(project_root: Path, profile_document: dict[str, object]) -> dict[str, object]:
+    """Merge shared config keys (teams, providers) from ccb.config into profile.
+
+    ccb.config acts as a shared base — write teams/providers once, both
+    compact and multi profiles pick them up. Profile-specific definitions
+    take precedence on matching keys within each section.
+    """
+    primary = project_config_path(project_root)
+    try:
+        shared_raw = _parse_toml_config_document(
+            primary.read_text(encoding='utf-8'), path=primary
+        )
+    except Exception:
+        return profile_document
+    _SHARED_KEYS = {'teams', 'providers'}
+    shared = {k: v for k, v in shared_raw.items() if k in _SHARED_KEYS}
+    if not shared:
+        return profile_document
+    merged = dict(profile_document)
+    for key in _SHARED_KEYS:
+        profile_val = merged.get(key)
+        shared_val = shared.get(key)
+        if shared_val is None:
+            continue
+        if profile_val is None:
+            merged[key] = shared_val
+        elif isinstance(profile_val, dict) and isinstance(shared_val, dict):
+            # Profile wins on conflict within each section
+            merged[key] = {**dict(shared_val), **dict(profile_val)}
+    return merged
 
 
 __all__ = ['load_project_config', 'parse_config_document_text']

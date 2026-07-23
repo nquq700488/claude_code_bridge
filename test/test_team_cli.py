@@ -5,7 +5,7 @@ import json
 import pytest
 
 from cli.parser_runtime.commands import parse_team
-from cli.services.team_lifecycle import team_down, team_list, team_status, team_up
+from cli.services.team_lifecycle import team_list, team_start, team_status, team_stop
 
 
 class _Ctx:
@@ -50,16 +50,16 @@ class TestParseTeam:
         assert cmd.action == 'list'
         assert cmd.kind == 'team'
 
-    def test_parse_up(self):
-        cmd = parse_team(['up', 'myteam', '--window', 'w1', '--parked'], project=None, error_type=ValueError)
-        assert cmd.action == 'up'
+    def test_parse_start(self):
+        cmd = parse_team(['start', 'myteam', '--window', 'w1', '--parked'], project=None, error_type=ValueError)
+        assert cmd.action == 'start'
         assert cmd.team_name == 'myteam'
         assert cmd.window == 'w1'
         assert cmd.parked is True
 
-    def test_parse_down(self):
-        cmd = parse_team(['down', 'myteam', '--unload'], project=None, error_type=ValueError)
-        assert cmd.action == 'down'
+    def test_parse_stop(self):
+        cmd = parse_team(['stop', 'myteam', '--unload'], project=None, error_type=ValueError)
+        assert cmd.action == 'stop'
         assert cmd.team_name == 'myteam'
         assert cmd.unload is True
 
@@ -113,11 +113,11 @@ provider = "codex"
 '''
 
 
-class TestTeamUpDown:
-    def test_team_up_creates_lifecycle_and_memory(self, tmp_path):
+class TestTeamStartStop:
+    def test_team_start_creates_lifecycle_and_memory(self, tmp_path):
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
-        result = team_up(ctx, _Cmd(action='up', team_name='t'))
+        result = team_start(ctx, _Cmd(action='start', team_name='t'))
         assert result['team'] == 't'
         assert len(result['members']) == 2
         assert all(m['ok'] for m in result['members'])
@@ -141,19 +141,19 @@ class TestTeamUpDown:
         state = root / '.ccb' / 'runtime' / 'teams' / 't' / 'state.json'
         assert state.is_file()
 
-    def test_team_up_idempotent(self, tmp_path):
+    def test_team_start_idempotent(self, tmp_path):
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
-        result2 = team_up(ctx, _Cmd(action='up', team_name='t'))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
+        result2 = team_start(ctx, _Cmd(action='start', team_name='t'))
         assert result2['status'] == 'already_running'
 
-    def test_team_up_rejects_unknown_team(self, tmp_path):
+    def test_team_start_rejects_unknown_team(self, tmp_path):
         ctx = _Ctx(_project(tmp_path, _TEAM_CONFIG))
         with pytest.raises(ValueError, match='not defined'):
-            team_up(ctx, _Cmd(action='up', team_name='nonexistent'))
+            team_start(ctx, _Cmd(action='start', team_name='nonexistent'))
 
-    def test_team_up_rejects_unknown_provider(self, tmp_path):
+    def test_team_start_rejects_unknown_provider(self, tmp_path):
         text = _V2_BASE + '''
 [teams.bad]
 topology = "mesh"
@@ -166,9 +166,9 @@ provider = "claude"
 '''
         ctx = _Ctx(_project(tmp_path, text))
         with pytest.raises(ValueError, match='unknown provider'):
-            team_up(ctx, _Cmd(action='up', team_name='bad'))
+            team_start(ctx, _Cmd(action='start', team_name='bad'))
 
-    def test_team_up_rejects_member_name_conflict(self, tmp_path):
+    def test_team_start_rejects_member_name_conflict(self, tmp_path):
         text = _V2_BASE + '''
 [teams.t]
 topology = "mesh"
@@ -181,13 +181,13 @@ provider = "codex"
 '''
         ctx = _Ctx(_project(tmp_path, text))
         with pytest.raises(ValueError, match='conflicts'):
-            team_up(ctx, _Cmd(action='up', team_name='t'))
+            team_start(ctx, _Cmd(action='start', team_name='t'))
 
-    def test_team_down_park_default(self, tmp_path):
+    def test_team_stop_park_default(self, tmp_path):
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
-        result = team_down(ctx, _Cmd(action='down', team_name='t'))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
+        result = team_stop(ctx, _Cmd(action='stop', team_name='t'))
         assert result['team'] == 't'
         assert result['parked'] is True
 
@@ -204,11 +204,11 @@ provider = "codex"
         state_data = json.loads(state.read_text(encoding='utf-8'))
         assert state_data['status'] == 'parked'
 
-    def test_team_down_unload(self, tmp_path):
+    def test_team_stop_unload(self, tmp_path):
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
-        result = team_down(ctx, _Cmd(action='down', team_name='t', unload=True))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
+        result = team_stop(ctx, _Cmd(action='stop', team_name='t', unload=True))
         assert result['team'] == 't'
         assert result['parked'] is False
 
@@ -222,12 +222,12 @@ provider = "codex"
         state = root / '.ccb' / 'runtime' / 'teams' / 't' / 'state.json'
         assert not state.is_file()
 
-    def test_team_down_rejects_not_up(self, tmp_path):
+    def test_team_stop_rejects_not_started(self, tmp_path):
         ctx = _Ctx(_project(tmp_path, _TEAM_CONFIG))
-        with pytest.raises(ValueError, match='not up'):
-            team_down(ctx, _Cmd(action='down', team_name='t'))
+        with pytest.raises(ValueError, match='not started'):
+            team_stop(ctx, _Cmd(action='stop', team_name='t'))
 
-    def test_team_status_not_up(self, tmp_path):
+    def test_team_status_not_started(self, tmp_path):
         ctx = _Ctx(_project(tmp_path, _TEAM_CONFIG))
         result = team_status(ctx, _Cmd(action='status', team_name='t'))
         assert result['status'] == 'not_up'
@@ -235,18 +235,18 @@ provider = "codex"
     def test_team_status_running(self, tmp_path):
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
         result = team_status(ctx, _Cmd(action='status', team_name='t'))
         assert result['status'] == 'running'
         assert len(result['members']) == 2
         assert result['definition_changed'] is False
 
     def test_parked_team_can_resume(self, tmp_path):
-        """park 后的 team 可以重新 up 恢复激活。"""
+        """park 后的 team 可以重新 start 恢复激活。"""
         root = _project(tmp_path, _TEAM_CONFIG)
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
-        team_down(ctx, _Cmd(action='down', team_name='t'))  # default park
+        team_start(ctx, _Cmd(action='start', team_name='t'))
+        team_stop(ctx, _Cmd(action='stop', team_name='t'))  # default park
 
         # 验证 park 状态
         for name in ('team-a', 'team-b'):
@@ -254,8 +254,8 @@ provider = "codex"
             data = json.loads(lc.read_text(encoding='utf-8'))
             assert data['lifecycle_state'] == 'parked'
 
-        # 重新 up
-        result = team_up(ctx, _Cmd(action='up', team_name='t'))
+        # 重新 start
+        result = team_start(ctx, _Cmd(action='start', team_name='t'))
         assert result['status'] == 'resumed_from_parked'
 
         # 验证恢复 active

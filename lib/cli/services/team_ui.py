@@ -1,7 +1,7 @@
 """Team UI HTTP server — serves the group-chat SPA and API endpoints.
 
-Pattern: follows config_ui.py (ThreadingHTTPServer + token auth + idle timeout).
-API: GET /api/state, GET /api/timeline, POST /api/send, POST /api/up, POST /api/down.
+Pattern: follows config_ui.py (ThreadingHTTPServer + idle timeout).
+API: GET /api/state, GET /api/timeline, POST /api/send, POST /api/start, POST /api/stop.
 """
 
 from __future__ import annotations
@@ -9,7 +9,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import secrets
 import subprocess
 import sys
 import time
@@ -112,9 +111,10 @@ class TeamUiHandle:
         self._server.server_close()
 
 
-def prepare_team_ui(context, command, *, token=None, idle_timeout_s=DEFAULT_IDLE_TIMEOUT_S):
+def prepare_team_ui(context, command, *, idle_timeout_s=DEFAULT_IDLE_TIMEOUT_S):
     """Create and return a TeamUiHandle for the given team.
 
+    Binds to 127.0.0.1 only. No authentication — data is project-local.
     The caller should call handle.serve_forever() to run the server loop.
     """
     root = _project_root(context)
@@ -130,7 +130,6 @@ def prepare_team_ui(context, command, *, token=None, idle_timeout_s=DEFAULT_IDLE
         raise ValueError(f'team {team_name!r} not defined in config')
 
     team = config.teams[team_name]
-    access_token = token or secrets.token_urlsafe(24)
     last_activity = [time.monotonic()]
     page = TEAM_UI_HTML.encode('utf-8')
     team_name_bytes = team_name.encode('utf-8')
@@ -141,7 +140,6 @@ def prepare_team_ui(context, command, *, token=None, idle_timeout_s=DEFAULT_IDLE
         'team_name': team_name,
         'team_name_bytes': team_name_bytes,
         'page': page,
-        'token': access_token,
         'last_activity': last_activity,
         'command': command,
     }
@@ -151,7 +149,7 @@ def prepare_team_ui(context, command, *, token=None, idle_timeout_s=DEFAULT_IDLE
     server = ThreadingHTTPServer(('127.0.0.1', port), handler)
     server.daemon_threads = True
     host, bound_port = server.server_address[:2]
-    url = f'http://{host}:{bound_port}/?token={access_token}'
+    url = f'http://{host}:{bound_port}/'
 
     return TeamUiHandle(
         url=url,
@@ -179,9 +177,6 @@ def _make_handler(data: dict):
 
         def do_GET(self):  # noqa: N802
             parsed = urlparse(self.path)
-            if not self._authorized(parsed):
-                self._send(HTTPStatus.FORBIDDEN, b'forbidden\n', 'text/plain; charset=utf-8')
-                return
             data['last_activity'][0] = time.monotonic()
 
             if parsed.path in {'/', '/index.html'}:
@@ -203,9 +198,6 @@ def _make_handler(data: dict):
 
         def do_POST(self):  # noqa: N802
             parsed = urlparse(self.path)
-            if not self._authorized(parsed):
-                self._send(HTTPStatus.FORBIDDEN, b'forbidden\n', 'text/plain; charset=utf-8')
-                return
             data['last_activity'][0] = time.monotonic()
 
             try:
@@ -219,13 +211,13 @@ def _make_handler(data: dict):
                 self._send_json(HTTPStatus.OK, payload)
                 return
 
-            if parsed.path == '/api/up':
-                payload = _handle_team_action(data['root'], data['team_name'], 'up', data['command'])
+            if parsed.path == '/api/start':
+                payload = _handle_team_action(data['root'], data['team_name'], 'start', data['command'])
                 self._send_json(HTTPStatus.OK, payload)
                 return
 
-            if parsed.path == '/api/down':
-                payload = _handle_team_action(data['root'], data['team_name'], 'down', data['command'])
+            if parsed.path == '/api/stop':
+                payload = _handle_team_action(data['root'], data['team_name'], 'stop', data['command'])
                 self._send_json(HTTPStatus.OK, payload)
                 return
 
@@ -233,10 +225,6 @@ def _make_handler(data: dict):
 
         def log_message(self, fmt, *args):
             pass  # Suppress access logs
-
-        def _authorized(self, parsed) -> bool:
-            token = parse_qs(parsed.query).get('token', [''])[0]
-            return token == data['token']
 
         def _send(self, status, content, content_type):
             body = content if isinstance(content, bytes) else str(content).encode('utf-8')
@@ -555,8 +543,8 @@ def _ask_member(root: Path, to: str, msg: str) -> dict:
 
 
 def _handle_team_action(root: Path, team_name: str, action: str, command) -> dict:
-    """Handle POST /api/up and /api/down — delegate to team_lifecycle."""
-    from cli.services.team_lifecycle import team_down, team_up
+    """Handle POST /api/start and /api/stop — delegate to team_lifecycle."""
+    from cli.services.team_lifecycle import team_start, team_stop
 
     class _Cmd:
         def __init__(self, **kw):
@@ -570,10 +558,10 @@ def _handle_team_action(root: Path, team_name: str, action: str, command) -> dic
     ctx = _Ctx(root)
     cmd = _Cmd(action=action, team_name=team_name, unload=False)
     try:
-        if action == 'up':
-            result = team_up(ctx, cmd)
+        if action == 'start':
+            result = team_start(ctx, cmd)
         else:
-            result = team_down(ctx, cmd)
+            result = team_stop(ctx, cmd)
         return {'status': 'ok', 'action': action, 'result': result}
     except Exception as exc:
         return {'status': 'error', 'action': action, 'error': str(exc)}

@@ -9,9 +9,9 @@ TEAM_UI_HTML = """<!DOCTYPE html>
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#090c10;--surface:#0d1117;--surface2:#111820;--border:#1c2333;--border-light:#253049;
-  --text:#d2d8e0;--text-mid:#b0b8c0;--text-dim:#9099a3;
-  --claude:#d97706;--codex:#6366f1;--gemini:#059669;--kimi:#dc2626;--custom:#8b5cf6;--human:#58a6ff;
+  --bg:#f6f8fa;--surface:#ffffff;--surface2:#f0f2f5;--border:#d0d7de;--border-light:#e3e8ef;
+  --text:#1f2328;--text-mid:#656d76;--text-dim:#8b949e;
+  --claude:#b45309;--codex:#4f46e5;--gemini:#047857;--kimi:#dc2626;--custom:#7c3aed;--human:#0969da;
   --radius:6px;--font:system-ui,-apple-system,sans-serif;--mono:'SF Mono',JetBrains Mono,Menlo,monospace;
   --transition:150ms ease
 }
@@ -32,7 +32,7 @@ aside.sidebar h2{font-size:10px;font-weight:600;text-transform:uppercase;color:v
 .member-card:hover{background:var(--surface2)}
 .member-card .indicator{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .member-card .indicator.active{background:#3fb950;box-shadow:0 0 6px rgba(63,185,80,.5)}
-.member-card .indicator.idle{background:#484f58}
+.member-card .indicator.idle{background:#afb8c1}
 .member-card .indicator.working{background:#d29922;box-shadow:0 0 6px rgba(210,153,34,.4);animation:pulse-dot 2s infinite}
 .member-card .info{flex:1;min-width:0}
 .member-card .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--text);font-size:12px}
@@ -43,13 +43,13 @@ aside.sidebar h2{font-size:10px;font-weight:600;text-transform:uppercase;color:v
 .msg.system{align-self:center;align-items:center;max-width:100%}
 .msg .sender{font-size:10.5px;color:var(--text-mid);margin-bottom:3px;display:flex;gap:5px;align-items:center;font-weight:500}
 .msg .sender .badge{font-size:9.5px;padding:1px 6px;border-radius:3px;color:#fff;font-weight:600;letter-spacing:.03em}
-.msg .bubble{padding:10px 14px;border-radius:var(--radius);font-size:13px;line-height:1.55;word-break:break-word;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border)}
-.msg.user .bubble{background:rgba(88,166,255,.06);border-color:rgba(88,166,255,.12);border-left-color:var(--human)}
+.msg .bubble{padding:10px 14px;border-radius:var(--radius);font-size:13px;line-height:1.55;word-break:break-word;background:var(--surface);border:1px solid var(--border);border-left:3px solid var(--border);color:var(--text)}.msg .bubble p,.msg .bubble span,.msg .bubble div,.msg .bubble li,.msg .bubble td,.msg .bubble th,.msg .bubble h1,.msg .bubble h2,.msg .bubble h3,.msg .bubble h4,.msg .bubble h5,.msg .bubble h6{color:var(--text)}
+.msg.user .bubble{background:rgba(9,105,218,.04);border-color:rgba(9,105,218,.15);border-left-color:var(--human)}
 .msg.system .bubble{background:transparent;border:none;color:var(--text-dim);font-size:11px;text-align:center;padding:3px 8px}
 .msg .time{font-size:9.5px;color:var(--text-dim);margin-top:3px;font-variant-numeric:tabular-nums}
 .msg .reply-ctx{font-size:10.5px;color:var(--text-dim);border-left:2px solid var(--text-dim);padding-left:8px;margin-bottom:5px;max-height:3em;overflow:hidden;opacity:.7}
-.msg .bubble code{font-family:var(--mono);font-size:11.5px;background:rgba(110,118,129,.15);padding:1.5px 5px;border-radius:3px}
-.msg .bubble pre{background:rgba(0,0,0,.5);padding:12px 16px;border-radius:var(--radius);font-family:var(--mono);font-size:11.5px;overflow-x:auto;margin:8px 0;line-height:1.5;white-space:pre-wrap;border:1px solid rgba(255,255,255,.04)}
+.msg .bubble code{font-family:var(--mono);font-size:11.5px;background:rgba(175,184,193,.3);padding:1.5px 5px;border-radius:3px;color:var(--text)}
+.msg .bubble pre{background:var(--bg);padding:12px 16px;border-radius:var(--radius);font-family:var(--mono);font-size:11.5px;overflow-x:auto;margin:8px 0;line-height:1.5;white-space:pre-wrap;border:1px solid var(--border);color:var(--text)}
 .msg .bubble pre code{background:none;padding:0;font-size:inherit}
 .msg .bubble h1,.msg .bubble h2,.msg .bubble h3,.msg .bubble h4{font-size:13px;font-weight:600;margin:8px 0 3px;color:var(--text)}
 .msg .bubble hr{border:none;border-top:1px solid var(--border);margin:10px 0}
@@ -66,7 +66,7 @@ footer{flex-shrink:0;border-top:1px solid var(--border);padding:12px 18px;backgr
 .input-row{display:flex;gap:8px;align-items:center}
 .input-row select{background:var(--bg);color:var(--text-mid);border:1px solid var(--border);border-radius:var(--radius);padding:7px 10px;font-size:11.5px;min-width:130px;cursor:pointer;appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath fill='%238b949e' d='M0 0h8L4 5z'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 10px center;padding-right:26px}
 .input-row input{flex:1;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:var(--radius);padding:7px 14px;font-size:13px;outline:none;transition:border-color var(--transition)}
-.input-row input:focus{border-color:var(--human);box-shadow:0 0 0 2px rgba(88,166,255,.1)}
+.input-row input:focus{border-color:var(--human);box-shadow:0 0 0 2px rgba(9,105,218,.1)}
 .input-row input::placeholder{color:var(--text-dim)}
 .input-row button{padding:7px 20px;background:var(--codex);color:#fff;border:none;border-radius:var(--radius);font-size:12.5px;cursor:pointer;font-weight:600;transition:all var(--transition)}
 .input-row button:hover{background:#7378f5;transform:translateY(-1px)}
@@ -116,7 +116,7 @@ footer{flex-shrink:0;border-top:1px solid var(--border);padding:12px 18px;backgr
 <script>
 (function(){
 var $=function(id){return document.getElementById(id);};
-var PROVIDER_COLORS={claude:'#d97706',codex:'#6366f1',gemini:'#059669',kimi:'#dc2626',mmx:'#ec4899'};
+var PROVIDER_COLORS={claude:'#b45309',codex:'#4f46e5',gemini:'#047857',kimi:'#dc2626',mmx:'#db2777'};
 var state={team:null,members:[],cursor:null,token:''};var seenKeys={};
 var pollTimer=null;
 
@@ -234,9 +234,9 @@ function sendMessage(){
 
 function teamAction(action){
   api('/api/'+action,{method:'POST'}).then(function(r){
-    appendEvents([{type:'system',body:action==='up'?'Team started':'Team stopped',time:new Date().toISOString()}]);
+    appendEvents([{type:'system',body:action==='start'?'Team started':'Team stopped',time:new Date().toISOString()}]);
     setTimeout(loadState,1500);
-  }).catch(function(e){showError(action+' failed: '+e);});
+  }).catch(function(e){showError((action==='start'?'Start':'Stop')+' failed: '+e);});
 }
 
 function fillMention(name){$('send-target').value=name;$('send-input').focus();}
@@ -272,8 +272,8 @@ function removeThinking(name){
 
 $('send-btn').addEventListener('click',sendMessage);
 $('send-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
-$('btn-up').addEventListener('click',function(){teamAction('up');});
-$('btn-down').addEventListener('click',function(){teamAction('down');});
+$('btn-up').addEventListener('click',function(){teamAction('start');});
+$('btn-down').addEventListener('click',function(){teamAction('stop');});
 $('sidebar').addEventListener('click',function(e){
   var card=e.target.closest('.member-card');
   if(card&&card.dataset.member){fillMention(card.dataset.member);}

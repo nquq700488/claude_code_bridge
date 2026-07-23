@@ -271,18 +271,18 @@ def handle_team(context, command, out, services) -> int:
             status = info.get('instance_status')
             if status:
                 lines.append(f'  status: {status}')
-    elif action == 'up':
-        lines.append(f'team up: {result.get("team")}')
+    elif action == 'start':
+        lines.append(f'team start: {result.get("team")}')
         for member_result in result.get('members') or []:
             status = 'OK' if member_result.get('ok') else f'FAILED: {member_result.get("error")}'
             lines.append(f'  {member_result["name"]}: {status}')
-    elif action == 'down':
-        lines.append(f'team down: {result.get("team")}')
+    elif action == 'stop':
+        lines.append(f'team stop: {result.get("team")}')
     elif action == 'status':
         lines.append(f'team: {result.get("team")}')
         lines.append(f'status: {result.get("status")}')
         if result.get('definition_changed'):
-            lines.append('warning: team definition has changed since up')
+            lines.append('warning: team definition has changed since last start')
         for m in result.get('members') or []:
             lines.append(f'  {m["name"]} ({m["provider"]}): {m.get("state", "unknown")}')
     elif action == 'ui':

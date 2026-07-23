@@ -11,17 +11,17 @@ docs/ppt_materials/
 tests/
 test/dir1/.ccb/
 .ccb_config/
-# .ccb 运行时文件（保留脚本、配置、README）
-.ccb/ccbd/
-.ccb/agents/
-.ccb/runtime/
-.ccb/shared-cache/
-.ccb/state/
-.ccb/.claude-*-session
-.ccb/.codex-*-session
-.ccb/.kimi-*-session
-.ccb/.mmx-*-session
-.ccb/.opencode-*-session
+# .ccb 运行时目录 — 忽略所有，仅保留固定文件
+.ccb/*
+!.ccb/README.md
+!.ccb/ccb.config
+!.ccb/ccb-compact.config
+!.ccb/ccb-multi.config
+!.ccb/clean.sh
+!.ccb/restart.sh
+!.ccb/start.sh
+!.ccb/stop.sh
+!.ccb/ccb_memory.md
 .codex
 .codex-session
 .gemini-session

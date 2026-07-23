@@ -28,7 +28,7 @@ def team_list(context, command) -> dict:
     return {'teams': teams}
 
 
-def team_up(context, command) -> dict:
+def team_start(context, command) -> dict:
     root = _project_root(context)
     team_name = str(getattr(command, 'team_name', '') or '').strip()
     if not team_name:
@@ -114,6 +114,9 @@ def team_up(context, command) -> dict:
                 f'team member {m.name!r} uses unknown provider {m.provider!r}'
             )
 
+    # 校验成员不被其他 team 占用（跨 team 成员冲突）
+    _validate_no_cross_team_members(root, team_name, team)
+
     # 渲染协议
     protocols = render_team_protocol(team)
 
@@ -149,14 +152,14 @@ def team_up(context, command) -> dict:
     }
 
 
-def team_down(context, command) -> dict:
+def team_stop(context, command) -> dict:
     root = _project_root(context)
     team_name = str(getattr(command, 'team_name', '') or '').strip()
     unload = bool(getattr(command, 'unload', False))
 
     instance = _load_team_instance(root, team_name)
     if not instance:
-        raise ValueError(f'team {team_name!r} is not up')
+        raise ValueError(f'team {team_name!r} is not started')
 
     # 逐成员处理：默认 park，--unload 则标记为 unloaded
     for m in instance.get('members', []):
@@ -276,6 +279,39 @@ def _valid_provider_names() -> frozenset[str]:
     return frozenset(SUPPORTED_PROVIDER_NAMES) | frozenset(custom_provider_names())
 
 
+def _validate_no_cross_team_members(root: Path, team_name: str, team) -> None:
+    """Raise ValueError if any team member is already started in another team instance.
+
+    Members can only belong to one active team at a time. Running and partial
+    instances block members. Parked teams have stopped — their members are free.
+    """
+    teams_dir = _teams_dir(root)
+    if not teams_dir.is_dir():
+        return
+    conflicting: list[str] = []
+    for child in teams_dir.iterdir():
+        if not child.is_dir():
+            continue
+        other_name = child.name
+        if other_name == team_name:
+            continue
+        instance = _load_team_instance(root, other_name)
+        if not instance:
+            continue
+        status = instance.get('status', '')
+        if status not in ('running', 'partial'):
+            continue
+        other_members = {m.get('name', '') for m in instance.get('members', [])}
+        for m in team.members:
+            if m.name in other_members:
+                conflicting.append(f'{m.name!r} (already in team {other_name!r})')
+    if conflicting:
+        raise ValueError(
+            'team members already belong to another active team: '
+            + ', '.join(conflicting)
+        )
+
+
 def _team_member(team, name: str):
     """Find a TeamMember by name."""
     for m in team.members:
@@ -340,8 +376,8 @@ def _write_member_lifecycle(context, root: Path, member) -> None:
         'created_at': now,
         'created_sequence': 1,
         'updated_at': now,
-        'created_by': 'ccb team up',
-        'last_reason': 'team up',
+        'created_by': 'ccb team start',
+        'last_reason': 'team start',
         'ask_target': name,
         'state_path': str(lifecycle_path),
         'events_path': str(state_dir / 'events.jsonl'),
@@ -475,4 +511,4 @@ def _utc_now() -> str:
     return time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
 
 
-__all__ = ['team_list', 'team_up', 'team_down', 'team_status', 'team_ui']
+__all__ = ['team_list', 'team_start', 'team_stop', 'team_status', 'team_ui']

@@ -1084,7 +1084,7 @@ def parse_config(tokens: list[str], *, project: str | None, error_type):
     if action == 'ui':
         parser = argparse.ArgumentParser(prog='ccb config ui', add_help=False)
         parser.add_argument('--no-open', dest='no_open', action='store_true')
-        parser.add_argument('--port', type=int, default=0)
+        parser.add_argument('--port', type=int, default=8887)
         namespace = parse_args(
             parser,
             tokens[1:],
@@ -1177,7 +1177,7 @@ def parse_provider(tokens: list[str], *, project: str | None, error_type) -> Par
 
 def parse_team(tokens: list[str], *, project: str | None, error_type) -> ParsedTeamCommand:
     if not tokens:
-        raise error_type('team requires one of: list, up, down, status, ui')
+        raise error_type('team requires one of: list, start, stop, status, ui')
     action = str(tokens[0] or '').strip().lower()
     rest = tokens[1:]
     if action == 'list':
@@ -1185,26 +1185,26 @@ def parse_team(tokens: list[str], *, project: str | None, error_type) -> ParsedT
         parser.add_argument('--json', action='store_true')
         namespace = parse_args(parser, rest, error_message='invalid team list command', error_type=error_type)
         return ParsedTeamCommand(project=project, action='list', json_output=bool(namespace.json))
-    if action == 'up':
-        parser = argparse.ArgumentParser(prog='ccb team up', add_help=False)
+    if action == 'start':
+        parser = argparse.ArgumentParser(prog='ccb team start', add_help=False)
         parser.add_argument('name')
         parser.add_argument('--window', default=None)
         parser.add_argument('--parked', action='store_true')
         parser.add_argument('--json', action='store_true')
-        namespace = parse_args(parser, rest, error_message='invalid team up command', error_type=error_type)
+        namespace = parse_args(parser, rest, error_message='invalid team start command', error_type=error_type)
         return ParsedTeamCommand(
-            project=project, action='up', team_name=namespace.name,
+            project=project, action='start', team_name=namespace.name,
             window=namespace.window, parked=bool(namespace.parked),
             json_output=bool(namespace.json),
         )
-    if action == 'down':
-        parser = argparse.ArgumentParser(prog='ccb team down', add_help=False)
+    if action == 'stop':
+        parser = argparse.ArgumentParser(prog='ccb team stop', add_help=False)
         parser.add_argument('name')
         parser.add_argument('--unload', action='store_true')
         parser.add_argument('--json', action='store_true')
-        namespace = parse_args(parser, rest, error_message='invalid team down command', error_type=error_type)
+        namespace = parse_args(parser, rest, error_message='invalid team stop command', error_type=error_type)
         return ParsedTeamCommand(
-            project=project, action='down', team_name=namespace.name,
+            project=project, action='stop', team_name=namespace.name,
             unload=bool(namespace.unload), json_output=bool(namespace.json),
         )
     if action == 'status':
@@ -1219,7 +1219,7 @@ def parse_team(tokens: list[str], *, project: str | None, error_type) -> ParsedT
     if action == 'ui':
         parser = argparse.ArgumentParser(prog='ccb team ui', add_help=False)
         parser.add_argument('name')
-        parser.add_argument('--port', type=int, default=0)
+        parser.add_argument('--port', type=int, default=8888)
         namespace = parse_args(parser, rest, error_message='invalid team ui command', error_type=error_type)
         return ParsedTeamCommand(
             project=project, action='ui', team_name=namespace.name,

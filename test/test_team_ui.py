@@ -13,7 +13,7 @@ class TestParseTeamUi:
         assert cmd.action == 'ui'
         assert cmd.team_name == 'myteam'
         assert cmd.kind == 'team'
-        assert cmd.port == 0
+        assert cmd.port == 8888
 
     def test_parse_ui_with_port(self):
         cmd = parse_team(['ui', 'myteam', '--port', '9999'], project=None, error_type=ValueError)
@@ -67,10 +67,10 @@ class TestTeamUiServer:
         root = _project(tmp_path)
         from cli.services.team_ui import prepare_team_ui
 
-        # First team up to create instance state
-        from cli.services.team_lifecycle import team_up
+        # First team start to create instance state
+        from cli.services.team_lifecycle import team_start
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
 
         # Now prepare UI handle
         handle = prepare_team_ui(ctx, _Cmd(action='ui', team_name='t', port=0))
@@ -88,11 +88,11 @@ class TestTeamUiServer:
 
     def test_api_state_endpoint(self, tmp_path):
         root = _project(tmp_path)
-        from cli.services.team_lifecycle import team_up
+        from cli.services.team_lifecycle import team_start
         from cli.services.team_ui import _build_state_payload
 
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
 
         state = _build_state_payload(root, 't')
         assert state['team'] == 't'
@@ -103,11 +103,11 @@ class TestTeamUiServer:
 
     def test_api_timeline_endpoint(self, tmp_path):
         root = _project(tmp_path)
-        from cli.services.team_lifecycle import team_up
+        from cli.services.team_lifecycle import team_start
         from cli.services.team_ui import _build_timeline_payload
 
         ctx = _Ctx(root)
-        team_up(ctx, _Cmd(action='up', team_name='t'))
+        team_start(ctx, _Cmd(action='start', team_name='t'))
 
         timeline = _build_timeline_payload(root, 't', '')
         assert 'events' in timeline

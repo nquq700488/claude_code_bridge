@@ -519,7 +519,7 @@ pass_score = 7.0                 # review-loop 通过线
 
 规则：
 - `members` 最少 2 个，`name` 不得与已有 agent 冲突
-- `provider` 必须是已注册 provider（内置或已 reload 生效的自定义），否则 `team up` 报错
+- `provider` 必须是已注册 provider（内置或已 reload 生效的自定义），否则 `team start` 报错
 - `topology` 决定协议注入模板（hub-spoke/review-loop/mesh/debate）
 - team 定义变更走 reload；已 up 实例不受影响，`team status` 提示定义变更
 
@@ -1295,8 +1295,8 @@ ccb provider remove <name> [--no-reload]      # 有 agent 引用时拒绝
 
 # Team 编组（v8.3.0+）
 ccb team list [--json]                        # 列出 [teams.*] 定义与实例状态
-ccb team up <name> [--window NAME] [--parked] [--json]
-ccb team down <name> [--unload] [--json]
+ccb team start <name> [--window NAME] [--parked] [--json]
+ccb team stop <name> [--unload] [--json]
 ccb team status <name> [--json]
 ccb team ui <name> [--port PORT]                # 启动群聊 UI 页面
 
