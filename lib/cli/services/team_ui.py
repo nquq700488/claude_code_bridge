@@ -421,7 +421,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
                 'from': 'You' if is_human else (from_actor or agent_name),
                 'from_provider': 'human' if is_human else provider,
                 'to': to_agent,
-                'body': body_text,
+                'body': _strip_ccb_guidance(body_text),
                 'body_html': _render_body_html(body_text),
                 'time': job.get('created_at', ts),
                 'job_id': jid,
