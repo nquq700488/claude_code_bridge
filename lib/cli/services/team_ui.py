@@ -359,9 +359,8 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             if prev is None or rec_ts >= prev_ts:
                 jobs_by_id[jid] = record
 
-    # Phase 2: collect completion_terminal replies + _ui_ask events from events.jsonl
+    # Phase 2: collect completion_terminal replies from events.jsonl
     replies_by_job: dict[str, str] = {}
-    ui_asks: list[dict] = []
     for m in members:
         name = m.get('name', '')
         if not name or '..' in name or '/' in name or '\\' in name:
@@ -374,31 +373,20 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             if evt_type != 'completion_terminal':
                 continue
             jid = line.get('job_id', '')
+            if not jid:
+                continue
             ts = line.get('created_at') or line.get('timestamp') or ''
             if not ts:
                 continue
+            if cursor and ts <= cursor:
+                continue
+            if upped_at and ts < upped_at:
+                continue
             payload = line.get('payload') or {}
-            is_ui_ask = isinstance(payload, dict) and bool(payload.get('_ui_ask'))
-            # Don't filter _ui_ask by cursor — always visible so dedup works
-            if not is_ui_ask and cursor and ts <= cursor:
-                continue
-            if not is_ui_ask and upped_at and ts < upped_at:
-                continue
-            # payload already extracted above
             if not isinstance(payload, dict):
                 continue
-            # UI-generated ask events (lightweight markers)
-            if payload.get('_ui_ask') and payload.get('_ui_body'):
-                ui_asks.append({
-                    'type': 'ask',
-                    'from': 'You',
-                    'from_provider': 'human',
-                    'to': payload.get('_ui_to', ''),
-                    'body': str(payload['_ui_body'])[:2000],
-                    'body_html': _render_body_html(str(payload['_ui_body'])[:2000]),
-                    'time': ts,
-                    'job_id': jid,
-                })
+            # UI-generated ask markers — consumed by send response, not timeline
+            if payload.get('_ui_ask'):
                 continue
             # Real agent reply
             reply = payload.get('reply', '')
@@ -424,25 +412,20 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
 
         is_human = from_actor in ('human', 'user')
-        # Emit ask from job record — but skip if already covered by _ui_ask
-        if request_body:
+        # Emit ask from job record (ask events from the UI are returned directly
+        # in the send response, not read from job records.)
+        if request_body and not str(jid).startswith('ui-ask-') and not str(jid).startswith('job-ui-'):
             body_text = str(request_body)[:2000]
-            body_clean = _strip_ccb_guidance(body_text).strip()[:200]
-            already_covered = any(
-                _strip_ccb_guidance(str(a.get('body', ''))).strip()[:200] == body_clean
-                for a in ui_asks
-            )
-            if not already_covered:
-                events.append({
-                    'type': 'ask',
-                    'from': 'You' if is_human else (from_actor or agent_name),
-                    'from_provider': 'human' if is_human else provider,
-                    'to': to_agent,
-                    'body': body_text,
-                    'body_html': _render_body_html(body_text),
-                    'time': job.get('created_at', ts),
-                    'job_id': jid,
-                })
+            events.append({
+                'type': 'ask',
+                'from': 'You' if is_human else (from_actor or agent_name),
+                'from_provider': 'human' if is_human else provider,
+                'to': to_agent,
+                'body': body_text,
+                'body_html': _render_body_html(body_text),
+                'time': job.get('created_at', ts),
+                'job_id': jid,
+            })
 
         # Reply from events.jsonl or terminal_decision
         reply = replies_by_job.get(jid, '')
@@ -465,7 +448,6 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
                 'reply_to': str(request_body)[:120] if request_body else '',
             })
 
-    events.extend(ui_asks)
     events.sort(key=lambda e: e.get('time', ''))
     new_cursor = events[-1]['time'] if events else (cursor or '')
     return {'events': events, 'cursor': new_cursor}
@@ -501,34 +483,31 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
         if jid:
             job_ids.append(jid)
 
-    return {'status': 'sent', 'job_ids': job_ids, 'targets': targets}
+    # Return the ask as an event for immediate frontend display
+    ask_event = {
+        'type': 'ask',
+        'from': 'You',
+        'from_provider': 'human',
+        'to': to if to != '@all' else 'all',
+        'body': msg,
+        'body_html': _render_body_html(msg),
+        'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+    }
+
+    return {'status': 'sent', 'job_ids': job_ids, 'targets': targets, 'ask_event': ask_event}
 
 
 def _submit_or_record(root, team_name, target, msg, instance):
-    """Send via ccb ask; write a lightweight ask event so timeline shows it
-    immediately. The real agent reply will be picked up by polling events.jsonl."""
+    """Send via ccb ask. Returns the ask bubble for immediate frontend display.
+
+    The real agent reply will be picked up by polling events.jsonl.
+    """
     now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     provider = ''
     for m in instance.get('members', []):
         if m.get('name') == target:
             provider = m.get('provider', '')
             break
-    # Write a single ask event so the sender sees their message immediately
-    events_path = root / '.ccb' / 'agents' / target / 'events.jsonl'
-    events_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(events_path, 'a') as f:
-        f.write(json.dumps({
-            'type': 'completion_terminal',
-            'job_id': f'ui-ask-{int(time.time())}',
-            'created_at': now,
-            'payload': {
-                'reply': '',  # empty reply = this is just the ask echo
-                '_ui_ask': True,
-                '_ui_body': msg,
-                '_ui_from': 'human',
-                '_ui_to': target,
-            },
-        }, ensure_ascii=False) + '\n')
 
     # Let ccb ask handle the real job
     try:

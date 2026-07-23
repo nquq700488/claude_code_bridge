@@ -196,7 +196,8 @@ function sendMessage(){
   api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:to,body:body})})
     .then(function(r){
       input.value='';
-      appendEvents([{type:'ask',from:'human',to:to,body:body,time:new Date().toISOString()}]);
+      // Use server-rendered ask event for immediate display
+      if(r.ask_event){appendEvents([r.ask_event]);}
       scrollBottom();
     }).catch(function(e){showError('Send failed: '+e);});
 }
