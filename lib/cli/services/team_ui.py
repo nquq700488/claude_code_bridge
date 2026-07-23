@@ -377,13 +377,14 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             ts = line.get('created_at') or line.get('timestamp') or ''
             if not ts:
                 continue
-            # Don't filter _ui_ask by cursor — they should always be visible for
-            # the current UI session so dedup works.
-            if not payload.get('_ui_ask') and cursor and ts <= cursor:
-                continue
-            if not payload.get('_ui_ask') and upped_at and ts < upped_at:
-                continue
             payload = line.get('payload') or {}
+            is_ui_ask = isinstance(payload, dict) and bool(payload.get('_ui_ask'))
+            # Don't filter _ui_ask by cursor — always visible so dedup works
+            if not is_ui_ask and cursor and ts <= cursor:
+                continue
+            if not is_ui_ask and upped_at and ts < upped_at:
+                continue
+            # payload already extracted above
             if not isinstance(payload, dict):
                 continue
             # UI-generated ask events (lightweight markers)
