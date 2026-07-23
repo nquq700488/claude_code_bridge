@@ -79,6 +79,11 @@ footer{flex-shrink:0;border-top:1px solid var(--border);padding:12px 18px;backgr
 @keyframes msgIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
 @keyframes pulse-dot{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes thinking-pulse{0%,100%{opacity:.4}50%{opacity:.8}}
+.msg.thinking .dots{color:var(--text-mid);font-size:12px}
+.msg.thinking .dot-pulse::after{content:'';animation:dots 1.4s steps(3) infinite}
+.msg.thinking .dot-pulse{animation:pulse 1.4s infinite}
+@keyframes pulse{0%,20%{opacity:0}50%{opacity:1}80%,100%{opacity:0}}
+@keyframes dots{0%{content:'.'}33%{content:'..'}66%{content:'...'}100%{content:'.'}}
 .msg.thinking{animation:thinking-pulse 1.8s infinite}
 </style>
 </head>
@@ -133,7 +138,12 @@ function loadState(){
 function loadTimeline(){
   var qs=state.cursor?'?since='+state.cursor:'';
   return api('/api/timeline'+qs).then(function(t){
-    if(t.events&&t.events.length){appendEvents(t.events);state.cursor=t.cursor;scrollBottom();}
+    if(t.events&&t.events.length){
+      // Only auto-scroll if user is already near bottom
+      var tl=$('timeline'),wasAtBottom=(tl.scrollTop+tl.clientHeight>=tl.scrollHeight-40);
+      appendEvents(t.events);state.cursor=t.cursor;
+      if(wasAtBottom)scrollBottom();
+    }
   }).catch(function(){});
 }
 
@@ -213,7 +223,9 @@ function sendMessage(){
       // Show thinking indicator for the target agent
       var targets=r.targets||(to==='@all'?[]:[to]);
       targets.forEach(function(t){showThinking(t);});
-      setTimeout(scrollBottom,50);
+      // Scroll to show the new message — only if already near bottom
+      var tl=$('timeline'),atBottom=tl.scrollTop+tl.clientHeight>=tl.scrollHeight-40;
+      if(atBottom)setTimeout(scrollBottom,50);
     }).catch(function(e){showError('Send failed: '+e);});
 }
 
@@ -233,10 +245,21 @@ function showError(msg){var t=$('toast');t.textContent=msg;t.style.display='bloc
 function showThinking(name){
   clearThinking();
   var div=document.createElement('div');div.className='msg thinking';div.setAttribute('data-target',name);
-  var color=PROVIDER_COLORS[name]||defaultColor(name);
-  div.innerHTML='<div class="sender"><span class="badge" style="background:'+color+'">...</span></div>'+
-    '<div class="bubble"><span class="dots">'+esc(name)+' 思考中</span><span class="dot-pulse">.</span></div>';
+  // Look up provider color from state.members
+  var color='#6b7280',label=name;
+  if(state.members)for(var i=0;i<state.members.length;i++){
+    if(state.members[i].name===name){
+      color=PROVIDER_COLORS[state.members[i].provider]||defaultColor(state.members[i].provider);
+      label=state.members[i].provider;
+      break;
+    }
+  }
+  div.innerHTML='<div class="sender"><span class="badge" style="background:'+color+'">'+esc(label)+'</span>'+esc(name)+'</div>'+
+    '<div class="bubble"><span class="dots">思考中</span>&nbsp;<span class="dot-pulse"></span></div>';
   $('timeline').appendChild(div);
+  // Scroll to show thinking only if user was already near bottom
+  var tl=$('timeline'),atBottom=tl.scrollTop+tl.clientHeight>=tl.scrollHeight-40;
+  if(atBottom)setTimeout(scrollBottom,50);
 }
 function clearThinking(){
   var nodes=$('timeline').querySelectorAll('.msg.thinking');
