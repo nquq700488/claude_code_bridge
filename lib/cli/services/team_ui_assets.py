@@ -104,7 +104,6 @@ var $=function(id){return document.getElementById(id);};
 var PROVIDER_COLORS={claude:'#d97706',codex:'#6366f1',gemini:'#059669',kimi:'#dc2626',mmx:'#ec4899'};
 var state={team:null,members:[],cursor:null,token:''};
 var pollTimer=null;
-var NL=String.fromCharCode(10);
 
 function api(path,opts){
   opts=opts||{};
@@ -179,7 +178,7 @@ function appendEvents(events){
       if(ev.to){
         senderHtml+='<span style="font-size:10px;color:var(--text-dim)">→ '+esc(ev.to)+'</span>';
       }
-      var body=formatBody(ev.body);
+      var body=ev.body_html||('<div>'+esc(ev.body||'').replace(/\n/g,'<br>')+'</div>');
       if(ev.reply_to){
         body='<div class="reply-ctx">↳ '+esc((ev.reply_to||'').substring(0,120))+'</div>'+body;
       }
@@ -188,72 +187,6 @@ function appendEvents(events){
     }
     tl.appendChild(div);
   });
-}
-
-function formatBody(text){
-  if(!text)return '';
-  var lines=text.split(NL);
-  if(lines.length>100){
-    lines=lines.slice(0,100);
-    lines.push('… (truncated)');
-  }
-  var out='',inCode=false,inBlockquote=false,listCont=false,codeBuf='';
-  for(var i=0;i<lines.length;i++){
-    var l=lines[i];
-    // Fenced code block
-    if(l.indexOf('```')===0){
-      if(inCode){out+='</code></pre>';codeBuf='';inCode=false;inBlockquote=false;listCont=false;}
-      else{inCode=true;out+='<pre><code>';}
-      continue;
-    }
-    if(inCode){out+=esc(l)+NL;continue;}
-    // Blockquote
-    if(/^>/.test(l)){
-      if(!inBlockquote){out+='<blockquote>';inBlockquote=true;}
-      out+=inlineMd(l.replace(/^>\s?/,''))+'<br>';
-      continue;
-    }
-    if(inBlockquote){out+='</blockquote>';inBlockquote=false;}
-    // Bullet/numbered list
-    var isBullet=/^[-*+]\s/.test(l);
-    var isNumbered=/^\d+[.)]\s/.test(l);
-    if(isBullet||isNumbered){
-      if(!listCont){out+='<ul>';listCont='ul';}
-      out+='<li>'+inlineMd(l.replace(/^[-*+]\s|^\d+[.)]\s/,''))+'</li>';
-      continue;
-    }
-    if(listCont){out+='</'+listCont+'>';listCont=false;}
-    // Heading
-    if(/^#{1,4}\s/.test(l)){
-      var h=l.match(/^(#{1,4})\s(.*)/);
-      out+='<h'+h[1].length+'>'+inlineMd(h[2])+'</h'+h[1].length+'>';
-      continue;
-    }
-    // Horizontal rule
-    if(/^[-*_]{3,}$/.test(l.trim())){out+='<hr>';continue;}
-    // Empty line
-    if(!l.trim()){out+='<br>';continue;}
-    // Regular paragraph line
-    out+=inlineMd(l)+'<br>';
-  }
-  if(inCode)out+='</code></pre>';
-  if(inBlockquote)out+='</blockquote>';
-  if(listCont)out+='</'+listCont+'>';
-  return out;
-}
-
-function inlineMd(s){
-  if(!s)return '';
-  s=esc(s);
-  // Bold **text**
-  s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
-  // Inline code `text`
-  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
-  // Link [text](url)
-  s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href=\"$2\" target=\"_blank\">$1</a>');
-  // Italic *text* (after bold removed, remaining single * are italic)
-  s=s.replace(/(^|\s)\*([^*]+)\*(\s|$)/g,'$1<em>$2</em>$3');
-  return s;
 }
 
 function sendMessage(){

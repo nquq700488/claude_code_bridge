@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -19,6 +20,57 @@ from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 from .team_ui_assets import TEAM_UI_HTML
+
+# markdown-it-py for server-side Markdown rendering
+_md: object = None
+
+
+def _render_body_html(text: str) -> str:
+    """Render message body text to HTML using markdown-it-py.
+
+    Handles CCB artifact format (strips file-path/SHA256 header, keeps content
+    preview). Auto-detects JSON blocks and fenced code.
+    """
+    global _md
+    if not text:
+        return ''
+    # Strip CCB artifact header (large-reply artifact reference)
+    text = _strip_artifact_header(text)
+    if _md is None:
+        try:
+            from markdown_it import MarkdownIt
+            _md = MarkdownIt('commonmark', {'html': False, 'linkify': True, 'typographer': True})
+        except ImportError:
+            _md = False
+    if _md:
+        # Add ```json fences around bare JSON objects at text start
+        stripped = text.strip()
+        if stripped.startswith('{') and not stripped.startswith('```'):
+            text = '```json\n' + text + '\n```'
+        return (_md.render(text) if callable(getattr(_md, 'render', None)) else text)
+    return _escape_html(text)
+
+
+def _strip_artifact_header(text: str) -> str:
+    """Strip CCB artifact reference header: 'Full text: /path/...\\nBytes: N\\nSHA256: ...\\n\\nPreview:\\n'"""
+    pattern = (
+        r'^.*?larger than \d+ [KMG]iB and was stored as an artifact\.\n'
+        r'Full text: .+\.txt\n'
+        r'Bytes: \d+\n'
+        r'SHA256: [a-f0-9]{64}\n+'
+        r'Preview:\n'
+    )
+    m = re.match(pattern, text)
+    if m:
+        text = text[m.end():]
+    return text
+
+
+def _escape_html(text: str) -> str:
+    """Fallback HTML escaping when markdown-it is unavailable."""
+    return (text
+            .replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+            .replace('\n', '<br>'))
 
 DEFAULT_IDLE_TIMEOUT_S = 1800.0  # 30 min
 DEFAULT_PORT = 0  # OS-assigned
@@ -325,12 +377,14 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         is_human = from_actor in ('human', 'user')
         # Ask event — only emit if the job itself is new (created_at after cursor)
         if request_body and (not cursor or job.get('created_at', '') > cursor):
+            body_text = str(request_body)[:2000]
             events.append({
                 'type': 'ask',
                 'from': 'You' if is_human else (from_actor or agent_name),
                 'from_provider': 'human' if is_human else provider,
                 'to': to_agent,
-                'body': str(request_body)[:2000],
+                'body': body_text,
+                'body_html': _render_body_html(body_text),
                 'time': job.get('created_at', ts),
                 'job_id': jid,
             })
@@ -343,12 +397,14 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         if reply:
             term = job.get('terminal_decision') or {}
             reply_ts = (term.get('finished_at') or job.get('updated_at') or ts) if isinstance(term, dict) else ts
+            body_text = str(reply)[:2000]
             events.append({
                 'type': 'reply',
                 'from': agent_name,
                 'from_provider': provider,
                 'to': 'You' if is_human else (from_actor or ''),
-                'body': str(reply)[:2000],
+                'body': body_text,
+                'body_html': _render_body_html(body_text),
                 'time': reply_ts,
                 'job_id': jid,
                 'reply_to': str(request_body)[:120] if request_body else '',
