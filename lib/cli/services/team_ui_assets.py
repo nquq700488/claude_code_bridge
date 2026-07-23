@@ -130,8 +130,9 @@ function loadState(){
   api('/api/state').then(function(s){
     state.team=s.team;state.members=s.members;
     renderHeader(s);renderSidebar(s);renderInput(s);
-    // Only update disabled state if not currently thinking
-    if(!$('timeline').querySelector('.msg.thinking')){
+    // Don't override thinking-disabled state
+    var hasThinking=$('timeline').querySelector('.msg.thinking');
+    if(!hasThinking){
       $('send-input').disabled=(s.status!=='running');
       $('send-btn').disabled=(s.status!=='running');
     }
@@ -188,8 +189,10 @@ function renderInput(s){
 function appendEvents(events){
   var tl=$('timeline');
   events.forEach(function(ev){var key=(ev.job_id||'')+':'+ev.type;if(seenKeys[key])return;seenKeys[key]=true;
-    // When a real reply arrives, remove thinking indicators
-    if(ev.type==='reply'||ev.type==='system'){clearThinking();}
+    // When a real reply arrives, clear thinking indicator for that specific agent
+    if((ev.type==='reply'||ev.type==='system')&&ev.from&&ev.from!=='You'){
+      removeThinking(ev.from);
+    }
     var div=document.createElement('div');
     var isYou=ev.from==='human'||ev.from==='You';
     div.className='msg '+(isYou?'user':(ev.type==='system'?'system':''));
@@ -223,12 +226,9 @@ function sendMessage(){
     .then(function(r){
       input.value='';
       if(r.ask_event){appendEvents([r.ask_event]);}
-      // Show thinking indicator for the target agent
       var targets=r.targets||(to==='@all'?[]:[to]);
       targets.forEach(function(t){showThinking(t);});
-      // Scroll to show the new message — only if already near bottom
-      var tl=$('timeline'),atBottom=tl.scrollTop+tl.clientHeight>=tl.scrollHeight-40;
-      if(atBottom)setTimeout(scrollBottom,50);
+      setTimeout(scrollBottom,50);
     }).catch(function(e){showError('Send failed: '+e);});
 }
 
@@ -246,7 +246,7 @@ function fmtTime(t){try{return new Date(t).toLocaleTimeString([],{hour:'2-digit'
 function defaultColor(name){var h=0;for(var i=0;i<name.length;i++)h=name.charCodeAt(i)+((h<<5)-h);return 'hsl('+(h%360)+',60%,55%)';}
 function showError(msg){var t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(function(){t.style.display='none';},4000);}
 function showThinking(name){
-  clearThinking();
+  removeThinking(name);
   var div=document.createElement('div');div.className='msg thinking';div.setAttribute('data-target',name);
   var color='#6b7280',label=name;
   if(state.members)for(var i=0;i<state.members.length;i++){
@@ -260,14 +260,14 @@ function showThinking(name){
     '<div class="bubble"><span class="dots">思考中</span>&nbsp;<span class="dot-pulse"></span></div>';
   $('timeline').appendChild(div);
   $('send-btn').disabled=true;$('send-input').disabled=true;
-  var tl=$('timeline'),atBottom=tl.scrollTop+tl.clientHeight>=tl.scrollHeight-40;
-  if(atBottom)setTimeout(scrollBottom,50);
+  setTimeout(scrollBottom,50);
 }
-function clearThinking(){
-  $('send-btn').disabled=false;$('send-input').disabled=false;
-  // loadState will correct this if team is actually stopped
-  var nodes=$('timeline').querySelectorAll('.msg.thinking');
-  for(var i=0;i<nodes.length;i++)nodes[i].remove();
+function removeThinking(name){
+  var prev=$('timeline').querySelector('.msg.thinking[data-target=\"'+name+'\"]');
+  if(prev)prev.remove();
+  if(!$('timeline').querySelector('.msg.thinking')){
+    $('send-btn').disabled=false;$('send-input').disabled=false;
+  }
 }
 
 $('send-btn').addEventListener('click',sendMessage);
