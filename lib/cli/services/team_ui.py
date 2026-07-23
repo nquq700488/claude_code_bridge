@@ -382,13 +382,10 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             if reply and jid not in replies_by_job:
                 replies_by_job[jid] = reply
 
-    # Phase 3: build deduplicated event list
+    # Phase 3: build timeline — only reply events from job records.
+    # Ask events are shown by the frontend immediately from the send response.
     events: list[dict] = []
     for jid, job in sorted(jobs_by_id.items()):
-        # Skip lightweight UI ask markers (these are handled via events.jsonl)
-        if str(jid).startswith('job-ui-'):
-            continue
-        ts = job.get('created_at', '')
         agent_name = job.get('agent_name', '')
         provider = ''
         for m in members:
@@ -398,23 +395,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         request = job.get('request') or {}
         request_body = request.get('body', '') if isinstance(request, dict) else ''
         from_actor = request.get('from_actor', '') if isinstance(request, dict) else ''
-        to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
-
         is_human = from_actor in ('human', 'user')
-        # Emit ask from job record (ask events from the UI are returned directly
-        # in the send response, not read from job records.)
-        if request_body and not str(jid).startswith('ui-ask-') and not str(jid).startswith('job-ui-'):
-            body_text = str(request_body)[:2000]
-            events.append({
-                'type': 'ask',
-                'from': 'You' if is_human else (from_actor or agent_name),
-                'from_provider': 'human' if is_human else provider,
-                'to': to_agent,
-                'body': _strip_ccb_guidance(body_text),
-                'body_html': _render_body_html(body_text),
-                'time': job.get('created_at', ts),
-                'job_id': jid,
-            })
 
         # Reply from events.jsonl or terminal_decision
         reply = replies_by_job.get(jid, '')
@@ -423,7 +404,8 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             reply = term.get('reply', '') if isinstance(term, dict) else ''
         if reply:
             term = job.get('terminal_decision') or {}
-            reply_ts = (term.get('finished_at') or job.get('updated_at') or ts) if isinstance(term, dict) else ts
+            reply_ts = (term.get('finished_at') or job.get('updated_at') or job.get('created_at', '')) if isinstance(term, dict) else job.get('created_at', '')
+
             body_text = str(reply)[:2000]
             events.append({
                 'type': 'reply',
