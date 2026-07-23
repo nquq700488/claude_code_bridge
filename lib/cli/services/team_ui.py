@@ -262,7 +262,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         name = m.get('name', '')
         if not name or '..' in name or '/' in name or '\\' in name:
             continue
-        jobs_path = root / '.ccb' / 'runtime' / 'agents' / name / 'jobs.jsonl'
+        jobs_path = _find_agent_file(root, name, 'jobs.jsonl')
         if not jobs_path.is_file():
             continue
         for record in _read_jsonl(jobs_path):
@@ -285,7 +285,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         name = m.get('name', '')
         if not name or '..' in name or '/' in name or '\\' in name:
             continue
-        events_path = root / '.ccb' / 'runtime' / 'agents' / name / 'events.jsonl'
+        events_path = _find_agent_file(root, name, 'events.jsonl')
         if not events_path.is_file():
             continue
         for line in _read_jsonl(events_path):
@@ -389,14 +389,13 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
 
 
 def _submit_or_record(root, team_name, target, msg, instance):
-    """Write a job record directly (ccb subprocess not needed for demo).
+    """Write job/event to agent directory so timeline picks it up.
 
-    In production, this would use daemon APIs; for the UI demo,
-    writing jobs/events on disk allows the timeline to work immediately.
+    Real agents store in .ccb/agents/<name>/; this is the primary path.
     """
     now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     jid = f'job-ui-{int(time.time())}'
-    agent_dir = root / '.ccb' / 'runtime' / 'agents' / target
+    agent_dir = root / '.ccb' / 'agents' / target
     agent_dir.mkdir(parents=True, exist_ok=True)
     provider = ''
     for m in instance.get('members', []):
@@ -513,6 +512,15 @@ def _validate_name_safe(name: str, label: str) -> None:
 def _team_state_path(root: Path, team_name: str) -> Path:
     _validate_name_safe(team_name, 'team name')
     return root / '.ccb' / 'runtime' / 'teams' / team_name / 'state.json'
+
+
+def _find_agent_file(root: Path, agent_name: str, filename: str) -> Path:
+    """Find data file for a real agent (.ccb/agents/) or dynamic agent (runtime)."""
+    primary = root / '.ccb' / 'runtime' / 'agents' / agent_name / filename
+    if primary.is_file():
+        return primary
+    secondary = root / '.ccb' / 'agents' / agent_name / filename
+    return secondary
 
 
 def _member_lifecycle_path(root: Path, agent_name: str) -> Path:
