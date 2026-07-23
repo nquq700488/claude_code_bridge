@@ -19,7 +19,7 @@ from ..defaults import build_default_project_config
 from ..parsing import validate_project_config
 from ..paths import project_config_path, resolve_config_profile_path, user_default_config_path
 
-_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop'}
+_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop', 'providers', 'teams'}
 _HYBRID_HEADER_OWNED_AGENT_KEYS = {'provider', 'workspace_mode'}
 
 
