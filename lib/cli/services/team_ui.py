@@ -55,21 +55,25 @@ def _render_body_html(text: str) -> str:
 
 
 def _strip_ccb_guidance(text: str) -> str:
-    """Strip CCB guidance boilerplate auto-added by ccb ask."""
+    """Strip CCB guidance boilerplate auto-added by ccb ask.
+
+    Handles both multi-line format:
+      CCB reply guidance:
+      - Answer directly and concisely.
+      - ...
+    and inline format:
+      hi  CCB reply guidance: - Silent-on-success requested. - Reply ...
+    """
+    # Multi-line format
     pattern = (
         r'CCB reply guidance:\n'
-        r'- Answer directly and concisely\.\n'
-        r'- Include only relevant conclusions, blockers, risks, evidence, and next actions\.\n'
-        r'- Avoid raw logs and background unless explicitly requested\.\n\n'
+        r'(- [^\n]*\n)*'
     )
     text = re.sub(pattern, '', text)
-    if text.startswith('CCB reply guidance:\n'):
-        # Fallback: try to find where the actual message begins after guidance
-        lines = text.split('\n')
-        for i, line in enumerate(lines):
-            if not line.startswith('- ') and not line.startswith('CCB ') and i > 3:
-                text = '\n'.join(lines[i:])
-                break
+    # Inline format: "message  CCB reply guidance: - ..."
+    text = re.sub(r'\s{2,}CCB reply guidance:[^\n]*', '', text)
+    # Also strip "Silent-on-success requested" prefix
+    text = re.sub(r'^Silent-on-success requested\.\n*', '', text.strip())
     return text
 
 
