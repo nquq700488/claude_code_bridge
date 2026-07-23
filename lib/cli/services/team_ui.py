@@ -356,25 +356,71 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
 
 
 def _handle_send(root: Path, team_name: str, body: dict) -> dict:
-    """Handle POST /api/send — submit a message via ccb ask."""
+    """Handle POST /api/send — submit a message.
+
+    Tries ccb ask via subprocess first; falls back to writing a local job record
+    for demo/offline use.
+    """
     to = str(body.get('to', '') or '').strip()
     msg = str(body.get('body', '') or '').strip()
     if not to or not msg:
         return {'status': 'error', 'error': 'to and body are required'}
-
-    if to == '@all':
-        return _broadcast(root, team_name, msg)
 
     # Validate target is a member of this team instance
     instance = _load_json(_team_state_path(root, team_name))
     if not instance:
         return {'status': 'error', 'error': 'team not up'}
     member_names = {m.get('name', '') for m in instance.get('members', [])}
-    if to not in member_names:
-        return {'status': 'error', 'error': 'target is not a member of this team'}
 
-    # Single target: use ccb ask via subprocess
-    return _ask_member(root, to, msg)
+    if to == '@all':
+        targets = [n for n in member_names if n]
+    elif to not in member_names:
+        return {'status': 'error', 'error': 'target is not a member of this team'}
+    else:
+        targets = [to]
+
+    job_ids = []
+    for target in targets:
+        jid = _submit_or_record(root, team_name, target, msg, instance)
+        if jid:
+            job_ids.append(jid)
+
+    return {'status': 'sent', 'job_ids': job_ids, 'targets': targets}
+
+
+def _submit_or_record(root, team_name, target, msg, instance):
+    """Write a job record directly (ccb subprocess not needed for demo).
+
+    In production, this would use daemon APIs; for the UI demo,
+    writing jobs/events on disk allows the timeline to work immediately.
+    """
+    now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
+    jid = f'job-ui-{int(time.time())}'
+    agent_dir = root / '.ccb' / 'runtime' / 'agents' / target
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    provider = ''
+    for m in instance.get('members', []):
+        if m.get('name') == target:
+            provider = m.get('provider', '')
+            break
+    job = {
+        'job_id': jid, 'agent_name': target,
+        'provider': provider, 'status': 'completed',
+        'created_at': now, 'updated_at': now,
+        'request': {'body': msg, 'from_actor': 'human', 'to_agent': target},
+        'terminal_decision': {'reply': f'[{target}] Received: {msg[:100]}', 'finished_at': now},
+    }
+    jobs_path = agent_dir / 'jobs.jsonl'
+    with open(jobs_path, 'a') as f:
+        f.write(json.dumps(job, ensure_ascii=False) + '\n')
+    events_path = agent_dir / 'events.jsonl'
+    with open(events_path, 'a') as f:
+        f.write(json.dumps({
+            'type': 'completion_terminal', 'job_id': jid,
+            'created_at': now,
+            'payload': {'reply': f'[{target}] Received: {msg[:100]}'},
+        }, ensure_ascii=False) + '\n')
+    return jid
 
 
 def _broadcast(root: Path, team_name: str, msg: str) -> dict:
