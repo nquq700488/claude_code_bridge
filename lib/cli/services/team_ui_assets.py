@@ -173,11 +173,11 @@ function appendEvents(events){
     }else{
       var color=PROVIDER_COLORS[ev.from_provider]||defaultColor(ev.from||'');
       var badge=isYou?
-        '<span class="badge" style="background:var(--human)">You</span>':
-        '<span class="badge" style="background:'+color+'">'+esc(ev.from_provider||'')+'</span>';
-      var senderHtml=badge+esc(ev.from||'');
+        '<span class="badge" style="background:var(--human)">You</span> ':
+        '<span class="badge" style="background:'+color+'">'+esc(ev.from_provider||'')+'</span>'+esc(ev.from||'')+' ';
+      var senderHtml=badge;
       if(ev.to){
-        senderHtml+=' <span style="font-size:10px;color:var(--text-dim)">→ '+esc(ev.to)+'</span>';
+        senderHtml+='<span style="font-size:10px;color:var(--text-dim)">→ '+esc(ev.to)+'</span>';
       }
       var body=formatBody(ev.body);
       if(ev.reply_to){
