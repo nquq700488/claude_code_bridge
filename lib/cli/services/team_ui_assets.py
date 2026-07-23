@@ -245,7 +245,6 @@ function showError(msg){var t=$('toast');t.textContent=msg;t.style.display='bloc
 function showThinking(name){
   clearThinking();
   var div=document.createElement('div');div.className='msg thinking';div.setAttribute('data-target',name);
-  // Look up provider color from state.members
   var color='#6b7280',label=name;
   if(state.members)for(var i=0;i<state.members.length;i++){
     if(state.members[i].name===name){
@@ -257,11 +256,13 @@ function showThinking(name){
   div.innerHTML='<div class="sender"><span class="badge" style="background:'+color+'">'+esc(label)+'</span>'+esc(name)+'</div>'+
     '<div class="bubble"><span class="dots">思考中</span>&nbsp;<span class="dot-pulse"></span></div>';
   $('timeline').appendChild(div);
-  // Scroll to show thinking only if user was already near bottom
+  $('send-btn').disabled=true;$('send-input').disabled=true;
   var tl=$('timeline'),atBottom=tl.scrollTop+tl.clientHeight>=tl.scrollHeight-40;
   if(atBottom)setTimeout(scrollBottom,50);
 }
 function clearThinking(){
+  $('send-btn').disabled=false;$('send-input').disabled=false;
+  // loadState will correct this if team is actually stopped
   var nodes=$('timeline').querySelectorAll('.msg.thinking');
   for(var i=0;i<nodes.length;i++)nodes[i].remove();
 }
