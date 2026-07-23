@@ -73,7 +73,6 @@ def team_up(context, command) -> dict:
         all_ok = len(all_members) == len(team.members)
         existing['members'] = all_members
         existing['status'] = 'running' if all_ok else 'partial'
-        existing['upped_at'] = _utc_now()
         _write_team_instance(root, team_name, existing)
         _trigger_reload(context)
         existing_entries = [
@@ -91,7 +90,6 @@ def team_up(context, command) -> dict:
         for m in existing.get('members', []):
             _mark_member_active(root, m['name'])
         existing['status'] = 'running'
-        existing['upped_at'] = _utc_now()
         _write_team_instance(root, team_name, existing)
         _trigger_reload(context)
         return {
