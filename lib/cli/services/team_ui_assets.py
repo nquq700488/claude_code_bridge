@@ -102,7 +102,7 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
 (function(){
 var $=function(id){return document.getElementById(id);};
 var PROVIDER_COLORS={claude:'#d97706',codex:'#6366f1',gemini:'#059669',kimi:'#dc2626',mmx:'#ec4899'};
-var state={team:null,members:[],cursor:null,token:''};
+var state={team:null,members:[],cursor:null,token:''};var seenJids={};
 var pollTimer=null;
 
 function api(path,opts){
@@ -163,7 +163,7 @@ function renderInput(s){
 
 function appendEvents(events){
   var tl=$('timeline');
-  events.forEach(function(ev){
+  events.forEach(function(ev){if(ev.job_id&&seenJids[ev.job_id])return;if(ev.job_id)seenJids[ev.job_id]=true;
     var div=document.createElement('div');
     var isYou=ev.from==='human'||ev.from==='You';
     div.className='msg '+(isYou?'user':(ev.type==='system'?'system':''));
