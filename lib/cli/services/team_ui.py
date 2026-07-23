@@ -377,9 +377,11 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             ts = line.get('created_at') or line.get('timestamp') or ''
             if not ts:
                 continue
-            if cursor and ts <= cursor:
+            # Don't filter _ui_ask by cursor — they should always be visible for
+            # the current UI session so dedup works.
+            if not payload.get('_ui_ask') and cursor and ts <= cursor:
                 continue
-            if upped_at and ts < upped_at:
+            if not payload.get('_ui_ask') and upped_at and ts < upped_at:
                 continue
             payload = line.get('payload') or {}
             if not isinstance(payload, dict):
@@ -421,16 +423,15 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
 
         is_human = from_actor in ('human', 'user')
-        # Ask event — only emit if not already covered by a _ui_ask event
-        if request_body and (not cursor or job.get('created_at', '') > cursor):
+        # Emit ask from job record — but skip if already covered by _ui_ask
+        if request_body:
             body_text = str(request_body)[:2000]
-            # Skip if a _ui_ask already shows this message (avoid duplicate)
             body_clean = _strip_ccb_guidance(body_text).strip()[:200]
-            duplicated = any(
-                str(a.get('body', '')).strip()[:200] == body_clean
+            already_covered = any(
+                _strip_ccb_guidance(str(a.get('body', ''))).strip()[:200] == body_clean
                 for a in ui_asks
             )
-            if not duplicated:
+            if not already_covered:
                 events.append({
                     'type': 'ask',
                     'from': 'You' if is_human else (from_actor or agent_name),
