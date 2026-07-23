@@ -382,10 +382,10 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
             if reply and jid not in replies_by_job:
                 replies_by_job[jid] = reply
 
-    # Phase 3: build timeline — only reply events from job records.
-    # Ask events are shown by the frontend immediately from the send response.
+    # Phase 3: build timeline — ask + reply per job, one of each
     events: list[dict] = []
-    seen_reply_jobs = set()
+    seen_ask_jids: set[str] = set()
+    seen_reply_jids: set[str] = set()
     for jid, job in sorted(jobs_by_id.items()):
         agent_name = job.get('agent_name', '')
         provider = ''
@@ -397,19 +397,34 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         request_body = request.get('body', '') if isinstance(request, dict) else ''
         from_actor = request.get('from_actor', '') if isinstance(request, dict) else ''
         is_human = from_actor in ('human', 'user')
+        to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
 
-        if jid in seen_reply_jobs:
+        # Ask event — one per job (the prompt)
+        if request_body and jid not in seen_ask_jids:
+            seen_ask_jids.add(jid)
+            body_clean = _strip_ccb_guidance(request_body)
+            events.append({
+                'type': 'ask',
+                'from': 'You' if is_human else (from_actor or agent_name),
+                'from_provider': 'human' if is_human else provider,
+                'to': to_agent,
+                'body': body_clean,
+                'body_html': _render_body_html(body_clean),
+                'time': job.get('created_at', job.get('updated_at', '')),
+                'job_id': jid,
+            })
+
+        # Reply event — one per job
+        if jid in seen_reply_jids:
             continue
-        # Reply from events.jsonl or terminal_decision
         reply = replies_by_job.get(jid, '')
         if not reply:
             term = job.get('terminal_decision') or {}
             reply = term.get('reply', '') if isinstance(term, dict) else ''
         if reply:
-            seen_reply_jobs.add(jid)
+            seen_reply_jids.add(jid)
             term = job.get('terminal_decision') or {}
             reply_ts = (term.get('finished_at') or job.get('updated_at') or job.get('created_at', '')) if isinstance(term, dict) else job.get('created_at', '')
-
             body_text = str(reply)[:2000]
             events.append({
                 'type': 'reply',
@@ -458,7 +473,8 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
         if jid:
             job_ids.append(jid)
 
-    # Return the ask as an event for immediate frontend display
+    # Return ask event for immediate frontend display — tagged with real job_ids
+    # so the frontend can deduplicate when the job record arrives via poll
     ask_event = {
         'type': 'ask',
         'from': 'You',
@@ -467,6 +483,7 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
         'body': msg,
         'body_html': _render_body_html(msg),
         'time': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+        'job_id': job_ids[0] if job_ids else '',
     }
 
     return {'status': 'sent', 'job_ids': job_ids, 'targets': targets, 'ask_event': ask_event}
