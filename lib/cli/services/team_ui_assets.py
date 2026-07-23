@@ -201,7 +201,7 @@ function formatBody(text){
       else{inCode=true;out+='<pre><code>';}
       continue;
     }
-    if(inCode){out+=esc(l)+'\n';continue;}
+    if(inCode){out+=esc(l)+NL;continue;}
     // Blockquote
     if(/^>/.test(l)){
       if(!inBlockquote){out+='<blockquote>';inBlockquote=true;}
