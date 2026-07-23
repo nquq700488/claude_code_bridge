@@ -416,7 +416,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
                 'body_html': _render_body_html(body_text),
                 'time': reply_ts,
                 'job_id': jid,
-                'reply_to': str(request_body)[:120] if request_body else '',
+                'reply_to': _strip_ccb_guidance(str(request_body))[:120] if request_body else '',
             })
 
     events.sort(key=lambda e: e.get('time', ''))
