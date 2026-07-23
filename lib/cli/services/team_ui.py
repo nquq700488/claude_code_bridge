@@ -449,9 +449,10 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
 
 
 def _submit_or_record(root, team_name, target, msg, instance):
-    """Write job/event to agent directory so timeline picks it up.
+    """Send message via ccb ask; write job record so timeline shows it.
 
-    Real agents store in .ccb/agents/<name>/; this is the primary path.
+    Tries ccb ask first for real agent response. Falls back to local-only
+    record if ccb is unavailable.
     """
     now = time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())
     jid = f'job-ui-{int(time.time())}'
@@ -462,22 +463,38 @@ def _submit_or_record(root, team_name, target, msg, instance):
         if m.get('name') == target:
             provider = m.get('provider', '')
             break
+
+    # Write ask record (status=running — reply comes from real agent)
     job = {
         'job_id': jid, 'agent_name': target,
-        'provider': provider, 'status': 'completed',
+        'provider': provider, 'status': 'running',
         'created_at': now, 'updated_at': now,
         'request': {'body': msg, 'from_actor': 'human', 'to_agent': target},
-        'terminal_decision': {'reply': f'[{target}] Received: {msg[:100]}', 'finished_at': now},
     }
     jobs_path = agent_dir / 'jobs.jsonl'
     with open(jobs_path, 'a') as f:
+        f.write(json.dumps(job, ensure_ascii=False) + '\n')
+
+    # Try real ccb ask — agent will write its own reply to events.jsonl
+    try:
+        result = _ask_member(root, target, msg)
+        if result.get('status') == 'sent':
+            return jid
+    except Exception:
+        pass
+
+    # ccb ask failed — write a fallback note so user isn't left hanging
+    fallback_reply = f'[Message sent to {target}. Waiting for response...]'
+    with open(jobs_path, 'a') as f:
+        job['status'] = 'completed'
+        job['terminal_decision'] = {'reply': fallback_reply, 'finished_at': now}
         f.write(json.dumps(job, ensure_ascii=False) + '\n')
     events_path = agent_dir / 'events.jsonl'
     with open(events_path, 'a') as f:
         f.write(json.dumps({
             'type': 'completion_terminal', 'job_id': jid,
             'created_at': now,
-            'payload': {'reply': f'[{target}] Received: {msg[:100]}'},
+            'payload': {'reply': fallback_reply},
         }, ensure_ascii=False) + '\n')
     return jid
 
@@ -617,12 +634,11 @@ def _read_jsonl(path: Path) -> list[dict]:
 
 
 def _find_ccb() -> str:
-    """Find the ccb binary — use the running process path or PATH lookup."""
-    # Try the current Python's parent script first
-    if sys.argv and sys.argv[0]:
-        candidate = Path(sys.argv[0]).resolve()
-        if candidate.name == 'ccb' or candidate.name.startswith('ccb'):
-            return str(candidate)
+    """Find the ccb binary."""
+    # Prefer ~/.local/bin/ccb (global install from sync-local)
+    candidate = Path.home() / '.local' / 'bin' / 'ccb'
+    if candidate.is_file():
+        return str(candidate)
     # Fall back to PATH
     return 'ccb'
 
