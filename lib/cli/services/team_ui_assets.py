@@ -130,8 +130,11 @@ function loadState(){
   api('/api/state').then(function(s){
     state.team=s.team;state.members=s.members;
     renderHeader(s);renderSidebar(s);renderInput(s);
-    $('send-input').disabled=(s.status!=='running');
-    $('send-btn').disabled=(s.status!=='running');
+    // Only update disabled state if not currently thinking
+    if(!$('timeline').querySelector('.msg.thinking')){
+      $('send-input').disabled=(s.status!=='running');
+      $('send-btn').disabled=(s.status!=='running');
+    }
   }).catch(function(e){showError('Error: '+e);});
 }
 
