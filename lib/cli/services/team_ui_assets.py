@@ -45,9 +45,18 @@ aside.sidebar h2{font-size:11px;text-transform:uppercase;color:var(--text-dim);p
 .msg.system .bubble{background:transparent;border:none;color:var(--text-dim);font-size:12px;text-align:center;padding:4px 8px}
 .msg .time{font-size:10px;color:var(--text-dim);margin-top:2px}
 .msg .reply-ctx{font-size:11px;color:var(--text-dim);border-left:2px solid var(--border);padding-left:8px;margin-bottom:4px;max-height:3em;overflow:hidden}
-.msg .bubble pre{background:rgba(0,0,0,.3);padding:8px 12px;border-radius:4px;font-family:var(--mono);font-size:12px;overflow-x:auto;margin:6px 0}
 .msg .bubble code{font-family:var(--mono);font-size:12px;background:rgba(0,0,0,.2);padding:1px 4px;border-radius:3px}
+.msg .bubble pre{background:rgba(0,0,0,.35);padding:10px 14px;border-radius:6px;font-family:var(--mono);font-size:12px;overflow-x:auto;margin:6px 0;line-height:1.45;white-space:pre-wrap}
+.msg .bubble pre code{background:none;padding:0;font-size:inherit}
 .msg .bubble .expand{color:var(--text-dim);font-size:11px;cursor:pointer}
+.msg .bubble h1,.msg .bubble h2,.msg .bubble h3,.msg .bubble h4{font-size:14px;font-weight:600;margin:6px 0 2px;color:var(--text)}
+.msg .bubble hr{border:none;border-top:1px solid var(--border);margin:8px 0}
+.msg .bubble blockquote{border-left:3px solid var(--claude);padding-left:10px;margin:6px 0;color:var(--text-dim);font-style:italic}
+.msg .bubble ul,.msg .bubble ol{margin:4px 0;padding-left:18px}
+.msg .bubble li{margin:2px 0}
+.msg .bubble a{color:var(--codex);text-decoration:underline}
+.msg .bubble strong{color:var(--text);font-weight:700}
+.msg .bubble em{color:var(--text-dim)}
 footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--surface);flex-shrink:0}
 .input-row{display:flex;gap:8px;align-items:center}
 .input-row select{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:6px 8px;font-size:13px;min-width:140px}
@@ -179,20 +188,67 @@ function appendEvents(events){
 function formatBody(text){
   if(!text)return '';
   var lines=text.split(NL);
-  if(lines.length>10){
-    return esc(lines.slice(0,10).join(NL))+'<br><span class="expand">Show all ('+lines.length+' lines)</span>';
+  if(lines.length>100){
+    lines=lines.slice(0,100);
+    lines.push('… (truncated)');
   }
-  var out='',inCode=false,codeBuf='';
+  var out='',inCode=false,inBlockquote=false,listCont=false,codeBuf='';
   for(var i=0;i<lines.length;i++){
     var l=lines[i];
+    // Fenced code block
     if(l.indexOf('```')===0){
-      if(inCode){out+='<pre>'+esc(codeBuf)+'</pre>';codeBuf='';inCode=false;}
-      else{inCode=true;}
-    }else if(inCode){codeBuf+=(codeBuf?NL:'')+l;}
-    else{out+=esc(l)+'<br>';}
+      if(inCode){out+='</code></pre>';codeBuf='';inCode=false;inBlockquote=false;listCont=false;}
+      else{inCode=true;out+='<pre><code>';}
+      continue;
+    }
+    if(inCode){out+=esc(l)+'\n';continue;}
+    // Blockquote
+    if(/^>/.test(l)){
+      if(!inBlockquote){out+='<blockquote>';inBlockquote=true;}
+      out+=inlineMd(l.replace(/^>\s?/,''))+'<br>';
+      continue;
+    }
+    if(inBlockquote){out+='</blockquote>';inBlockquote=false;}
+    // Bullet/numbered list
+    var isBullet=/^[-*+]\s/.test(l);
+    var isNumbered=/^\d+[.)]\s/.test(l);
+    if(isBullet||isNumbered){
+      if(!listCont){out+='<ul>';listCont='ul';}
+      out+='<li>'+inlineMd(l.replace(/^[-*+]\s|^\d+[.)]\s/,''))+'</li>';
+      continue;
+    }
+    if(listCont){out+='</'+listCont+'>';listCont=false;}
+    // Heading
+    if(/^#{1,4}\s/.test(l)){
+      var h=l.match(/^(#{1,4})\s(.*)/);
+      out+='<h'+h[1].length+'>'+inlineMd(h[2])+'</h'+h[1].length+'>';
+      continue;
+    }
+    // Horizontal rule
+    if(/^[-*_]{3,}$/.test(l.trim())){out+='<hr>';continue;}
+    // Empty line
+    if(!l.trim()){out+='<br>';continue;}
+    // Regular paragraph line
+    out+=inlineMd(l)+'<br>';
   }
-  if(codeBuf)out+='<pre>'+esc(codeBuf)+'</pre>';
+  if(inCode)out+='</code></pre>';
+  if(inBlockquote)out+='</blockquote>';
+  if(listCont)out+='</'+listCont+'>';
   return out;
+}
+
+function inlineMd(s){
+  if(!s)return '';
+  s=esc(s);
+  // Bold **text**
+  s=s.replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>');
+  // Inline code `text`
+  s=s.replace(/`([^`]+)`/g,'<code>$1</code>');
+  // Link [text](url)
+  s=s.replace(/\[([^\]]+)\]\(([^)]+)\)/g,'<a href=\"$2\" target=\"_blank\">$1</a>');
+  // Italic *text* (after bold removed, remaining single * are italic)
+  s=s.replace(/(^|\s)\*([^*]+)\*(\s|$)/g,'$1<em>$2</em>$3');
+  return s;
 }
 
 function sendMessage(){
