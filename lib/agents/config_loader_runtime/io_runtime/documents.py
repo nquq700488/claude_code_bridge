@@ -278,6 +278,10 @@ def _merge_hybrid_overlay(
         merged['maintenance'] = overlay_document['maintenance']
     if 'loop' in overlay_document:
         merged['loop'] = overlay_document['loop']
+    if 'providers' in overlay_document:
+        merged['providers'] = overlay_document['providers']
+    if 'teams' in overlay_document:
+        merged['teams'] = overlay_document['teams']
     return merged
 
 
