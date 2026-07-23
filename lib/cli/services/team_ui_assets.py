@@ -10,7 +10,7 @@ TEAM_UI_HTML = """<!DOCTYPE html>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
   --bg:#090c10;--surface:#0d1117;--surface2:#111820;--border:#1c2333;--border-light:#253049;
-  --text:#c9d1d9;--text-mid:#8b949e;--text-dim:#484f58;
+  --text:#d2d8e0;--text-mid:#a0aab4;--text-dim:#7d8590;
   --claude:#d97706;--codex:#6366f1;--gemini:#059669;--kimi:#dc2626;--custom:#8b5cf6;--human:#58a6ff;
   --radius:6px;--font:system-ui,-apple-system,sans-serif;--mono:'SF Mono',JetBrains Mono,Menlo,monospace;
   --transition:150ms ease
