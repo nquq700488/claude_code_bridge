@@ -149,11 +149,12 @@ function renderSidebar(s){
 }
 
 function renderInput(s){
-  var sel=$('send-target');
+  var sel=$('send-target'),old=sel.value;
   sel.innerHTML='<option value="@all">@all (broadcast)</option>';
   s.members.forEach(function(m){
     sel.innerHTML+='<option value="'+esc(m.name)+'">@'+esc(m.name)+'</option>';
   });
+  if(old)sel.value=old;  // preserve user's selection
   var chips='';
   s.members.forEach(function(m){
     chips+='<span class="mention-chip" data-member="'+esc(m.name)+'">@'+esc(m.name)+'</span>';
