@@ -166,17 +166,22 @@ function appendEvents(events){
   var tl=$('timeline');
   events.forEach(function(ev){
     var div=document.createElement('div');
-    div.className='msg '+(ev.from==='human'?'user':(ev.type==='system'?'system':''));
+    var isYou=ev.from==='human'||ev.from==='You';
+    div.className='msg '+(isYou?'user':(ev.type==='system'?'system':''));
     if(ev.type==='system'){
       div.innerHTML='<div class="bubble">'+esc(ev.body)+'</div><div class="time">'+fmtTime(ev.time)+'</div>';
     }else{
       var color=PROVIDER_COLORS[ev.from_provider]||defaultColor(ev.from||'');
-      var senderHtml=ev.from==='human'?
-        '<span class="badge" style="background:var(--human)">human</span>':
-        '<span class="badge" style="background:'+color+'">'+esc(ev.from_provider||'')+'</span>'+esc(ev.from||'');
+      var badge=isYou?
+        '<span class="badge" style="background:var(--human)">You</span>':
+        '<span class="badge" style="background:'+color+'">'+esc(ev.from_provider||'')+'</span>';
+      var senderHtml=badge+esc(ev.from||'');
+      if(ev.to){
+        senderHtml+=' <span style="font-size:10px;color:var(--text-dim)">→ '+esc(ev.to)+'</span>';
+      }
       var body=formatBody(ev.body);
       if(ev.reply_to){
-        body='<div class="reply-ctx">'+esc((ev.reply_to||'').substring(0,120))+'</div>'+body;
+        body='<div class="reply-ctx">↳ '+esc((ev.reply_to||'').substring(0,120))+'</div>'+body;
       }
       div.innerHTML='<div class="sender">'+senderHtml+'</div>'+
         '<div class="bubble">'+body+'</div><div class="time">'+fmtTime(ev.time)+'</div>';

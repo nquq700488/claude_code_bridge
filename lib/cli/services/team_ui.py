@@ -322,12 +322,13 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
         from_actor = request.get('from_actor', '') if isinstance(request, dict) else ''
         to_agent = request.get('to_agent', '') if isinstance(request, dict) else agent_name
 
+        is_human = from_actor in ('human', 'user')
         # Ask event — only emit if the job itself is new (created_at after cursor)
         if request_body and (not cursor or job.get('created_at', '') > cursor):
             events.append({
                 'type': 'ask',
-                'from': from_actor or 'user',
-                'from_provider': 'human' if from_actor == 'human' else provider,
+                'from': 'You' if is_human else (from_actor or agent_name),
+                'from_provider': 'human' if is_human else provider,
                 'to': to_agent,
                 'body': str(request_body)[:2000],
                 'time': job.get('created_at', ts),
@@ -346,6 +347,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
                 'type': 'reply',
                 'from': agent_name,
                 'from_provider': provider,
+                'to': 'You' if is_human else (from_actor or ''),
                 'body': str(reply)[:2000],
                 'time': reply_ts,
                 'job_id': jid,
