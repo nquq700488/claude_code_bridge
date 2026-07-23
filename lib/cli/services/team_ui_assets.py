@@ -1,9 +1,6 @@
-"""Team UI embedded HTML/JS/CSS single-page application.
+"""Team UI embedded HTML/JS/CSS single-page application."""
 
-Renders a group-chat interface served by the team_ui HTTP server.
-"""
-
-TEAM_UI_HTML = r"""<!DOCTYPE html>
+TEAM_UI_HTML = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -18,7 +15,7 @@ TEAM_UI_HTML = r"""<!DOCTYPE html>
 }
 body{font-family:var(--font);background:var(--bg);color:var(--text);height:100vh;display:flex;flex-direction:column}
 header{display:flex;align-items:center;gap:12px;padding:12px 16px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
-header h1{font-size:15px;font-weight:600;white-space:nowrap}
+header h1{font-size:15px;font-weight:600}
 header .meta{font-size:12px;color:var(--text-dim);display:flex;gap:8px;align-items:center}
 header .dot{width:8px;height:8px;border-radius:50%;display:inline-block}
 header .dot.running{background:#22c55e}
@@ -75,8 +72,8 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
     <span id="status-text">-</span>
   </div>
   <div style="flex:1"></div>
-  <button id="btn-up">▲ Up</button>
-  <button id="btn-down">■ Down</button>
+  <button id="btn-up">Up</button>
+  <button id="btn-down">Down</button>
 </header>
 <div class="error-bar" id="error-bar"></div>
 <main>
@@ -86,80 +83,91 @@ footer{border-top:1px solid var(--border);padding:10px 16px;background:var(--sur
 <footer>
   <div class="input-row">
     <select id="send-target"></select>
-    <input id="send-input" placeholder="输入消息… (@名字 / @all)" disabled>
-    <button id="send-btn" disabled>发送</button>
+    <input id="send-input" placeholder="Send a message... (@name / @all)" disabled>
+    <button id="send-btn" disabled>Send</button>
   </div>
   <div class="mention-chips" id="mention-chips"></div>
 </footer>
 <div class="toast" id="toast" style="display:none"></div>
 <script>
-const $=id=>document.getElementById(id);
-const PROVIDER_COLORS={claude:'#d97706',codex:'#6366f1',gemini:'#059669',kimi:'#dc2626',mmx:'#ec4899',open:'#14b8a6'};
-const COLOR_KEYS=['claude','codex','gemini','kimi','mmx','open'];
-let state={team:null,members:[],cursor:null,token:''};
-let pollTimer=null;
+(function(){
+var $=function(id){return document.getElementById(id);};
+var PROVIDER_COLORS={claude:'#d97706',codex:'#6366f1',gemini:'#059669',kimi:'#dc2626',mmx:'#ec4899'};
+var state={team:null,members:[],cursor:null,token:''};
+var pollTimer=null;
+var NL=String.fromCharCode(10);
 
-function api(path,opts={}){
-  let url=path+(path.includes('?')?'&':'?')+'token='+state.token;
-  return fetch(url,opts).then(r=>r.ok?r.json():Promise.reject(r.statusText));
+function api(path,opts){
+  opts=opts||{};
+  var url=path+(path.indexOf('?')>=0?'&':'?')+'token='+state.token;
+  return fetch(url,opts).then(function(r){return r.ok?r.json():Promise.reject(r.statusText);});
 }
 
-async function loadState(){
-  try{
-    let s=await api('/api/state');
+function loadState(){
+  api('/api/state').then(function(s){
     state.team=s.team;state.members=s.members;
     renderHeader(s);renderSidebar(s);renderInput(s);
-    $('send-input').disabled=s.status!=='running';
-    $('send-btn').disabled=s.status!=='running';
-  }catch(e){showError('无法加载团队状态: '+e)}
+    $('send-input').disabled=(s.status!=='running');
+    $('send-btn').disabled=(s.status!=='running');
+  }).catch(function(e){showError('Error: '+e);});
 }
-async function loadTimeline(){
-  try{
-    let t=await api('/api/timeline'+(state.cursor?'?since='+state.cursor:''));
-    if(t.events&&t.events.length){appendEvents(t.events);state.cursor=t.cursor;scrollBottom()}
-  }catch(e){}
+
+function loadTimeline(){
+  var qs=state.cursor?'?since='+state.cursor:'';
+  api('/api/timeline'+qs).then(function(t){
+    if(t.events&&t.events.length){appendEvents(t.events);state.cursor=t.cursor;scrollBottom();}
+  }).catch(function(){});
 }
+
 function renderHeader(s){
-  $('team-name').textContent=s.team;$('topology').textContent=s.topology;
-  let dot=$('status-dot');dot.className='dot '+(s.status==='running'?'running':'stopped');
+  $('team-name').textContent=s.team;
+  $('topology').textContent=s.topology;
+  var dot=$('status-dot');
+  dot.className='dot '+(s.status==='running'?'running':'stopped');
   $('status-text').textContent=s.status==='running'?'running':'stopped';
 }
 
 function renderSidebar(s){
-  let html='<h2>成员 ('+s.members.length+')</h2>';
-  s.members.forEach(m=>{
-    let color=PROVIDER_COLORS[m.provider]||defaultColor(m.provider);
-    let cls=m.state==='visible'?'active':(m.state==='hidden'?'idle':'working');
+  var html='<h2>Members ('+s.members.length+')</h2>';
+  s.members.forEach(function(m){
+    var color=PROVIDER_COLORS[m.provider]||defaultColor(m.provider);
+    var cls=m.state==='visible'?'active':(m.state==='hidden'?'idle':'working');
     html+='<div class="member-card" data-member="'+esc(m.name)+'">'+
       '<span class="indicator '+cls+'" style="background:'+color+'"></span>'+
       '<div class="info"><div class="name">'+esc(m.name)+'</div>'+
-      '<div class="meta">'+esc(m.provider)+(m.model?' · '+esc(m.model):'')+'</div></div></div>';
+      '<div class="meta">'+esc(m.provider)+(m.model?' '+esc(m.model):'')+'</div></div></div>';
   });
   $('sidebar').innerHTML=html;
 }
 
 function renderInput(s){
-  let sel=$('send-target');sel.innerHTML='<option value="@all">@all (广播)</option>';
-  s.members.forEach(m=>sel.innerHTML+='<option value="'+esc(m.name)+'">@'+esc(m.name)+'</option>');
-  let chips='';s.members.forEach(m=>chips+='<span class="mention-chip" data-member="'+esc(m.name)+'">@'+esc(m.name)+'</span>');
+  var sel=$('send-target');
+  sel.innerHTML='<option value="@all">@all (broadcast)</option>';
+  s.members.forEach(function(m){
+    sel.innerHTML+='<option value="'+esc(m.name)+'">@'+esc(m.name)+'</option>';
+  });
+  var chips='';
+  s.members.forEach(function(m){
+    chips+='<span class="mention-chip" data-member="'+esc(m.name)+'">@'+esc(m.name)+'</span>';
+  });
   $('mention-chips').innerHTML=chips;
 }
 
 function appendEvents(events){
-  let tl=$('timeline');
-  events.forEach(ev=>{
-    let div=document.createElement('div');
+  var tl=$('timeline');
+  events.forEach(function(ev){
+    var div=document.createElement('div');
     div.className='msg '+(ev.from==='human'?'user':(ev.type==='system'?'system':''));
     if(ev.type==='system'){
       div.innerHTML='<div class="bubble">'+esc(ev.body)+'</div><div class="time">'+fmtTime(ev.time)+'</div>';
     }else{
-      let color=PROVIDER_COLORS[ev.from_provider]||defaultColor(ev.from||'');
-      let senderHtml=ev.from==='human'?
+      var color=PROVIDER_COLORS[ev.from_provider]||defaultColor(ev.from||'');
+      var senderHtml=ev.from==='human'?
         '<span class="badge" style="background:var(--human)">human</span>':
         '<span class="badge" style="background:'+color+'">'+esc(ev.from_provider||'')+'</span>'+esc(ev.from||'');
-      let body=formatBody(ev.body);
+      var body=formatBody(ev.body);
       if(ev.reply_to){
-        body='<div class="reply-ctx">↳ '+esc((ev.reply_to||'').substring(0,120))+'</div>'+body;
+        body='<div class="reply-ctx">'+esc((ev.reply_to||'').substring(0,120))+'</div>'+body;
       }
       div.innerHTML='<div class="sender">'+senderHtml+'</div>'+
         '<div class="bubble">'+body+'</div><div class="time">'+fmtTime(ev.time)+'</div>';
@@ -170,84 +178,70 @@ function appendEvents(events){
 
 function formatBody(text){
   if(!text)return '';
-  let lines=text.split('\n');
+  var lines=text.split(NL);
   if(lines.length>10){
-    let id='expand-'+Math.random().toString(36).slice(2,8);
-    return esc(lines.slice(0,10).join('\n'))+'<br><span class="expand" data-expand-text="'+esc(text).replace(/"/g,'&quot;')+'">▼ 展开全文 ('+lines.length+' 行)</span>';
+    return esc(lines.slice(0,10).join(NL))+'<br><span class="expand">Show all ('+lines.length+' lines)</span>';
   }
-  let out='',inCode=false,codeBuf='';
-  for(let l of lines){
-    if(l.startsWith('```')){
-      if(inCode){out+='<pre>'+esc(codeBuf)+'</pre>';codeBuf='';inCode=false}
-      else{inCode=true}
-    }else if(inCode){codeBuf+=(codeBuf?'\n':'')+l}
-    else{out+=esc(l)+'<br>'}
+  var out='',inCode=false,codeBuf='';
+  for(var i=0;i<lines.length;i++){
+    var l=lines[i];
+    if(l.indexOf('```')===0){
+      if(inCode){out+='<pre>'+esc(codeBuf)+'</pre>';codeBuf='';inCode=false;}
+      else{inCode=true;}
+    }else if(inCode){codeBuf+=(codeBuf?NL:'')+l;}
+    else{out+=esc(l)+'<br>';}
   }
   if(codeBuf)out+='<pre>'+esc(codeBuf)+'</pre>';
   return out;
 }
 
 function sendMessage(){
-  let sel=$('send-target'),input=$('send-input'),body=input.value.trim();
+  var sel=$('send-target'),input=$('send-input'),body=input.value.trim();
   if(!body)return;
-  let to=sel.value;
+  var to=sel.value;
   api('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to:to,body:body})})
-    .then(r=>{input.value='';appendEvents([{type:'ask',from:'human',to:to,body:body,time:new Date().toISOString()}]);scrollBottom()})
-    .catch(e=>showError('发送失败: '+e));
+    .then(function(r){
+      input.value='';
+      appendEvents([{type:'ask',from:'human',to:to,body:body,time:new Date().toISOString()}]);
+      scrollBottom();
+    }).catch(function(e){showError('Send failed: '+e);});
 }
 
 function teamAction(action){
-  api('/api/'+action,{method:'POST'}).then(r=>{
-    appendEvents([{type:'system',body:action==='up'?'Team up 已提交':'Team down 已提交',time:new Date().toISOString()}]);
+  api('/api/'+action,{method:'POST'}).then(function(r){
+    appendEvents([{type:'system',body:action==='up'?'Team started':'Team stopped',time:new Date().toISOString()}]);
     setTimeout(loadState,1500);
-  }).catch(e=>showError(action+' 失败: '+e));
+  }).catch(function(e){showError(action+' failed: '+e);});
 }
 
-function onInputKey(ev){if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();sendMessage()}}
-function fillMention(name){$('send-target').value=name;$('send-input').focus()}
-function scrollBottom(){let tl=$('timeline');tl.scrollTop=tl.scrollHeight}
-function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
-function fmtTime(t){try{return new Date(t).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})}catch(e){return''}}
-function defaultColor(name){let h=0;for(let i=0;i<name.length;i++)h=name.charCodeAt(i)+((h<<5)-h);return 'hsl('+(h%360)+',60%,55%)'}
-function showError(msg){let t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(()=>t.style.display='none',4000)}
+function fillMention(name){$('send-target').value=name;$('send-input').focus();}
+function scrollBottom(){var tl=$('timeline');tl.scrollTop=tl.scrollHeight;}
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function fmtTime(t){try{return new Date(t).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});}catch(e){return'';}}
+function defaultColor(name){var h=0;for(var i=0;i<name.length;i++)h=name.charCodeAt(i)+((h<<5)-h);return 'hsl('+(h%360)+',60%,55%)';}
+function showError(msg){var t=$('toast');t.textContent=msg;t.style.display='block';setTimeout(function(){t.style.display='none';},4000);}
 
-	// Event bindings (event delegation — no inline onclick)
-	document.addEventListener('DOMContentLoaded',function(){
-	  // Send button and input
-	  $('send-btn').addEventListener('click',sendMessage);
-	  $('send-input').addEventListener('keydown',function(ev){
-	    if(ev.key==='Enter'&&!ev.shiftKey){ev.preventDefault();sendMessage();}
-	  });
-	  // Up/Down buttons
-	  $('btn-up').addEventListener('click',function(){teamAction('up')});
-	  $('btn-down').addEventListener('click',function(){teamAction('down')});
-	  // Sidebar member card clicks (event delegation)
-	  $('sidebar').addEventListener('click',function(e){
-	    let card=e.target.closest('.member-card');
-	    if(card&&card.dataset.member){fillMention(card.dataset.member);}
-	  });
-	  // Mention chips (event delegation)
-	  $('mention-chips').addEventListener('click',function(e){
-	    let chip=e.target.closest('.mention-chip');
-	    if(chip&&chip.dataset.member){fillMention(chip.dataset.member);}
-	  });
-	  // Expand text (event delegation)
-	  $('timeline').addEventListener('click',function(e){
-	    let expand=e.target.closest('.expand');
-	    if(expand&&expand.dataset.expandText){
-	      expand.parentElement.innerHTML=formatBody(expand.dataset.expandText.replace(/&quot;/g,'\"'));
-	    }
-	  });
-	});
+$('send-btn').addEventListener('click',sendMessage);
+$('send-input').addEventListener('keydown',function(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendMessage();}});
+$('btn-up').addEventListener('click',function(){teamAction('up');});
+$('btn-down').addEventListener('click',function(){teamAction('down');});
+$('sidebar').addEventListener('click',function(e){
+  var card=e.target.closest('.member-card');
+  if(card&&card.dataset.member){fillMention(card.dataset.member);}
+});
+$('mention-chips').addEventListener('click',function(e){
+  var chip=e.target.closest('.mention-chip');
+  if(chip&&chip.dataset.member){fillMention(chip.dataset.member);}
+});
 
 state.token=new URLSearchParams(location.search).get('token')||'';
-loadState().then(()=>{loadTimeline();pollTimer=setInterval(loadTimeline,2000);setInterval(loadState,5000)});
+loadState();
+loadTimeline();
+pollTimer=setInterval(loadTimeline,2000);
+setInterval(loadState,5000);
+})();
 </script>
 </body>
 </html>"""
-
-TEAM_UI_CSS = ""  # inline in HTML
-
-TEAM_UI_JS = ""  # inline in HTML
 
 __all__ = ['TEAM_UI_HTML']
