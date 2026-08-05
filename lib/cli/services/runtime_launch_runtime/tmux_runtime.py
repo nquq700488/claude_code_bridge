@@ -95,7 +95,7 @@ def launch_tmux_runtime(
             apply_ccb_pane_identity(
                 backend,
                 pane_id,
-                title=f"{spec.name}:{spec.provider}",
+                title=spec.name,
                 agent_label=spec.name,
                 project_id=context.project.project_id,
                 order_index=style_index,

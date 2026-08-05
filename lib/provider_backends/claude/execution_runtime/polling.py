@@ -3,23 +3,35 @@ from __future__ import annotations
 import re
 from dataclasses import replace
 
-from completion.models import CompletionItemKind
-from completion.models import CompletionConfidence, CompletionDecision, CompletionStatus
 from ccbd.system import parse_utc_timestamp
-from provider_execution.active import ensure_active_pane_alive, prepare_active_poll_without_liveness
+from completion.models import CompletionConfidence, CompletionDecision, CompletionItemKind, CompletionStatus
+from provider_execution.active import (
+    ensure_active_pane_alive,
+    prepare_active_poll_without_liveness,
+)
 from provider_execution.base import ProviderPollResult, ProviderSubmission
-from provider_execution.common import build_item, request_anchor_from_runtime_state
+from provider_execution.common import build_item
 
-from .event_reading import is_turn_boundary_event, read_events, terminal_api_error_payload
+from .event_reading import (
+    is_turn_boundary_event,
+    read_events,
+    terminal_api_error_payload,
+)
 from .hook_results import poll_exact_hook
+from .hook_results_runtime import (
+    load_strict_exact_hook_evidence,
+    poll_hook_event,
+)
 from .start import looks_claude_interrupted, looks_ready, send_prompt, state_session_path
 from .state_machine import (
     apply_session_rotation,
     build_poll_state,
     finalize_poll_result,
     handle_assistant_event,
+    handle_prompt_lifecycle_event,
     handle_system_event,
     handle_user_event,
+    is_top_level_user_prompt,
 )
 
 
@@ -43,11 +55,12 @@ def poll_submission(
     dispatch_items = ()
     if isinstance(prompt_dispatch, ProviderSubmission):
         submission = prompt_dispatch
-        dispatch_items = _prompt_dispatch_items(submission, now=now)
     reply_delivery_terminal = _reply_delivery_terminal_if_dispatched(submission, now=now)
     if reply_delivery_terminal is not None:
         return _merge_poll_result_items(reply_delivery_terminal, prefix_items=dispatch_items)
-    hook_result = poll_exact_hook(submission, now=now)
+    hook_result = poll_exact_hook(submission, now=now) if _prompt_completion_is_eligible(submission) else None
+    if hook_result is None:
+        hook_result = _orphaned_exact_hook(submission, prepared=prepared, now=now)
     if hook_result is not None:
         return _merge_poll_result_items(hook_result, prefix_items=dispatch_items)
     pane_dead_result = _ensure_prepared_pane_alive(submission, prepared=prepared, now=now)
@@ -58,12 +71,6 @@ def poll_submission(
     state = _poll_event_batches(submission, prepared.reader, poll, state=state, now=now)
     if isinstance(state, ProviderPollResult):
         return _merge_poll_result_items(state, prefix_items=dispatch_items)
-    # If the session event log produced no turn boundary, scan the tmux pane
-    # for a Claude content-safety interruption.  This interruption is NOT
-    # reflected in the event log — it only shows as pane text.
-    if not poll.reached_turn_boundary and poll.anchor_seen and not submission.runtime_state.get('claude_interruption_detected'):
-        _check_claude_pane_interruption(submission, poll, backend=prepared.backend, pane_id=prepared.pane_id, now=now)
-
     pane_terminal = _idle_pane_round_result_terminal(
         submission,
         prepared=prepared,
@@ -73,47 +80,11 @@ def poll_submission(
     )
     if pane_terminal is not None:
         return _merge_poll_result_items(pane_terminal, prefix_items=dispatch_items)
+    _check_claude_pane_interruption(submission, poll, prepared=prepared, now=now)
     return _merge_poll_result_items(
         finalize_poll_result(submission, poll, state=state),
         prefix_items=dispatch_items,
     )
-
-
-def _check_claude_pane_interruption(
-    submission: ProviderSubmission,
-    poll,
-    *,
-    backend: object,
-    pane_id: str,
-    now: str,
-) -> None:
-    get_pane_content = getattr(backend, 'get_pane_content', None)
-    if not callable(get_pane_content) or not pane_id:
-        return
-    try:
-        text = str(get_pane_content(pane_id, lines=80) or '')
-    except Exception:
-        return
-    if not looks_claude_interrupted(text):
-        return
-
-    poll.items.append(
-        build_item(
-            submission,
-            kind=CompletionItemKind.TURN_ABORTED,
-            timestamp=now,
-            seq=poll.next_seq,
-            payload={
-                'reason': 'conversation_interrupted',
-                'status': 'cancelled',
-                'error_message': 'Claude content-safety guard interrupted the conversation.',
-                'last_agent_message': poll.reply_buffer or '',
-            },
-        )
-    )
-    poll.next_seq += 1
-    poll.reached_turn_boundary = True
-    submission.runtime_state['claude_interruption_detected'] = True
 
 
 _ROUND_RESULT_RE = re.compile(
@@ -174,6 +145,16 @@ def _idle_pane_round_result_terminal(
             "raw_buffer": poll.raw_buffer,
             "session_path": poll.session_path,
             "last_assistant_uuid": poll.last_assistant_uuid,
+            "active_assistant_message_id": poll.active_assistant_message_id,
+            "active_assistant_text": poll.active_assistant_text,
+            "active_assistant_stop_reason": poll.active_assistant_stop_reason,
+            "active_assistant_has_tool_use": poll.active_assistant_has_tool_use,
+            "terminal_reply": reply,
+            "prompt_enqueued": poll.prompt_enqueued,
+            "queue_dequeue_observed": poll.queue_dequeue_observed,
+            "prompt_activated": poll.prompt_activated,
+            "prompt_enqueue_uuid": poll.prompt_enqueue_uuid,
+            "prompt_activation_uuid": poll.prompt_activation_uuid,
         },
     )
     decision = CompletionDecision(
@@ -196,6 +177,65 @@ def _idle_pane_round_result_terminal(
         },
     )
     return ProviderPollResult(submission=updated, items=tuple(poll.items), decision=decision)
+
+
+def _check_claude_pane_interruption(
+    submission: ProviderSubmission,
+    poll,
+    *,
+    prepared,
+    now: str,
+) -> None:
+    """Emit TURN_ABORTED when the pane shows a content-safety interruption.
+
+    Some Claude-compatible endpoints (e.g. DeepSeek's Anthropic-compatible API)
+    fire a content-safety guard that drops Claude into 'Interrupted · What
+    should Claude do instead?' without writing a terminal event to the session
+    log.  This interruption is invisible to the event-driven poll loop, so
+    without this check CCB would wait for the reliability timeout (900 s)
+    before giving up.
+
+    The runtime_state flag prevents re-emitting TURN_ABORTED every poll cycle
+    while the interruption text remains in the pane buffer.
+    """
+    if poll.reached_turn_boundary or not poll.anchor_seen:
+        return
+    if submission.runtime_state.get('claude_interruption_detected'):
+        return
+    get_pane_content = getattr(prepared.backend, 'get_pane_content', None)
+    if not callable(get_pane_content):
+        return
+    try:
+        text = str(get_pane_content(prepared.pane_id, lines=80) or '')
+    except Exception:
+        return
+    if not looks_claude_interrupted(text):
+        return
+
+    # The session was interrupted by a content-safety guard.  Emit a
+    # TURN_ABORTED item so CCB can immediately retry instead of waiting
+    # for the no-terminal timeout.
+    poll.items.append(
+        build_item(
+            submission,
+            kind=CompletionItemKind.TURN_ABORTED,
+            timestamp=now,
+            seq=poll.next_seq,
+            payload={
+                'reason': 'conversation_interrupted',
+                'status': 'cancelled',
+                'error_message': (
+                    'Claude content-safety guard interrupted the conversation.'
+                ),
+                'last_agent_message': poll.reply_buffer or '',
+            },
+        )
+    )
+    poll.next_seq += 1
+    poll.reached_turn_boundary = True
+    # Prevent re-detection on subsequent poll cycles while the
+    # interruption text stays in the pane buffer.
+    submission.runtime_state['claude_interruption_detected'] = True
 
 
 def _pane_text_after_latest_anchor(text: str, request_anchor: str) -> str | None:
@@ -246,46 +286,87 @@ def _dispatch_deferred_prompt(
         )
     prompt = str(submission.runtime_state.get("prompt_text") or "")
     send_prompt(prepared.backend, prepared.pane_id, prompt)
-    next_seq = int(submission.runtime_state.get("next_seq", 1))
     anchor_seen = bool(submission.runtime_state.get("anchor_seen", False))
-    deferred_for_ready = bool(submission.runtime_state.get("prompt_deferred_for_ready", False))
-    anchor_emitted = deferred_for_ready and not anchor_seen
     updated = replace(
         submission,
         runtime_state={
             **submission.runtime_state,
             "prompt_sent": True,
             "prompt_sent_at": now,
-            "anchor_seen": anchor_seen or anchor_emitted,
-            "next_seq": next_seq + (1 if anchor_emitted else 0),
+            "anchor_seen": anchor_seen,
+            "prompt_activated": bool(submission.runtime_state.get("prompt_activated", False)),
             "prompt_deferred_for_ready": False,
-            "prompt_anchor_emitted_at": now if anchor_emitted else "",
+            "prompt_anchor_emitted_at": "",
         },
     )
     return updated
 
 
-def _prompt_dispatch_items(submission: ProviderSubmission, *, now: str) -> tuple:
-    if not bool(submission.runtime_state.get("prompt_sent", False)):
-        return ()
-    emitted_at = str(submission.runtime_state.get("prompt_anchor_emitted_at") or "").strip()
-    if emitted_at != now:
-        return ()
-    prior_seq = int(submission.runtime_state.get("next_seq", 1)) - 1
-    if prior_seq < 1:
-        prior_seq = 1
-    request_anchor = request_anchor_from_runtime_state(submission.runtime_state, fallback=submission.job_id)
-    session_path = str(submission.runtime_state.get("session_path") or "").strip() or None
-    return (
-        build_item(
-            submission,
-            kind=CompletionItemKind.ANCHOR_SEEN,
-            timestamp=now,
-            seq=prior_seq,
-            payload={"turn_id": request_anchor, "session_path": session_path},
-            cursor_kwargs={"session_path": session_path},
-        ),
+def _prompt_completion_is_eligible(submission: ProviderSubmission) -> bool:
+    state = submission.runtime_state
+    if bool(state.get("no_wrap", False)):
+        return True
+    if "prompt_activated" in state:
+        return bool(state.get("prompt_activated", False) and state.get("anchor_seen", False))
+    if state.get("prompt_anchor_emitted_at"):
+        return False
+    return bool(state.get("anchor_seen", False))
+
+
+_ORPHANED_HOOK_GRACE_S = 180.0
+
+
+def _orphaned_exact_hook(
+    submission: ProviderSubmission,
+    *,
+    prepared,
+    now: str,
+) -> ProviderPollResult | None:
+    """Recover a completed turn whose transcript anchor was missed.
+
+    This bypasses prompt-activation gating only after independent artifact,
+    session, time, and idle-pane proof. Missing proof always keeps the normal
+    event-log path authoritative.
+    """
+    if bool(submission.runtime_state.get("no_wrap", False)):
+        return None
+    evidence = load_strict_exact_hook_evidence(submission, now=now)
+    if evidence is None:
+        return None
+    try:
+        age_s = (parse_utc_timestamp(now) - evidence.event_at).total_seconds()
+    except Exception:
+        return None
+    if age_s < _ORPHANED_HOOK_GRACE_S:
+        return None
+    if not _pane_observably_idle(prepared):
+        return None
+    return poll_hook_event(
+        submission,
+        context=evidence.context,
+        event=evidence.event,
+        now=now,
+        extra_diagnostics={
+            "completion_fallback_source": "orphaned_exact_hook",
+            "request_anchor_observation_missed": True,
+            "orphaned_hook_grace_s": _ORPHANED_HOOK_GRACE_S,
+            "orphaned_hook_age_s": age_s,
+        },
     )
+
+
+def _pane_observably_idle(prepared) -> bool:
+    backend = getattr(prepared, "backend", None)
+    get_pane_content = getattr(backend, "get_pane_content", None)
+    if not callable(get_pane_content):
+        return False
+    try:
+        text = str(get_pane_content(getattr(prepared, "pane_id", None), lines=80) or "")
+    except Exception:
+        return False
+    if "esc to interrupt" in text.lower():
+        return False
+    return _has_idle_input_box(text)
 
 
 def _merge_poll_result_items(result: ProviderPollResult, *, prefix_items: tuple) -> ProviderPollResult:
@@ -448,10 +529,14 @@ def _process_event(
     now: str,
 ) -> ProviderPollResult | None:
     role = str(event.get("role") or "")
-    if role == "user":
-        handle_user_event(submission, poll, text=str(event.get("text") or ""), now=now)
+    if role == "prompt_lifecycle":
+        handle_prompt_lifecycle_event(submission, poll, event, now=now)
         return None
-    if role == "system":
+    if role == "user":
+        if is_top_level_user_prompt(event):
+            handle_user_event(submission, poll, text=str(event.get("text") or ""), now=now)
+        return None
+    if role == "system" and poll.anchor_seen:
         return handle_system_event(submission, poll, event, now=now, state=state)
     if role == "assistant" and poll.anchor_seen:
         handle_assistant_event(submission, poll, event, now=now)

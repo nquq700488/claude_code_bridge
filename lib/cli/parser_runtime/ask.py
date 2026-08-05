@@ -43,7 +43,6 @@ def _parse_route_options(remaining: list[str], *, error_type):
     artifact_request = False
     inline_request = False
     artifact_reply = False
-    notify_sender = False
     while remaining and remaining[0].startswith('-'):
         option = remaining.pop(0)
         if option in _REMOVED_ASK_FLAGS:
@@ -71,15 +70,12 @@ def _parse_route_options(remaining: list[str], *, error_type):
                 artifact_request = True
                 artifact_reply = True
                 continue
-            if option == '--notify-sender':
-                notify_sender = True
-                continue
         if option not in ASK_OPTIONS_WITH_VALUES:
             raise error_type(f'unknown ask option: {option}')
         if not remaining:
             raise error_type(f'{option} requires a value')
         _set_option_value(options, option, remaining.pop(0), error_type=error_type)
-    return options, compact, silence, callback, artifact_request, inline_request, artifact_reply, notify_sender
+    return options, compact, silence, callback, artifact_request, inline_request, artifact_reply
 
 
 def parse_ask(
@@ -94,7 +90,7 @@ def parse_ask(
         return action_command
 
     remaining = list(tokens)
-    options, compact, silence, callback, artifact_request, inline_request, artifact_reply, notify_sender = _parse_route_options(
+    options, compact, silence, callback, artifact_request, inline_request, artifact_reply = _parse_route_options(
         remaining,
         error_type=error_type,
     )
@@ -121,7 +117,6 @@ def parse_ask(
         artifact_request=artifact_request,
         inline_request=inline_request,
         artifact_reply=artifact_reply,
-        notify_sender=notify_sender,
     )
 
 
