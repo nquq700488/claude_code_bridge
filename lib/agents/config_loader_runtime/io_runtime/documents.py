@@ -19,7 +19,7 @@ from ..defaults import build_default_project_config
 from ..parsing import validate_project_config
 from ..paths import project_config_path, resolve_config_profile_path, user_default_config_path
 
-_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop', 'providers', 'teams'}
+_ALLOWED_HYBRID_TOP_LEVEL_KEYS = {'agents', 'maintenance', 'loop', 'providers', 'teams', 'config_ui'}
 _HYBRID_HEADER_OWNED_AGENT_KEYS = {'provider', 'workspace_mode'}
 
 
@@ -282,6 +282,8 @@ def _merge_hybrid_overlay(
         merged['providers'] = overlay_document['providers']
     if 'teams' in overlay_document:
         merged['teams'] = overlay_document['teams']
+    if 'config_ui' in overlay_document:
+        merged['config_ui'] = overlay_document['config_ui']
     return merged
 
 

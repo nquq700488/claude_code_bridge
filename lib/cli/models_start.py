@@ -47,6 +47,29 @@ class ParsedMobileCommand:
 
 
 @dataclass(frozen=True)
+class ParsedRelayCommand:
+    project: str | None
+    target: str
+    action: str
+    invite_id: str | None = None
+    host_id: str | None = None
+    db_path: str | None = None
+    secrets_path: str | None = None
+    ttl_seconds: int = 900
+    label: str | None = None
+    reason: str | None = None
+    max_sessions: int = 4
+    max_bytes_per_day: int = 209715200
+    relay_mode: str | None = None
+    relay_origin: str | None = None
+    invitation: str | None = None
+    invitation_file: str | None = None
+    credential_path: str | None = None
+    json_output: bool = False
+    kind: str = 'relay'
+
+
+@dataclass(frozen=True)
 class ParsedAgentCommand:
     project: str | None
     action: str
@@ -220,6 +243,7 @@ class ParsedQuestionCommand:
 @dataclass(frozen=True)
 class ParsedCleanupCommand:
     project: str | None
+    legacy_provider_caches: bool = False
     kind: str = 'cleanup'
 
 
@@ -244,7 +268,7 @@ class ParsedConfigValidateCommand:
 class ParsedConfigUiCommand:
     project: str | None
     no_open: bool = False
-    port: int = 0
+    port: int | None = None
     kind: str = 'config-ui'
 
 
@@ -309,6 +333,7 @@ __all__ = [
     'ParsedPsCommand',
     'ParsedTeamCommand',
     'ParsedQuestionCommand',
+    'ParsedRelayCommand',
     'ParsedReloadCommand',
     'ParsedRestartCommand',
     'ParsedStartCommand',

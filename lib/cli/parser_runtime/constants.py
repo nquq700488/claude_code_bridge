@@ -3,6 +3,7 @@ from __future__ import annotations
 SUBCOMMANDS = {
     'ask',
     'cancel',
+    'followup',
     'clear',
     'cleanup',
     'kill',
@@ -11,6 +12,7 @@ SUBCOMMANDS = {
     'watch',
     'pend',
     'queue',
+    'relay',
     'trace',
     'resubmit',
     'retry',
@@ -32,10 +34,10 @@ SUBCOMMANDS = {
     'config',
     'fault',
     'frontdesk',
-    'restart',
     'reload',
     'provider',
     'team',
+    'restart',
 }
 
 ASK_OPTIONS_WITH_VALUES = {'--task-id', '--reply-to', '--mode'}
@@ -44,11 +46,9 @@ ASK_FLAG_OPTIONS = {
     '--artifact-reply',
     '--artifact-request',
     '--chain',
-    '--callback',
     '--compact',
     '--inline-request',
     '--silence',
-    '--notify-sender',
 }
 WAIT_COMMAND_TO_MODE = {
     'wait-any': 'any',

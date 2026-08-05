@@ -18,7 +18,6 @@ class ParsedAskCommand:
     artifact_request: bool = False
     inline_request: bool = False
     artifact_reply: bool = False
-    notify_sender: bool = False
     allowed_chain_targets: tuple[str, ...] = ()
     bind_chain_workspace_tree: bool = False
     kind: str = 'ask'
@@ -32,13 +31,20 @@ class ParsedCancelCommand:
 
 
 @dataclass(frozen=True)
+class ParsedFollowupCommand:
+    project: str | None
+    job_id: str
+    message: str
+    kind: str = 'followup'
+
+
+@dataclass(frozen=True)
 class ParsedPendCommand:
     project: str | None
     target: str
     count: int | None = None
     observer_mode: str = 'snapshot'
     detail: bool = False
-    timeout_s: float | None = None
     kind: str = 'pend'
 
 
@@ -108,6 +114,7 @@ __all__ = [
     'ParsedAckCommand',
     'ParsedAskCommand',
     'ParsedCancelCommand',
+    'ParsedFollowupCommand',
     'ParsedInboxCommand',
     'ParsedPendCommand',
     'ParsedQueueCommand',

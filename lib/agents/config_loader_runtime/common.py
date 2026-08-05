@@ -28,6 +28,7 @@ ALLOWED_TOP_LEVEL_KEYS = {
     'loop',
     'providers',
     'teams',
+    'config_ui',
 }
 ALLOWED_PROVIDER_PROFILE_KEYS = {
     'mode',

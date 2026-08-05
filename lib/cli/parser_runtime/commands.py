@@ -12,6 +12,7 @@ from cli.models import (
     ParsedConfigValidateCommand,
     ParsedDoctorCommand,
     ParsedFrontdeskCommand,
+    ParsedFollowupCommand,
     ParsedInboxCommand,
     ParsedKillCommand,
     ParsedLayoutCommand,
@@ -30,9 +31,10 @@ from cli.models import (
     ParsedTeamCommand,
     ParsedQuestionCommand,
     ParsedQueueCommand,
+    ParsedRelayCommand,
     ParsedReloadCommand,
-    ParsedResubmitCommand,
     ParsedRestartCommand,
+    ParsedResubmitCommand,
     ParsedRetryCommand,
     ParsedTraceCommand,
     ParsedWaitCommand,
@@ -49,6 +51,20 @@ def parse_cancel(tokens: list[str], *, project: str | None, error_type) -> Parse
     return ParsedCancelCommand(project=project, job_id=tokens[0])
 
 
+def parse_followup(tokens: list[str], *, project: str | None, error_type) -> ParsedFollowupCommand:
+    parser = argparse.ArgumentParser(prog='ccb followup', add_help=False)
+    parser.add_argument('job_id')
+    parser.add_argument('--message', required=True)
+    namespace = parse_args(parser, tokens, error_message='invalid followup command', error_type=error_type)
+    job_id = str(namespace.job_id or '').strip()
+    message = str(namespace.message or '').strip()
+    if not job_id:
+        raise error_type('followup requires <job_id>')
+    if not message:
+        raise error_type('followup requires a non-empty --message')
+    return ParsedFollowupCommand(project=project, job_id=job_id, message=message)
+
+
 def parse_clear(tokens: list[str], *, project: str | None, error_type) -> ParsedClearCommand:
     parser = argparse.ArgumentParser(prog='ccb clear', add_help=False)
     parser.add_argument('agent_names', nargs='*')
@@ -62,15 +78,14 @@ def parse_clear(tokens: list[str], *, project: str | None, error_type) -> Parsed
 
 
 def parse_restart(tokens: list[str], *, project: str | None, error_type) -> ParsedRestartCommand:
-    parser = argparse.ArgumentParser(prog='ccb restart', add_help=False)
-    parser.add_argument('agent_names', nargs='*')
-    namespace = parse_args(parser, tokens, error_message='invalid restart command', error_type=error_type)
-    agent_names = tuple(str(item).strip() for item in namespace.agent_names if str(item).strip())
-    if 'all' in {item.lower() for item in agent_names} and len(agent_names) > 1:
-        raise error_type('restart target "all" cannot be combined with agent names')
-    if tuple(item.lower() for item in agent_names) == ('all',):
-        agent_names = ()
-    return ParsedRestartCommand(project=project, agent_names=agent_names)
+    if len(tokens) != 1:
+        raise error_type('restart requires exactly one <agent_name>')
+    agent_name = str(tokens[0]).strip()
+    if not agent_name:
+        raise error_type('restart requires exactly one <agent_name>')
+    if agent_name.lower() == 'all':
+        raise error_type('restart all is not supported; restart exactly one configured agent')
+    return ParsedRestartCommand(project=project, agent_name=agent_name)
 
 
 def parse_maintenance(tokens: list[str], *, project: str | None, error_type) -> ParsedMaintenanceCommand:
@@ -100,7 +115,11 @@ def parse_mobile(tokens: list[str], *, project: str | None, error_type) -> Parse
     if action != 'serve':
         raise error_type('mobile only supports: serve, devices, revoke')
     parser = argparse.ArgumentParser(prog='ccb mobile serve', add_help=False)
-    parser.add_argument('--listen', default='127.0.0.1:8787')
+    parser.add_argument(
+        '--listen',
+        default='127.0.0.1:8787',
+        help='HOST:PORT; route-provider lan also accepts a specific private interface IP',
+    )
     parser.add_argument('--public-url', default=None)
     parser.add_argument(
         '--route-provider',
@@ -115,6 +134,149 @@ def parse_mobile(tokens: list[str], *, project: str | None, error_type) -> Parse
         listen=str(namespace.listen),
         public_url=public_url or None,
         route_provider=str(namespace.route_provider),
+    )
+
+
+def parse_relay(tokens: list[str], *, project: str | None, error_type) -> ParsedRelayCommand:
+    if len(tokens) < 2:
+        raise error_type('relay requires invite issue/status/list/revoke or host status/list/revoke')
+    target = str(tokens[0] or '').strip().lower()
+    action = str(tokens[1] or '').strip().lower()
+    rest = tokens[2:]
+    if target == 'invite':
+        if action == 'issue':
+            parser = argparse.ArgumentParser(prog='ccb relay invite issue', add_help=False)
+            _add_relay_common_options(parser)
+            parser.add_argument('--ttl-seconds', type=int, default=900)
+            parser.add_argument('--label', default=None)
+            parser.add_argument('--max-sessions', type=int, default=4)
+            parser.add_argument('--max-bytes-per-day', type=int, default=209715200)
+            namespace = parse_args(parser, rest, error_message='invalid relay invite issue command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                ttl_seconds=int(namespace.ttl_seconds),
+                label=_optional_parser_text(namespace.label),
+                max_sessions=int(namespace.max_sessions),
+                max_bytes_per_day=int(namespace.max_bytes_per_day),
+                json_output=bool(namespace.json_output),
+            )
+        if action == 'status':
+            parser = argparse.ArgumentParser(prog='ccb relay invite status', add_help=False)
+            _add_relay_common_options(parser)
+            parser.add_argument('invite_id')
+            namespace = parse_args(parser, rest, error_message='invalid relay invite status command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                invite_id=str(namespace.invite_id),
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                json_output=bool(namespace.json_output),
+            )
+        if action == 'list':
+            parser = argparse.ArgumentParser(prog='ccb relay invite list', add_help=False)
+            _add_relay_common_options(parser)
+            namespace = parse_args(parser, rest, error_message='invalid relay invite list command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                json_output=bool(namespace.json_output),
+            )
+        if action == 'revoke':
+            parser = argparse.ArgumentParser(prog='ccb relay invite revoke', add_help=False)
+            _add_relay_common_options(parser)
+            parser.add_argument('invite_id')
+            parser.add_argument('--reason', default=None)
+            namespace = parse_args(parser, rest, error_message='invalid relay invite revoke command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                invite_id=str(namespace.invite_id),
+                reason=_optional_parser_text(namespace.reason),
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                json_output=bool(namespace.json_output),
+            )
+    if target == 'host':
+        if action == 'activate':
+            parser = argparse.ArgumentParser(prog='ccb relay host activate', add_help=False)
+            parser.add_argument('--mode', dest='relay_mode', choices=('official', 'self-hosted'), default=None)
+            parser.add_argument('--relay-origin', default=None)
+            invitation = parser.add_mutually_exclusive_group()
+            invitation.add_argument('--invitation', default=None)
+            invitation.add_argument('--invitation-file', default=None)
+            parser.add_argument('--credentials', dest='credential_path', default=None)
+            parser.add_argument('--json', dest='json_output', action='store_true')
+            namespace = parse_args(
+                parser,
+                rest,
+                error_message='invalid relay host activate command',
+                error_type=error_type,
+            )
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                relay_mode=_optional_parser_text(namespace.relay_mode),
+                relay_origin=_optional_parser_text(namespace.relay_origin),
+                invitation=_optional_parser_text(namespace.invitation),
+                invitation_file=_optional_parser_text(namespace.invitation_file),
+                credential_path=_optional_parser_text(namespace.credential_path),
+                json_output=bool(namespace.json_output),
+            )
+        if action == 'status':
+            parser = argparse.ArgumentParser(prog='ccb relay host status', add_help=False)
+            _add_relay_common_options(parser)
+            parser.add_argument('host_id')
+            namespace = parse_args(parser, rest, error_message='invalid relay host status command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                host_id=str(namespace.host_id),
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                json_output=bool(namespace.json_output),
+            )
+        if action == 'list':
+            parser = argparse.ArgumentParser(prog='ccb relay host list', add_help=False)
+            _add_relay_common_options(parser)
+            namespace = parse_args(parser, rest, error_message='invalid relay host list command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                json_output=bool(namespace.json_output),
+            )
+        if action == 'revoke':
+            parser = argparse.ArgumentParser(prog='ccb relay host revoke', add_help=False)
+            _add_relay_common_options(parser)
+            parser.add_argument('host_id')
+            parser.add_argument('--reason', default=None)
+            namespace = parse_args(parser, rest, error_message='invalid relay host revoke command', error_type=error_type)
+            return ParsedRelayCommand(
+                project=project,
+                target=target,
+                action=action,
+                host_id=str(namespace.host_id),
+                reason=_optional_parser_text(namespace.reason),
+                db_path=_optional_parser_text(namespace.db_path),
+                secrets_path=_optional_parser_text(namespace.secrets_path),
+                json_output=bool(namespace.json_output),
+            )
+    raise error_type(
+        'relay supports invite issue/status/list/revoke and host activate/status/list/revoke'
     )
 
 
@@ -876,8 +1038,13 @@ def parse_kill(tokens: list[str], *, project: str | None, error_type) -> ParsedK
 
 
 def parse_cleanup(tokens: list[str], *, project: str | None, error_type) -> ParsedCleanupCommand:
-    require_no_extra(tokens, command='cleanup', error_type=error_type)
-    return ParsedCleanupCommand(project=project)
+    parser = argparse.ArgumentParser(prog='ccb cleanup', add_help=False)
+    parser.add_argument('--legacy-provider-caches', action='store_true')
+    namespace = parse_args(parser, tokens, error_message='invalid cleanup command', error_type=error_type)
+    return ParsedCleanupCommand(
+        project=project,
+        legacy_provider_caches=bool(namespace.legacy_provider_caches),
+    )
 
 
 def parse_ps(tokens: list[str], *, project: str | None, error_type) -> ParsedPsCommand:
@@ -903,7 +1070,6 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
     parser.add_argument('--inbox', action='store_true')
     parser.add_argument('--queue', action='store_true')
     parser.add_argument('--detail', action='store_true')
-    parser.add_argument('--timeout', type=float, default=None)
     parser.add_argument('target')
     parser.add_argument('count', nargs='?')
     namespace = parse_args(parser, tokens, error_message='invalid pend command', error_type=error_type)
@@ -929,18 +1095,12 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
             raise error_type('pend count must be positive')
     if count is not None and observer_mode != 'snapshot':
         raise error_type('pend count is only supported for snapshot mode')
-    timeout_s = float(namespace.timeout) if namespace.timeout is not None else None
-    if timeout_s is not None and timeout_s <= 0:
-        raise error_type('pend --timeout must be positive')
-    if timeout_s is not None and observer_mode != 'watch':
-        raise error_type('pend --timeout is only supported for --watch')
     return ParsedPendCommand(
         project=project,
         target=str(namespace.target),
         count=count,
         observer_mode=observer_mode,
         detail=bool(namespace.detail),
-        timeout_s=timeout_s,
     )
 
 
@@ -1091,12 +1251,12 @@ def parse_config(tokens: list[str], *, project: str | None, error_type):
             error_message='invalid config ui command',
             error_type=error_type,
         )
-        if not 0 <= int(namespace.port) <= 65535:
+        if namespace.port is not None and not 0 <= int(namespace.port) <= 65535:
             raise error_type('config ui --port must be between 0 and 65535')
         return ParsedConfigUiCommand(
             project=project,
             no_open=bool(namespace.no_open),
-            port=int(namespace.port),
+            port=int(namespace.port) if namespace.port is not None else None,
         )
     raise error_type('config supports: validate, effective, migrate, ui')
 
@@ -1233,10 +1393,22 @@ def _parse_csv_values(text: str) -> tuple[str, ...]:
     return values
 
 
+def _add_relay_common_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument('--db', dest='db_path', default=None)
+    parser.add_argument('--secrets', dest='secrets_path', default=None)
+    parser.add_argument('--json', dest='json_output', action='store_true')
+
+
+def _optional_parser_text(value: object) -> str | None:
+    text = str(value).strip() if value is not None else ''
+    return text or None
+
+
 __all__ = [
     'parse_ack',
     'parse_agent',
     'parse_cancel',
+    'parse_followup',
     'parse_clear',
     'parse_cleanup',
     'parse_config',
@@ -1255,9 +1427,10 @@ __all__ = [
     'parse_queue',
     'parse_question',
     'parse_repair',
+    'parse_relay',
     'parse_reload',
-    'parse_resubmit',
     'parse_restart',
+    'parse_resubmit',
     'parse_retry',
     'parse_team',
     'parse_trace',

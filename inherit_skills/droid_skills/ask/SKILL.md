@@ -1,8 +1,8 @@
 ---
 name: ask
-description: Send a request to a CCB agent and wait for the reply synchronously.
+description: Send a request to a CCB agent with `ask`.
 metadata:
-  short-description: Ask agent (sync)
+  short-description: Ask agent
 ---
 
 Use this when the user asks you to delegate with CCB, or when project memory
@@ -13,7 +13,13 @@ says to use CCB `ask` for collaboration.
 Before every ask, decide:
 
 1. Need delegation? If no, answer directly.
-2. Result intent:
+2. Dependency gate:
+   - Default: do not use `--chain`.
+   - Use `--chain` only when the current active CCB task cannot finish until
+     this exact child result arrives. Then stop for continuation.
+   - Communication tests, batch sends, notifications, and independent work do
+     not become chain dependencies merely because replies are requested.
+3. Result intent:
    - `--silence`: publish/execute task; success result not needed. Failures,
      blockers, risks, or required next actions still surface.
    - `--compact`: result wanted, but only distilled
@@ -21,10 +27,7 @@ Before every ask, decide:
    - `+ --artifact-reply`: consultation/analysis/report where full text should
      be preserved.
    - plain `ask`: short question or short handoff where inline text is enough.
-   - `--callback`: active CCB parent job + child result required to finish.
-     Combine with `--compact` or `--artifact-reply` as needed. Submit, then
-     stop for continuation.
-3. Request fidelity:
+4. Request fidelity:
    - `+ --artifact-request`: exact transient input
      (logs/output/diffs/copied contents/config/JSON/YAML/table/structured text).
      Prefer repo paths when the target can read files directly.
@@ -32,80 +35,59 @@ Before every ask, decide:
 
 ## Guardrails
 
-- Do not probe `--callback`; if unsure there is an active parent job, use plain
+- Do not probe `--chain`; if unsure there is an active parent job, use plain
   `ask`.
-- If CCB says `ask --callback requires an active parent job`, retry once with
+- If CCB says `ask --chain requires an active parent job`, retry once with
   plain `ask` for user-requested delegation.
-- `--callback` and `--silence` usually conflict; avoid mixing unless explicit.
+- Never add `--chain` merely to make a rejected plain ask succeed. If the work
+  is independent and no success result is needed, use `--silence`; otherwise
+  report the routing limitation instead of inventing a dependency.
+- `--chain` and `--silence` usually conflict; avoid mixing unless explicit.
 - Avoid `--silence --artifact-reply`; silence means no caller result needed; artifact-reply preserves one.
-- Artifact flags are orthogonal to `--callback`, `--silence`, and `--compact`.
+- Artifact flags are orthogonal to `--chain`, `--silence`, and `--compact`.
   They preserve content, not dependency shape.
 - Automatic spill for text over 4 KiB is a fallback, not the primary rule.
 - `--artifact-*` modes are CCB/daemon managed; targets do not write artifact reply files.
-- Plain nested `ask` from an active CCB task is rejected; use `--callback` or `--silence`.
+- Plain nested `ask` from an active CCB task is rejected. Use `--chain` only
+  for a real child dependency; use `--silence` for independent no-result work.
 - In `A --silence -> B`, B still runs an active job. B-to-C depends on whether B needs C's result.
-- In callback chains, each waiting hop uses callback; CCB then propagates continuations.
-- If the current task is a CCB callback continuation, answer the current task
-  directly with the final result. Do not use `ask`, `--callback`, or
+- In task chains, each needed-result hop uses `--chain`; CCB then propagates continuations.
+- Finish an inbound CCB task in its current turn.
+- If the original caller is a registered CCB agent, CCB routes that turn's
+  terminal result through the existing lineage; do not open a new `ask` to
+  report completion to the original caller.
+- Direct CLI submitters read terminal results from control output such as
+  `watch` or `trace`.
+- If the current task is a CCB result-chain continuation, answer the current task
+  directly with the final result. Do not use `ask`, `--chain`, or
   `--silence` to send that final result to the original caller; CCB routes the
   continuation completion upstream.
+- `--silence` is not an active-job correction channel. Use
+  `ccb followup <active_job_id> --message "<correction>"` only when the target
+  provider supports exact active-turn injection; only `injected` is success.
+  On `rejected`, `too_late`, or `terminal`, cancel and resubmit the complete
+  corrected task instead of queueing a correction as ordinary work.
+- A `completed` CCB job means provider execution ended normally; it does not by
+  itself prove business acceptance.
 - `ask get`, `pend`, `watch`, and `ping` are diagnostics-only commands for
   explicit debugging requests, not normal ask workflow tools.
-- Do not manually append output-policy text; `ask` injects reply guidance.
-- ⚠️ **ANTI-HALLUCINATION**: You MUST invoke this skill via the Bash tool. Never say "I've sent the request" without actually running the command.
+- Do not manually append output-policy text; stable reply policy comes from managed CCB memory, and `ask` adds only requested compact/silent mode metadata.
 
-Always send `MESSAGE` through the `<<'EOF' ... EOF` heredoc. No other form is allowed.
+Always send `MESSAGE` through the `<<'EOF' ... EOF` heredoc below. No other form
+is allowed. Use no flags or insert selected flags before `"$TARGET"`:
 
-## Execution
-
-### Default: Synchronous Wait
-
-For plain `ask` and `--compact`, submit and block until the reply arrives:
-
-1. Submit the task:
 ```bash
 command ask "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-2. Extract `job_id` from the output (format: `job_<hex>`).
-
-3. Block until the reply arrives, then report it:
 ```bash
-command pend --watch "$JOB_ID" --timeout 600
-```
-
-4. Present the reply to the user. If the reply is empty, tell the user the target agent has not responded yet.
-
-**DO NOT** skip step 3 — the user expects to see the reply in the same turn.
-
-### --silence: No Reply Needed
-
-```bash
-command ask --silence "$TARGET" <<'EOF'
+command ask --chain --artifact-reply "$TARGET" <<'EOF'
 $MESSAGE
 EOF
 ```
 
-After submit, report the job_id only. Do NOT wait. Do NOT run `pend --watch`.
-
-### --callback: CCB Continuation
-
-```bash
-command ask --callback "$TARGET" <<'EOF'
-$MESSAGE
-EOF
-```
-
-After callback submit, **stop immediately**. CCB will deliver the child result as a continuation task. Do NOT wait, do NOT run `pend --watch`.
-
-### Artifact flags
-
-Combine with any mode above as needed:
-
-```bash
-command ask --artifact-io "$TARGET" <<'EOF'
-$MESSAGE
-EOF
-```
+After the command returns, end the turn. Do not wait for a reply,
+do not run `ask get` / `pend` / `ping` / `watch`, do not poll.
+For `--chain`, report only that delegation was submitted.

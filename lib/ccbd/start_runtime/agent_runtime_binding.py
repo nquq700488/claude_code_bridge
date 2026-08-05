@@ -70,7 +70,6 @@ def resolve_runtime_binding_state(
             relabel_runtime_pane(
                 binding=binding,
                 agent_name=agent_name,
-                provider=spec.provider,
                 project_id=project_id,
                 style_index=style_index,
                 tmux_socket_path=tmux_socket_path,
@@ -162,7 +161,6 @@ def relabel_runtime_pane(
     *,
     binding,
     agent_name: str,
-    provider: str = "",
     project_id: str,
     style_index: int,
     tmux_socket_path: str | None,
@@ -175,7 +173,6 @@ def relabel_runtime_pane(
     relabeled_pane = relabel_project_namespace_pane_fn(
         binding=binding,
         agent_name=agent_name,
-        provider=provider,
         project_id=project_id,
         style_index=style_index,
         tmux_socket_path=tmux_socket_path,
