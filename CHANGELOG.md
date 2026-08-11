@@ -1,5 +1,86 @@
 # Changelog
 
+## v8.5.7 (2026-08-08)
+
+- Keep the required `ccb-clear` control Skill and add `ccb-diagnose` for every
+  supported managed Agent. `$ccb_diagnose <agentname>` combines authoritative
+  runtime and job state with bounded deep Pane inspection, applies only guarded
+  recovery, verifies the result, and requires explicit approval before issue
+  submission.
+- Self-heal expired mailbox deliveries without replaying business work and
+  forward Provider no-terminal timeout settings to `ccbd` (PR #288). Remove
+  stale pre-activation Claude assistant bookkeeping so old busy turns cannot
+  contaminate newly queued requests.
+- Show communication short ids, Agent queue depth, and active job suffixes in
+  the sidebar; preserve Kiro settings under isolated `KIRO_HOME` without
+  copying sessions.
+- Resolve reconnect readiness probes against the active Codex Provider route,
+  extending guarded network/capacity recovery to custom Provider endpoints.
+- No configuration or conversation migration is required.
+
+## v8.5.6 (2026-08-06)
+
+### Continuous Provider Inheritance
+
+- **Explicit Authority Wins Per Dimension**: CCB uses configured API, token,
+  URL, route, account, and Provider profile values first. Only dimensions not
+  explicitly owned are read from the current external Provider environment or
+  login state.
+- **Restart Refreshes Without Reverse Effects**: a stopped Provider generation
+  is rebuilt from the current external snapshot and private projection. CCB
+  never writes the inherited result back to the user's shell, Provider home,
+  IDE, keyring, or remote login.
+- **Conversation History Survives Authority Changes**: same-authority launches
+  use native resume. Codex, Claude, and Gemini use a qualified fork/import path
+  when available; otherwise CCB records a linked continuation while preserving
+  the stable conversation, workspace, queue, session record, and transcript
+  history. The withdrawn v8.5.5 archive shape is recovered only with matching
+  ownership evidence.
+
+### Codex Reconnect
+
+- **Bundled Automatic Activation**: CCB installs and arms `codex-reconnect`
+  automatically for managed Codex panes after a concrete thread binding.
+- **Bounded Capacity Recovery**: terminal network and selected-model capacity
+  failures are classified only for the exact thread and pane, then receive at
+  most one literal `continue` after the existing safety and readiness gates.
+
+### Withdrawal And Compatibility
+
+- **v8.5.5 Withdrawn**: the GitHub release was withdrawn on 2026-08-05 after a
+  legacy-session migration regression made existing managed conversations
+  unavailable to native `resume`. v8.5.6 is the replacement; no manual clear or
+  history deletion is required.
+
+## v8.5.5 (2026-08-05)
+
+> Withdrawn from GitHub on 2026-08-05 after a legacy-session migration
+> regression made existing managed conversations unavailable to native resume.
+> Use v8.5.4 until the replacement release is published.
+
+### Provider State Refresh
+
+- **Restart Uses Current Provider Authority**: `ccb restart <agent>` now rebuilds
+  the Provider launch from the current profile, login, API key, endpoint, proxy,
+  and model state instead of replaying the command persisted when the pane was
+  first created. Switching accounts or API routes no longer requires
+  `ccb clear`.
+- **Cross-Authority Resume Is Blocked Safely**: Codex archives an incompatible
+  managed session binding before starting fresh; Claude and Gemini suppress
+  native resume when the saved session belongs to another Provider authority.
+  Provider login state and history files remain intact.
+- **Credentials Stay Private**: managed session metadata stores only an
+  Agent-private HMAC fingerprint of Provider authority inputs, never raw API
+  keys, tokens, endpoints, or proxy credentials.
+
+### Relay And Community
+
+- **New Relay Invitations Default To 1 GiB/Day**: newly issued Relay Host
+  invitations now allow 1 GiB per 24-hour quota window. Explicit
+  `--max-bytes-per-day` values and existing Host credentials are unchanged.
+- **Community QR Refreshed**: the WeChat group image and README cache key now
+  point to the current invitation image.
+
 ## v8.5.4 (2026-08-03)
 
 ### Ask Routing
