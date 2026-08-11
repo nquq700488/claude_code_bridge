@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.4-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -220,9 +220,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.4 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.5.7 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.4/ccb-mobile-v8.5.4.apk)
+- [Download CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -280,6 +280,8 @@ CCB supports [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec), a
 
 Use the **⚙ Settings** control panel for normal project configuration. If you want agent-assisted configuration and runtime diagnosis, `ccb_self` remains available as an optional Role Pack and can be added with `ccb roles add agentroles.ccb_self:codex`.
 
+Supported managed Agents receive the built-in `ask`, `ccb-clear`, and `ccb-diagnose` control skills even when optional skill inheritance is disabled. Use `$ccb_diagnose <agentname>` to inspect one Agent's authoritative runtime/job state and live pane evidence, apply bounded recovery when safe, and review a redacted issue draft before explicitly authorizing GitHub submission. Managed Codex also keeps `reconnect`.
+
 `.ccb/ccb_memory.md` is the project-wide shared memory document. Use it for team collaboration rules, project constraints, long-lived context, and agent handoff conventions. Stable cross-agent information belongs there instead of being copied into several provider-private memory files.
 
 <a id="contact"></a>
@@ -309,6 +311,38 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.5.7</b> - Built-in agent diagnosis and stuck-delivery recovery</summary>
+
+- Keep `ccb-clear` in every supported managed Agent and add the required `ccb-diagnose` Skill. Run `$ccb_diagnose &lt;agentname&gt;` to combine daemon, lineage, queue, inbox, trace, provider-log, and live Pane evidence for one Agent.
+- Classify working, waiting-input, stale-prompt, Provider-error, dead/blank, and misframed Pane states; apply only evidence-backed bounded control-plane recovery and verify the Agent afterward.
+- Generate a redacted incident draft after diagnosis, but require fresh user authorization before creating any GitHub issue.
+- Recover abandoned mailbox deliveries without replaying business work, expose queue depth and active job identifiers in the sidebar, preserve Kiro login/settings through its isolated `KIRO_HOME`, forward Provider no-terminal timeout settings, and keep old Claude busy-turn records fenced from newly queued requests.
+- Probe reconnect readiness against the active Codex Provider route so custom Provider capacity and connectivity failures can continue through the existing guarded recovery path.
+
+</details>
+
+<details>
+<summary><b>v8.5.6</b> - Continuous Provider inheritance without clearing CCB conversations</summary>
+
+- Resolve each configured API, token, URL, route, and account dimension from CCB-local authority first, then read only the missing dimensions from the current external Provider state.
+- Refresh inherited state on a stopped Provider generation without writing back to the user's shell, Provider home, IDE, keyring, or remote login.
+- Keep one stable CCB conversation and its workspace, queue, and history across authority generations. Same-authority sessions use native resume; supported Codex/Claude/Gemini import or fork when safe, otherwise CCB records a linked continuation instead of hiding history.
+- Recover usable sessions affected by the withdrawn v8.5.5 migration shape without clearing them. The withdrawn v8.5.5 package is not reused.
+- Install and automatically arm bundled `codex-reconnect` for managed Codex panes; terminal network and selected-model capacity failures receive one bounded `continue` recovery when the exact pane and thread are proven safe.
+- Raise the default quota for newly issued Relay Host invitations from 200 MiB to 1 GiB per 24-hour window; explicit overrides and existing credentials remain unchanged.
+- Refresh the WeChat community QR image and cache key. No configuration or data migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.5.5</b> - Withdrawn compatibility release</summary>
+
+- Withdrawn from GitHub on 2026-08-05 after a legacy-session migration regression made existing managed conversations unavailable to native `resume`.
+- Use v8.5.6 or v8.5.4; do not install v8.5.5 for managed sessions.
+
+</details>
+
+<details>
 <summary><b>v8.5.4</b> - Safer ask routing, bounded history cleanup, and actionable Mobile LAN recovery</summary>
 
 - Treat `--chain` as a real dependency only: independent asks, communication tests, batches, notifications, and reply-delivery acknowledgements no longer create false callback chains.

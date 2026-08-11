@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.4-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -211,9 +211,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.4 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.5.7 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.4 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.4/ccb-mobile-v8.5.4.apk)
+- [下载 CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -271,6 +271,8 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 
 普通项目配置推荐直接使用左上角的 **⚙ 设置** 控制面。如果希望由 Agent 辅助设计配置或诊断运行状态，`ccb_self` 仍作为可选 Role Pack 提供，可以用 `ccb roles add agentroles.ccb_self:codex` 添加。
 
+即使关闭可选 skill 继承，受支持的托管 Agent 也会获得内置 `ask`、`ccb-clear` 与 `ccb-diagnose` 控制 skill。使用 `$ccb_diagnose <agentname>` 可结合权威 runtime/job 状态和实时 Pane 证据诊断一个 Agent，在安全时执行受限恢复，并在明确授权提交 GitHub issue 前先审阅脱敏草稿。托管 Codex 还会保留 `reconnect`。
+
 `.ccb/ccb_memory.md` 是项目级共享记忆文档，适合记录团队协作规则、项目约束、长期上下文和 agent 交接约定。把跨 agent 的稳定信息放在这里，比把同一段说明复制到多个 provider 私有记忆里更可靠。
 
 <a id="contact"></a>
@@ -300,6 +302,38 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.5.7</b> - 内置 Agent 诊断与卡住投递恢复</summary>
+
+- 所有受支持的托管 Agent 继续内置 `ccb-clear`，并新增必装的 `ccb-diagnose` Skill。运行 `$ccb_diagnose &lt;agentname&gt;` 可联合检查单个 Agent 的 daemon、lineage、队列、inbox、trace、Provider 日志和实时 Pane 证据。
+- 可识别正常工作、等待输入、提示符停滞、Provider 错误、Pane 死亡/空白和布局不可观察等状态；只执行证据支持的有界控制面恢复，并在操作后重新验证 Agent。
+- 诊断后可生成脱敏 incident 草稿，但创建 GitHub issue 前必须再次取得用户明确授权。
+- 无需重放业务任务即可清理已遗弃的 mailbox 投递；sidebar 显示队列深度和当前 job 短码；Kiro 通过隔离的 `KIRO_HOME` 继承登录设置；Provider 无终态超时配置可传入 daemon，旧 Claude busy turn 记录不会污染新排队请求。
+- reconnect 会探测当前 Codex Provider 的实际路由，让自定义 Provider 的容量或连接故障继续使用既有的受控恢复路径。
+
+</details>
+
+<details>
+<summary><b>v8.5.6</b> - 连续继承 Provider 状态且不清除 CCB 对话</summary>
+
+- 每个 API、token、URL、route 和账号维度都优先使用 CCB 配置；未显式配置的维度才从当前外部 Provider 状态单向读取。
+- 停止后的 Provider 新 generation 会重新读取继承状态；不会反向写入用户 shell、Provider home、IDE、keyring 或远程登录。
+- 权威 generation 变化时保留稳定的 CCB conversation、workspace、队列和历史。同一权威使用原生 resume；Codex/Claude/Gemini 在能力允许时执行 fork/import，否则记录 linked continuation，不隐藏历史。
+- 可恢复受撤回版 v8.5.5 迁移形状影响的旧会话，不会执行 clear；撤回的 v8.5.5 包不再复用。
+- CCB 托管 Codex 自动安装并 arm 内置 `codex-reconnect`；在精确 pane 和 thread 可证明安全时，网络中断或选定模型容量错误最多自动提交一次 `continue`。
+- 新签发的 Relay Host 邀请默认配额从每 24 小时 200 MiB 提升到 1 GiB；显式覆盖值和现有凭据保持不变。
+- 刷新微信社区群二维码和缓存 key；无需迁移配置或数据。
+
+</details>
+
+<details>
+<summary><b>v8.5.5</b> - 已撤回的兼容性版本</summary>
+
+- 该版本已于 2026-08-05 从 GitHub 撤回；旧会话迁移回归曾导致托管对话无法被原生 `resume` 找到。
+- 托管会话请使用 v8.5.6 或 v8.5.4，不要安装 v8.5.5。
+
+</details>
+
+<details>
 <summary><b>v8.5.4</b> - 更安全的 ask 路由、有界历史清理与可操作的 Mobile 局域网恢复</summary>
 
 - 仅在真实依赖关系中使用 `--chain`：独立 ask、通讯测试、批量任务、通知和 reply-delivery 确认不再错误创建 callback chain。
