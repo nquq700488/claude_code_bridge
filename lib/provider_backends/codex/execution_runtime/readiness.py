@@ -10,6 +10,16 @@ _UNUSABLE_LINE_PATTERNS = (
     re.compile(r'^(?:error:\s*)?(?:pane is dead|pane dead)\b[.!:;\-\s]*$', re.IGNORECASE),
     re.compile(r'^(?:codex\s+)?shutting down(?:\.\.\.)?[.!:;\-\s]*$', re.IGNORECASE),
 )
+
+# Patterns that indicate Codex's internal content-safety guard has
+# interrupted the conversation. This is NOT controlled by --ask-for-approval
+# (which only governs tool-execution prompts). The guard fires inside the
+# model's reasoning loop and drops Codex into an interactive prompt that
+# CCB / tmux automation cannot answer.
+_CODEX_INTERRUPTED_PATTERNS = (
+    re.compile(r'Conversation interrupted', re.IGNORECASE),
+    re.compile(r'tell the model what to do differently', re.IGNORECASE),
+)
 _IDLE_PROMPT_RE = re.compile(r'^\s*›\s+\S.*$', re.MULTILINE)
 _ACTIVE_STATUS_RE = re.compile(r'^\s*•\s+(?:Working|Thinking|Running)\b', re.MULTILINE | re.IGNORECASE)
 
@@ -99,4 +109,22 @@ def _latest_codex_region(text: str) -> str:
     return normalized[index:]
 
 
-__all__ = ['looks_ready', 'looks_unusable', 'wait_for_runtime_ready']
+def looks_codex_interrupted(text: str) -> bool:
+    """Check whether the Codex pane shows a content-safety interruption.
+
+    When Codex's internal guard fires it renders a banner like::
+
+        ■ Conversation interrupted - tell the model what to do differently.
+          Something went wrong? Hit ``/feedback`` to report the issue.
+
+    The session JSONL does NOT record this event — it only manifests as
+    pane text, so CCB must scan the tmux buffer to detect it.
+    """
+    normalized = str(text or '')
+    if not normalized.strip():
+        return False
+    matches = sum(1 for p in _CODEX_INTERRUPTED_PATTERNS if p.search(normalized))
+    return matches >= 2
+
+
+__all__ = ['looks_codex_interrupted', 'looks_ready', 'looks_unusable', 'wait_for_runtime_ready']

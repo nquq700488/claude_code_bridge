@@ -65,6 +65,7 @@ rsync -a --delete \
     --exclude='__pycache__/' \
     --exclude='.DS_Store' \
     --exclude='sync-to-local.sh' \
+    --exclude='.venv/' \
     "${SCRIPT_DIR}/" "${TARGET_DIR}/"
 
 # 补同步 config UI 前端原型(excluded by --exclude='docs/')
