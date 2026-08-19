@@ -267,6 +267,7 @@ def materialize_claude_home_config(
     workspace_path: Path | None = None,
     auto_permission: bool = False,
     command_policy=None,
+    extra_env: dict[str, str] | None = None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
 ) -> ClaudeHomeLayout:
@@ -281,6 +282,7 @@ def materialize_claude_home_config(
         workspace_path=workspace_path,
         auto_permission=auto_permission,
         command_policy=command_policy,
+        extra_env=extra_env,
     )
     record_memory_projection_event(
         memory_result,
@@ -349,6 +351,7 @@ def _prepare_managed_home(
     workspace_path: Path | None,
     auto_permission: bool,
     command_policy,
+    extra_env: dict[str, str] | None = None,
 ) -> dict[str, object]:
     ensure_private_inheritance_directory(target_layout.home_root, source_home)
     ensure_private_descendant_directory(target_layout.home_root, Path('.claude'))
@@ -362,6 +365,7 @@ def _prepare_managed_home(
         profile=profile,
         auto_permission=auto_permission,
         command_policy=command_policy,
+        extra_env=extra_env,
     )
     _materialize_macos_keychain_preferences(source_home, target_layout, profile=profile)
     _materialize_auth(source_home, target_layout, profile=profile)
@@ -531,8 +535,13 @@ def _materialize_settings(
     profile,
     auto_permission: bool = False,
     command_policy=None,
+    extra_env: dict[str, str] | None = None,
 ) -> None:
-    payload = _projected_settings_payload(source_home / '.claude' / 'settings.json', profile=profile)
+    payload = _projected_settings_payload(
+        source_home / '.claude' / 'settings.json',
+        profile=profile,
+        extra_env=extra_env,
+    )
     existing = _read_json_object(target_layout.settings_path)
     previous_projection = _read_claude_auth_projection(target_layout)
     merged = _merge_settings_payload(
@@ -548,6 +557,7 @@ def _materialize_settings(
     )
     if merged is None:
         return
+    _rewrite_tilde_paths(merged, source_home=source_home)
     atomic_write_text(
         target_layout.settings_path,
         json.dumps(merged, ensure_ascii=False, indent=2) + '\n',
@@ -624,6 +634,11 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
         target_layout.credentials_path,
         target_layout.home_root,
     )
+    previous_credentials_payload = (
+        _read_owned_json_projection(target_layout.credentials_path)
+        if credentials_name in previous_files
+        else None
+    )
     if not _inherits_external_auth(profile):
         for _source_auth, target_auth in _source_auth_paths(source_home, target_layout):
             name = _relative_to_home(target_auth, target_layout.home_root)
@@ -659,6 +674,8 @@ def _materialize_auth(source_home: Path, target_layout: ClaudeHomeLayout, *, pro
             credentials_name not in previous_files
             or credentials_name in projected_files
         ),
+        previous_projected_payload=previous_credentials_payload,
+        previous_projection_owned=credentials_name in previous_files,
     )
     if keychain_projected:
         projected_files.add(credentials_name)
@@ -978,6 +995,8 @@ def _materialize_macos_keychain_auth(
     target_layout: ClaudeHomeLayout,
     *,
     preserve_existing: bool = True,
+    previous_projected_payload: dict[str, object] | None = None,
+    previous_projection_owned: bool = False,
 ) -> bool:
     try:
         source_payload = _read_macos_keychain_claude_credentials()
@@ -998,7 +1017,17 @@ def _materialize_macos_keychain_auth(
         payload = _read_json_object(target_layout.credentials_path)
     if not payload or not isinstance(payload.get('claudeAiOauth'), dict):
         return False
-    _seed_managed_macos_keychain_auth(target_layout, payload)
+    refresh_existing = bool(
+        previous_projection_owned
+        and payload != previous_projected_payload
+    )
+    # Claude may refresh its private Keychain item after launch. Replace it
+    # only when the CCB-owned source projection changed between launches.
+    _sync_managed_macos_keychain_auth(
+        target_layout,
+        payload,
+        refresh_existing=refresh_existing,
+    )
     return source_payload is not None
 
 
@@ -1075,9 +1104,11 @@ def _managed_macos_keychain_service(target_layout: ClaudeHomeLayout) -> str:
     return f'{base}-{suffix}'
 
 
-def _seed_managed_macos_keychain_auth(
+def _sync_managed_macos_keychain_auth(
     target_layout: ClaudeHomeLayout,
     payload: dict[str, object],
+    *,
+    refresh_existing: bool = False,
 ) -> None:
     if platform.system() != 'Darwin':
         return
@@ -1099,7 +1130,13 @@ def _seed_managed_macos_keychain_auth(
     except Exception as exc:
         raise RuntimeError(f'cannot inspect agent-private Claude Keychain login: {exc}') from exc
     if existing.returncode == 0:
-        return
+        if not refresh_existing:
+            return
+        existing_payload = _json_object_from_text(existing.stdout)
+        if existing_payload == payload:
+            return
+    elif existing.returncode != 44:
+        raise RuntimeError('cannot inspect agent-private Claude Keychain login')
     credential_text = json.dumps(payload, ensure_ascii=False, separators=(',', ':'))
     try:
         result = subprocess.run(
@@ -1147,18 +1184,35 @@ def _remove_managed_macos_keychain_auth(target_layout: ClaudeHomeLayout) -> None
         pass
 
 
-def _projected_settings_payload(source_settings_path: Path, *, profile) -> dict[str, object] | None:
+def _projected_settings_payload(
+    source_settings_path: Path,
+    *,
+    profile,
+    extra_env: dict[str, str] | None = None,
+) -> dict[str, object] | None:
     source_payload = _read_source_json_object(source_settings_path, label='Claude settings')
     if not source_payload:
         return {} if _needs_settings_stub(profile) else None
 
     env_payload = dict(source_payload.get('env') or {}) if isinstance(source_payload.get('env'), dict) else {}
+    # Explicit `agents.<name>.env` keys are exported separately through the
+    # launcher shell prefix, so they must not be shadowed by the inherited
+    # settings.json env block.
+    for key in (extra_env or {}):
+        if str(key).strip():
+            env_payload.pop(str(key), None)
     if not _inherits_api(profile):
         for key in provider_api_env_keys('claude'):
             env_payload.pop(key, None)
     elif not _inherits_external_auth(profile):
         env_payload.pop('ANTHROPIC_AUTH_TOKEN', None)
         env_payload.pop('ANTHROPIC_API_KEY', None)
+        # When the agent owns an explicit base URL, the inherited host route must
+        # not win over it: the shell env already exports the agent's resolved
+        # profile env, so drop the host's route key instead of shadowing it.
+        profile_env = dict(getattr(profile, 'env', {}) or {})
+        if _env_value_present(profile_env.get('ANTHROPIC_BASE_URL')):
+            env_payload.pop('ANTHROPIC_BASE_URL', None)
 
     include_config = _inherits_config(profile)
     payload: dict[str, object] = {}
@@ -1443,12 +1497,68 @@ def _inherits_memory(profile) -> bool:
     return True if profile is None else bool(getattr(profile, 'inherit_memory', True))
 
 
+def _rewrite_tilde_paths(payload: dict[str, object], *, source_home: Path) -> None:
+    """Replace ``~`` / ``~/`` prefixes in settings string values with *source_home*.
+
+    In a managed pane ``HOME`` points to the agent's private home, so ``~`` in
+    settings (e.g. ``statusLine.command`` or hook commands) would resolve to the
+    wrong directory.  Rewriting to the real source home fixes the resolution
+    without requiring the user to hard-code absolute paths.
+    """
+    source_root = str(Path(source_home).expanduser()).replace('\\', '/')
+    _rewrite_tilde_in_place(payload, source_root)
+
+
+def _rewrite_tilde_in_place(value: object, source_root: str) -> None:
+    """Walk *value* (dict/list) and replace ``~``-prefixed strings in place."""
+    if isinstance(value, dict):
+        for key in list(value.keys()):
+            child = value[key]
+            if isinstance(child, str):
+                value[key] = _replace_tilde_prefix(child, source_root)
+            else:
+                _rewrite_tilde_in_place(child, source_root)
+    elif isinstance(value, list):
+        for index in range(len(value)):
+            child = value[index]
+            if isinstance(child, str):
+                value[index] = _replace_tilde_prefix(child, source_root)
+            else:
+                _rewrite_tilde_in_place(child, source_root)
+
+
+def _replace_tilde_prefix(text: str, source_root: str) -> str:
+    """Replace leading ``~`` or ``~/`` with *source_root*."""
+    if not text or not source_root:
+        return text
+    if text == '~':
+        return source_root
+    if text.startswith('~/'):
+        return f'{source_root}/{text[2:]}'
+    return text
+
+
 def _read_json_object(path: Path) -> dict[str, object]:
     try:
         data = _json_object_from_text(path.read_text(encoding='utf-8'))
     except Exception:
         return {}
     return data
+
+
+def _read_owned_json_projection(path: Path) -> dict[str, object] | None:
+    target = Path(path)
+    try:
+        metadata = target.lstat()
+    except OSError:
+        return None
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        return None
+    try:
+        payload = json.loads(target.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, ValueError, TypeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _read_source_json_object(path: Path, *, label: str) -> dict[str, object]:

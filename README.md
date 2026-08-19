@@ -6,8 +6,8 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
-  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
+  <img src="https://img.shields.io/badge/version-8.6.10-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
@@ -15,6 +15,7 @@
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
   <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness">
   <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
@@ -45,7 +46,9 @@
 ## Why CCB?
 
 - Stable inter-agent communication for complex collaboration graphs such as `A -> B -> C`, `A,B -> C`, and `A -> B,C`.
-- Every agent is a full native terminal with visible layout control and direct takeover.
+- Interactive CLI agents are full native terminals with visible layout control
+  and direct takeover; service-backed providers keep an explicit managed
+  host/log surface without pretending it is their request protocol.
 - The background daemon keeps project state alive even when the foreground UI is closed.
 - Hub capability: run multiple CLI providers concurrently from one command.
 - Mobile remote controller: cross-provider voice control, file transfer, and remote terminal access.
@@ -69,6 +72,26 @@ ccb update
 On an npm-managed install, `ccb update` prints the equivalent npm command and
 does not modify npm's vendored payload in place.
 
+<details>
+<summary><b>Native Windows x64 beta</b></summary>
+
+The Windows beta artifact is attached to the matching stable CCB GitHub
+release. Download `ccb-windows-x86_64.zip` and its `.sha256` sidecar, verify
+the digest, extract the ZIP, then run:
+
+```powershell
+.\install.ps1 install -Yes
+ccb --print-version
+```
+
+It requires native Windows x64, Python 3.10+, WezTerm, Git Bash, and Herdr
+0.8.0 or newer. The installer creates an install-local managed Python runtime.
+The binaries are unsigned, and `ccb update` remains diagnostic-only for this
+beta support tier; install a later Windows build by rerunning its validated
+`install.ps1`.
+
+</details>
+
 CCB-managed provider panes suppress known provider-native startup update prompts.
 After updating CCB—or immediately when CCB is already current—`ccb update`
 checks installed provider CLIs and offers supported updates once. Use
@@ -77,6 +100,24 @@ report-only, non-interactive update, or skip behavior. Declining prompts again
 on the next `ccb update`; skipping a version hides only that exact version.
 CCB never restarts active provider panes during this flow, so an accepted
 provider update applies when that pane next starts or is explicitly restarted.
+
+The official DeepSeek Harness integration is available as the separate
+Developer Preview provider key `dsh` (`deepseek` continues to mean the Deep
+Code CLI). Install its current npm release with a supported Node runtime, then
+select `dsh` in Config UI or use an Agent leaf such as `research:dsh`:
+
+```bash
+npm install -g @deepseek-ai/dsh
+dsh --version
+```
+
+CCB starts `dsh web` on loopback and communicates through DSH's structured
+HTTP/WebSocket carrier. The current POSIX runtime may host that service in a
+managed pane only for lifecycle/log ownership; prompts, replies, native
+completion, `ccb compact`, and restore do not depend on terminal input or
+pane-text heuristics. Configure `DEEPSEEK_API_KEY` (and
+optionally `DEEPSEEK_BASE_URL`) in user-owned DSH state or through CCB's
+provider-profile/API controls; CCB does not obtain credentials automatically.
 
 After a release change, the newly installed CCB also retires old
 project-scoped Claude/Gemini caches. Manifest-valid caches for deleted projects
@@ -220,9 +261,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.5.7 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.6.10 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
+- [Download CCB Mobile v8.6.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -280,7 +321,7 @@ CCB supports [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec), a
 
 Use the **⚙ Settings** control panel for normal project configuration. If you want agent-assisted configuration and runtime diagnosis, `ccb_self` remains available as an optional Role Pack and can be added with `ccb roles add agentroles.ccb_self:codex`.
 
-Supported managed Agents receive the built-in `ask`, `ccb-clear`, and `ccb-diagnose` control skills even when optional skill inheritance is disabled. Use `$ccb_diagnose <agentname>` to inspect one Agent's authoritative runtime/job state and live pane evidence, apply bounded recovery when safe, and review a redacted issue draft before explicitly authorizing GitHub submission. Managed Codex also keeps `reconnect`.
+Supported managed Agents receive the built-in `ask`, `ccb-clear`, `ccb-compact`, and `ccb-diagnose` control skills even when optional skill inheritance is disabled. Use `$ccb_diagnose <agentname>` to inspect one Agent's authoritative runtime/job state and live pane evidence, apply bounded recovery when safe, and review a redacted issue draft before explicitly authorizing GitHub submission. Managed Codex also keeps `reconnect`.
 
 `.ccb/ccb_memory.md` is the project-wide shared memory document. Use it for team collaboration rules, project constraints, long-lived context, and agent handoff conventions. Stable cross-agent information belongs there instead of being copied into several provider-private memory files.
 
@@ -293,7 +334,7 @@ Supported managed Agents receive the built-in `ask`, `ccb-clear`, and `ccb-diagn
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png?v=77e83abf" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=0a86422d" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
@@ -311,6 +352,65 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.6.10</b> - Claude OAuth re-login isolation</summary>
+
+- Refresh an existing Agent-private Claude Keychain credential after an external OAuth re-login, so a stopped managed restart does not keep using a revoked token (Issue #319).
+- Preserve a Claude-private Keychain refresh when the inherited source credential is unchanged; external Claude Keychain services remain read-only.
+- Fail closed for symlinked CCB credential projections and private Keychain inspection errors. No project, conversation, pairing, or configuration migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.6.9</b> - DeepSeek Harness, AGY startup, and Windows isolation</summary>
+
+- Add the official DeepSeek Harness as the separate Developer Preview provider `dsh`, using its loopback HTTP/WebSocket service and exact native turn evidence.
+- Make managed AGY 1.1.13 select private file token storage immediately, avoiding the keyring timeout without writing to the user's source HOME (Issue #318).
+- Roll back Windows PR changes that crossed into shared Linux/macOS runtime code and add a trusted-base native-only PR gate that rejects future cross-platform leakage.
+- Keep DSH clear, compact, exact-session restore, credentials, skills, and runtime state inside provider-native, agent-private boundaries.
+
+</details>
+
+<details>
+<summary><b>v8.6.5</b> - Responsive and reliable Mobile terminals</summary>
+
+- Reflow Agent terminal snapshots to the phone viewport while preserving the desktop tmux pane geometry.
+- Keep terminal input and reconnection stable across LAN and Relay routes, and close active sessions cleanly during gateway shutdown.
+- Keep terminal font size and shortcut order in the shared Terminal settings panel, with full-width inline terminal mode on phones and wide layouts.
+- Reattach persisted Windows Herdr namespace and pane references with fail-closed capability checks (PR #304).
+
+</details>
+
+<details>
+<summary><b>v8.6.3</b> - Mobile access to agent workspace artifacts</summary>
+
+- Turn links to ordinary files in the current Agent's `.ccb/workspaces/&lt;agent&gt;/...` tree into authenticated Mobile download attachments.
+- Keep the boundary fail-closed: other Agent workspaces, hidden workspace paths, and all other private `.ccb` runtime state remain unavailable.
+- Preserve the existing Mobile client behavior and pairing model; no project configuration or state migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.6.2</b> - Explicit command approval, resilient sessions, and broader Mobile terminals</summary>
+
+- Require exact, external approval before project configuration can execute tool-window commands or custom Provider command templates; use `ccb config approve-commands` for intentional values.
+- Recover managed Codex conversations from the latest valid session when the current session record is corrupt, without silently clearing context.
+- Add visible-pane Cursor execution, Pi native history, OMP Provider-config inheritance, and more reliable Windows process and namespace cleanup.
+- Expand CCB Mobile with multi-session host terminals, Relay capability-negotiated Provider controls, and stronger native Windows readiness validation.
+
+</details>
+
+<details>
+<summary><b>v8.6.1</b> - Mobile Provider controls, direct terminals, and safe context compaction</summary>
+
+- Show selected-Agent Provider identity, configured/active/pending model and thinking state, Codex/Claude native session usage, and optional account quota in CCB Mobile.
+- Persist supported model/thinking choices through guarded, restart-required host configuration without interrupting active work or exposing Provider credentials.
+- Open project-window or Agent terminals directly from Mobile home and customize terminal shortcut visibility and order.
+- Add the built-in `ccb-compact` Skill and `ccb compact` command with outstanding-work checks and fail-closed Provider command selection.
+- Populate Config UI from the complete available Role catalog, retain native-session boundaries in Mobile history, and refresh the WeChat group QR image.
+
+</details>
+
+<details>
 <summary><b>v8.5.7</b> - Built-in agent diagnosis and stuck-delivery recovery</summary>
 
 - Keep `ccb-clear` in every supported managed Agent and add the required `ccb-diagnose` Skill. Run `$ccb_diagnose &lt;agentname&gt;` to combine daemon, lineage, queue, inbox, trace, provider-log, and live Pane evidence for one Agent.

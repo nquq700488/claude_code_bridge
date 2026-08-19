@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.5.7-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.6.10-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -15,6 +15,7 @@
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
   <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness">
   <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
@@ -45,7 +46,8 @@
 ## 为什么用 CCB？
 
 - 强稳定的 agent 间通信能力，支持 `A -> B -> C`、`A,B -> C`、`A -> B,C` 等复杂协作关系。
-- 每个 agent 都是完整原生终端，支持可见的界面排布和直接接管。
+- 交互式 CLI agent 是完整原生终端，支持可见排布和直接接管；服务型 provider
+  保留明确的受管 host/log 界面，但不会伪装成终端 request 协议。
 - 后台 daemon 持续运行，可以脱离前台界面保持项目状态。
 - Hub 能力：一个命令同时并发运行多家 CLI provider。
 - 手机远程控制器：跨 provider 语音操控、文件传输和远程终端访问。
@@ -75,6 +77,23 @@ CLI，并只提示一次可安全管理的更新。可使用 `--providers check`
 本次跳过。选择“暂不更新”后，下次 `ccb update` 会再次提示；选择“跳过此
 版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
 provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
+
+官方 DeepSeek Harness 以独立的 Developer Preview provider key `dsh`
+接入（`deepseek` 仍表示 Deep Code CLI）。使用受支持的 Node runtime 安装其
+npm 包，然后在 Config UI 选择 `dsh`，或使用 `research:dsh` 这样的 Agent
+leaf：
+
+```bash
+npm install -g @deepseek-ai/dsh
+dsh --version
+```
+
+CCB 会在 loopback 上启动 `dsh web`，并通过 DSH 的结构化
+HTTP/WebSocket carrier 通信。当前 POSIX 运行时可以把该服务放在受管 pane
+中，但 pane 仅承担 lifecycle/log 所有权；prompt、reply、原生结束判定、
+`ccb compact` 和恢复都不依赖终端输入或 pane 文本启发式。请在用户自有 DSH
+状态或 CCB provider profile/API 控制中配置
+`DEEPSEEK_API_KEY`，并按需配置 `DEEPSEEK_BASE_URL`；CCB 不会自动获取凭据。
 
 版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
 manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
@@ -211,9 +230,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.5.7 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.6.10 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.5.7 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
+- [下载 CCB Mobile v8.6.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -271,7 +290,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 
 普通项目配置推荐直接使用左上角的 **⚙ 设置** 控制面。如果希望由 Agent 辅助设计配置或诊断运行状态，`ccb_self` 仍作为可选 Role Pack 提供，可以用 `ccb roles add agentroles.ccb_self:codex` 添加。
 
-即使关闭可选 skill 继承，受支持的托管 Agent 也会获得内置 `ask`、`ccb-clear` 与 `ccb-diagnose` 控制 skill。使用 `$ccb_diagnose <agentname>` 可结合权威 runtime/job 状态和实时 Pane 证据诊断一个 Agent，在安全时执行受限恢复，并在明确授权提交 GitHub issue 前先审阅脱敏草稿。托管 Codex 还会保留 `reconnect`。
+即使关闭可选 skill 继承，受支持的托管 Agent 也会获得内置 `ask`、`ccb-clear`、`ccb-compact` 与 `ccb-diagnose` 控制 skill。使用 `$ccb_diagnose <agentname>` 可结合权威 runtime/job 状态和实时 Pane 证据诊断一个 Agent，在安全时执行受限恢复，并在明确授权提交 GitHub issue 前先审阅脱敏草稿。托管 Codex 还会保留 `reconnect`。
 
 `.ccb/ccb_memory.md` 是项目级共享记忆文档，适合记录团队协作规则、项目约束、长期上下文和 agent 交接约定。把跨 agent 的稳定信息放在这里，比把同一段说明复制到多个 provider 私有记忆里更可靠。
 
@@ -284,7 +303,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=77e83abf" alt="CCB 微信技术群 2" width="240">
+  <img src="../assets/weixin.png?v=0a86422d" alt="CCB 微信技术群 2" width="240">
 </p>
 
 > 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
@@ -302,6 +321,65 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.6.10</b> - Claude OAuth 重登录隔离</summary>
+
+- 外部 OAuth 重新登录后，受管重启会刷新 Agent 私有 Claude Keychain 凭据，避免继续使用已撤销 token（Issue #319）。
+- 继承源凭据未变化时保留 Claude 私有 Keychain 自行刷新的值；外部 Claude Keychain service 始终只读。
+- CCB 凭据投影为 symlink 或私有 Keychain 检查异常时 fail closed。无需迁移项目、对话、配对或配置。
+
+</details>
+
+<details>
+<summary><b>v8.6.9</b> - DeepSeek Harness、AGY 启动与 Windows 隔离</summary>
+
+- 以独立 Developer Preview provider `dsh` 接入官方 DeepSeek Harness，通过 loopback HTTP/WebSocket 服务与精确 native turn 证据工作。
+- 让受管 AGY 1.1.13 立即选择私有文件 token 存储，避免 keyring 超时，同时不写入用户源 HOME（Issue #318）。
+- 撤销 Windows PR 对 Linux/macOS 共享运行时代码的越界改动，并新增基于可信 base 的原生 Windows 专用 PR 门禁，阻止后续跨平台污染。
+- 将 DSH clear、compact、精确 session 恢复、凭据、skills 与运行时状态限制在 provider-native、Agent 私有边界内。
+
+</details>
+
+<details>
+<summary><b>v8.6.5</b> - 自适应且更可靠的 Mobile 终端</summary>
+
+- Agent 终端快照会按手机视口重新排版，同时保持电脑端 tmux pane 尺寸不变。
+- 改进 LAN 与 Relay 路由下的终端输入和重连稳定性，并在 gateway 退出时可靠关闭活跃 session。
+- 终端字号与快捷键顺序统一放入终端设置；手机和宽屏布局均可使用全宽内嵌终端模式。
+- Windows Herdr 可重新挂接已持久化的 namespace 与 pane 引用，并保持 fail-closed 能力检查（PR #304）。
+
+</details>
+
+<details>
+<summary><b>v8.6.3</b> - 手机端访问 Agent workspace 产物</summary>
+
+- 当前 Agent 在 `.ccb/workspaces/&lt;agent&gt;/...` 中引用的普通文件，会转换为经过认证的 Mobile 下载附件。
+- 安全边界保持 fail-closed：其他 Agent workspace、workspace 隐藏路径以及 `.ccb` 内其余私有运行时状态仍不可下载。
+- 沿用现有 Mobile 客户端和配对模型；项目配置与状态均无需迁移。
+
+</details>
+
+<details>
+<summary><b>v8.6.2</b> - 显式命令授权、可靠会话恢复与更完整的 Mobile 终端</summary>
+
+- 项目配置中的 tool-window 命令或自定义 Provider command template 执行前，必须取得外部、精确匹配的批准；有意配置时可运行 `ccb config approve-commands`。
+- 当前 session 记录损坏时，从最近的有效 session 恢复托管 Codex 对话，不再静默清空上下文。
+- 新增 Cursor 可见 Pane 执行、Pi 原生历史恢复、OMP Provider 配置继承，并增强 Windows 进程与 namespace 清理可靠性。
+- CCB Mobile 新增主机多 session 终端、经 Relay capability 协商的 Provider 控制，以及更严格的原生 Windows readiness 校验。
+
+</details>
+
+<details>
+<summary><b>v8.6.1</b> - Mobile Provider 控制、直达终端与安全上下文压缩</summary>
+
+- CCB Mobile 显示所选 Agent 的 Provider 身份、已配置/当前/待生效模型与 thinking、Codex/Claude 原生 session 用量和可选账号额度。
+- 受支持的模型/thinking 选择通过有保护、需要重启的主机配置持久化，不中断活跃任务，也不暴露 Provider 凭据。
+- 可从 Mobile 首页直接打开项目 window 或 Agent 终端，并自定义终端快捷键的显示与顺序。
+- 新增内置 `ccb-compact` Skill 和 `ccb compact` 命令，先检查未完成工作，并对未验证的 Provider 命令保持 fail-closed。
+- Config UI 改为加载当前可用的完整 Role catalog；Mobile 历史保留原生 session 边界，并刷新微信群二维码。
+
+</details>
+
+<details>
 <summary><b>v8.5.7</b> - 内置 Agent 诊断与卡住投递恢复</summary>
 
 - 所有受支持的托管 Agent 继续内置 `ccb-clear`，并新增必装的 `ccb-diagnose` Skill。运行 `$ccb_diagnose &lt;agentname&gt;` 可联合检查单个 Agent 的 daemon、lineage、队列、inbox、trace、Provider 日志和实时 Pane 证据。

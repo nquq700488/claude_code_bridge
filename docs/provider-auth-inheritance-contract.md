@@ -135,6 +135,13 @@ Explicit API keys, URLs, profiles, or provider routes remain agent-local
 authority. They must not rewrite global login files and must not be shadowed by
 an inherited global credential copy.
 
+For managed Claude, any key exported by `agents.<name>.env` must be removed
+from the inherited `~/.claude/settings.json` `env` projection before launch.
+An explicit Agent or Provider-profile `ANTHROPIC_BASE_URL` likewise suppresses
+the inherited settings route. This prevents Claude's settings layer from
+shadowing the higher-priority CCB authority while leaving unrelated inherited
+settings intact.
+
 A user-authored provider command wrapper that resets a protected root or
 credential-store switch after CCB constructs the command is an explicit escape
 from managed isolation. CCB must not add such an escape itself, and diagnostics
@@ -170,6 +177,14 @@ managed processes are then forced to file storage and never select the source
 keyring. If conversion is unavailable or invalid, CCB leaves that managed
 provider unauthenticated instead of attaching the global credential backend.
 
+AGY `1.1.13` exposes no public token-storage switch. Before every managed AGY
+launch, CCB therefore refreshes AGY's own recent-keyring-failure marker at
+`<managed-home>/.gemini/antigravity-cli/cache/antigravity-keyring-unavailable`.
+AGY then selects its file token store immediately instead of attempting the OS
+keyring first. The marker is an owner-only regular file under the private
+managed home; CCB must detach any legacy link at that path and must never read,
+create, or refresh the corresponding path in the source user home.
+
 ## 6. Built-In Provider Requirements
 
 | Provider | Managed account authority | Required isolation behavior |
@@ -179,14 +194,15 @@ provider unauthenticated instead of attaching the global credential backend.
 | Gemini | private `.gemini` OAuth/account/encrypted files | `GEMINI_FORCE_FILE_STORAGE=true` and `GEMINI_FORCE_ENCRYPTED_FILE_STORAGE=true`; external keyring read-only migration |
 | OpenCode | private XDG data/config/state and structured storage roots | auth/account files are one-way copies; storage/log writers stay private |
 | Droid | private `<managed-home>/.factory` v2 auth files | `FACTORY_DISABLE_KEYRING=true`; known keyring v2 material is converted to a private key file |
-| AGY | private `.gemini` and `.antigravity` trees | no source symlink or Windows junction; allowlisted file copies only |
+| AGY | private `.gemini` and `.antigravity` trees | no source symlink or Windows junction; allowlisted file copies only; refresh the private AGY keyring-bypass marker before launch |
 | Qwen | private `QWEN_HOME` OAuth/account files | both Qwen file-storage switches enabled |
 | Cursor | private platform-specific `cursor/auth.json` | `AGENT_CLI_CREDENTIAL_STORE=file`; macOS token services are read-only import sources |
 | Copilot | private `COPILOT_HOME` auth-bearing config and secret trees | `COPILOT_DISABLE_KEYTAR=1`; private cache root |
 | Kiro | private auth/config files and filtered SQLite snapshot | source database opened read-only; macOS fails closed while no private credential-store switch exists |
 | Qoder / QoderCN | private documented `--config-dir` and `.auth` tree | visible and headless processes use the same exact private root |
 | Kimi / DeepSeek / MiMo / Grok | provider-specific private homes | allowlisted auth/config files copied in one direction |
-| Crush / Pi / OMP / Z.ai | private HOME/XDG/provider roots | allowlisted auth records copied in one direction; unknown formats remain private-login only |
+| OMP | private `.omp/agent` selected by `PI_CODING_AGENT_DIR` | auth-capable YAML/legacy config is copied one way only when both config and auth inheritance are enabled; `agent.db` is opened read-only and rebuilt as an agent-private auth-only snapshot with cache, history, statistics, blocks, and refresh leases removed |
+| Crush / Pi / Z.ai | private HOME/XDG/provider roots | allowlisted auth records copied in one direction; unknown formats remain private-login only |
 
 New built-in providers must declare their mutable account roots and credential
 backend before they are accepted into the managed launcher registry. If a

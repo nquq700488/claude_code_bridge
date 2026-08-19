@@ -12,9 +12,9 @@ notifications, local/Tailnet gateway access, and file transfer.
 
 ## Android Alpha Release
 
-CCB Mobile v8.5.7 is published as an Android APK:
+CCB Mobile v8.6.10 is published as an Android APK:
 
-- [Download ccb-mobile-v8.5.7.apk](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.5.7/ccb-mobile-v8.5.7.apk)
+- [Download ccb-mobile-v8.6.10.apk](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
 - Server setup entrypoint: `ccb update mobile`
 - App source: [`app/`](app/)
 
@@ -37,6 +37,13 @@ It connects to the server-wide mobile gateway, lists mounted CCB projects,
 renders agent transcripts, sends pane-native text input, opens terminal views,
 and supports image/document upload and download through the authenticated
 gateway.
+
+Selected-agent headers also expose the active Provider/model/thinking state.
+The Provider sheet uses capability-driven model and effort choices, separates
+configured/pending state from the active native session, and displays native
+session usage plus optional account quota. These semantics are directly
+aligned with pinned open-source Paseo Provider contracts; see
+[`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
 
 ### LAN pairing and recovery
 
@@ -66,5 +73,5 @@ docs/plantree/       Planning tree and design decisions
 tools/               Emulator, gateway, and acceptance helpers
 ```
 
-iOS/iPadOS remain source-supported targets, but v8.5.7 release validation is
+iOS/iPadOS remain source-supported targets, but v8.6.10 release validation is
 Android-focused.

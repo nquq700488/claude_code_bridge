@@ -64,6 +64,7 @@ def test_inherited_skills_live_under_inherit_skills_only() -> None:
         "claude_skills",
         "codex_skills",
         "droid_skills",
+        "dsh_skills",
         "gemini_skills",
         "grok_skills",
         "kimi_skills",
@@ -81,6 +82,10 @@ def test_inherited_skills_live_under_inherit_skills_only() -> None:
     assert (inherited / "droid_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "droid_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "droid_skills" / "ccb-diagnose" / "SKILL.md").is_file()
+    assert (inherited / "dsh_skills" / "ask" / "SKILL.md").is_file()
+    assert (inherited / "dsh_skills" / "ccb-clear" / "SKILL.md").is_file()
+    assert (inherited / "dsh_skills" / "ccb-compact" / "SKILL.md").is_file()
+    assert (inherited / "dsh_skills" / "ccb-diagnose" / "SKILL.md").is_file()
     assert (inherited / "gemini_skills" / "ask" / "SKILL.md").is_file()
     assert (inherited / "gemini_skills" / "ccb-clear" / "SKILL.md").is_file()
     assert (inherited / "gemini_skills" / "ccb-diagnose" / "SKILL.md").is_file()
@@ -115,13 +120,14 @@ def test_inherited_skill_set_is_minimal() -> None:
     repo_root = Path(__file__).resolve().parents[1]
 
     expected = {
-        "claude_skills": {"ask", "ccb-clear", "ccb-diagnose"},
-        "codex_skills": {"ask", "ccb-clear", "ccb-diagnose", "reconnect"},
-        "droid_skills": {"ask", "ccb-clear", "ccb-diagnose"},
-        "gemini_skills": {"ask", "ccb-clear", "ccb-diagnose"},
-        "grok_skills": {"ask", "ccb-clear", "ccb-diagnose"},
-        "kimi_skills": {"ask", "ccb-clear", "ccb-diagnose"},
-        "qoder_skills": {"ask", "ccb-clear", "ccb-diagnose"},
+        "claude_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
+        "codex_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose", "reconnect"},
+        "droid_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
+        "dsh_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
+        "gemini_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
+        "grok_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
+        "kimi_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
+        "qoder_skills": {"ask", "ccb-clear", "ccb-compact", "ccb-diagnose"},
     }
     for provider_root, expected_names in expected.items():
         skill_root = repo_root / "inherit_skills" / provider_root
@@ -141,15 +147,17 @@ def test_inherited_skill_set_is_minimal() -> None:
 def test_install_scripts_current_skill_lists_are_minimal() -> None:
     repo_root = Path(__file__).resolve().parents[1]
     install_sh = (repo_root / "install.sh").read_text(encoding="utf-8")
-    install_ps1 = (repo_root / "install.ps1").read_text(encoding="utf-8")
+    install_ps1 = (repo_root / "platforms" / "windows" / "installer" / "install.ps1").read_text(
+        encoding="utf-8-sig"
+    )
 
-    assert 'local ccb_skills="ask ccb-config ccb-clear ccb-diagnose reconnect"' in install_sh
+    assert 'local ccb_skills="ask ccb-config ccb-clear ccb-compact ccb-diagnose reconnect"' in install_sh
     assert 'local legacy_skills="ccb-config ' in install_sh
     assert 'local ccb_skills="ask ping' not in install_sh
-    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear", "ccb-diagnose", "reconnect")' in install_ps1
+    assert '$ccbSkills = @("ask", "ccb-config", "ccb-clear", "ccb-compact", "ccb-diagnose", "reconnect")' in install_ps1
     assert '$legacySkills = @("ccb-config",' in install_ps1
     assert '$ccbSkills = @("ask", "ccb-config", "ping"' not in install_ps1
-    assert '$droidSkills = @("ask", "ccb-clear", "ccb-diagnose")' in install_ps1
+    assert '$droidSkills = @("ask", "ccb-clear", "ccb-compact", "ccb-diagnose")' in install_ps1
 
 
 def test_install_sh_excludes_git_worktree_file() -> None:

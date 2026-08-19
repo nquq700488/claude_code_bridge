@@ -24,13 +24,22 @@ This plan applies to:
 - managed `codex`
 - managed `claude`
 - managed `gemini`
+- managed `cursor`
 - managed `pi`
 - managed `omp`
+- managed `dsh`
 
-in pane-backed mode. Pi asks execute in the managed visible pane and use a
-provider-local lifecycle sidecar. OMP asks use per-job structured one-shot
-subprocesses owned by their managed pane-backed agents. Pi's 8.5.0 one-shot
-path remains a persisted-job compatibility path and explicit rollback mode.
+in pane-backed mode. Cursor asks execute in the managed visible pane and use
+exact anchored top-level transcript evidence. Pi asks execute in the managed
+visible pane and use a provider-local lifecycle sidecar. OMP asks use per-job
+structured one-shot subprocesses owned by their managed pane-backed agents.
+Cursor and Pi retain explicit headless rollback paths; Pi's 8.5.0 one-shot path
+also remains a persisted-job compatibility path.
+
+DSH is service-backed rather than an interactive terminal. Its current POSIX
+host process may use a pane as a lifecycle/log carrier, but request and
+completion authority come only from the structured Web RPC/event protocol
+defined in `docs/dsh-service-provider-contract.md`.
 
 This document does not replace:
 
@@ -711,6 +720,17 @@ facts and requires activation in the new top-level session. Pane dispatch,
 elapsed time, apparent FIFO order, or an idle prompt may not substitute for
 exact queued-command identity.
 
+If a dispatched Claude prompt remains visibly staged in the current composer
+without exact activation, the polling layer may retry `Enter` at most once.
+That recovery is allowed only after the configured grace period, before the
+bounded give-up deadline, while the pane is not busy, and while the current
+composer—not transcript history—contains the current request marker, the
+submitted prompt-tail fingerprint, or Claude's collapsed-paste placeholder.
+The retry state and evidence kind are persisted for diagnostics. Sending
+`Enter` remains input-delivery recovery only: it must never synthesize
+`prompt_activated`, `anchor_seen`, completion, or reply ownership; the exact
+Claude transcript records above remain the sole activation authority.
+
 Claude session-name `slug` is display metadata, not subagent identity.
 Top-level records with `isSidechain=false` remain eligible for request-anchor
 tracking; real sidechains are fenced by `isSidechain=true` or explicit
@@ -815,7 +835,35 @@ authentication failures, non-normal result reasons, nonzero exit, and a clean
 process exit without a result envelope all fail or remain incomplete; they may
 not be returned as successful assistant text.
 
-### 10.6 Pi Visible Lifecycle And OMP Structured Streams
+### 10.6 Cursor Visible Transcript Completion
+
+New Cursor asks execute in the exact managed visible pane. The adapter must
+wait while the current pane or current-session transcript is active, require a
+new top-level `turn_ended` after an observed active turn, and then confirm a
+stable idle interval before sending exactly once. Pane text is readiness
+evidence only; it is not completion authority.
+
+Before dispatch, CCB captures transcript offsets and excludes top-level paths
+that already contain the request anchor. Because Cursor may rewrite the prior
+terminal record when appending a turn, pre-anchor discovery may rescan complete
+top-level transcripts from the beginning. It binds only to the first eligible
+user record containing the exact `CCB_REQ_ID`; subagent transcripts, malformed
+or partial records, stale anchors, assistant text before binding, and terminal
+records from other paths cannot complete the job.
+
+After binding, assistant text from that same transcript is progress and reply
+evidence. Only a later `turn_ended` from the bound transcript terminalizes:
+`status=success` requires a non-empty reply to complete, while an empty success
+or any other status closes incomplete. Readiness and run timeouts close
+incomplete without resending. Cancellation interrupts only a pane to which the
+prompt was delivered. Daemon restore cannot prove ownership of an interrupted
+in-flight Cursor turn, so it is resubmit-required.
+
+`CCB_CURSOR_EXECUTION_MODE=headless` retains the prior
+`agent --print --output-format stream-json` adapter as an explicit rollback
+path; it is not the default execution mode.
+
+### 10.7 Pi Visible Lifecycle And OMP Structured Streams
 
 The supported completion contract intentionally targets the current provider
 protocols only:
@@ -896,6 +944,28 @@ Malformed or truncated output closes as
 provider error remain failures. Older Pi headless streams that stop at
 `agent_end` and older OMP streams without `isTerminal` deliberately fail
 closed; CCB does not guess legacy completion.
+
+### 10.8 DeepSeek Harness Native Service Events
+
+DSH uses a long-lived loopback Web host and a per-job CCB observer process.
+The event WebSocket must be open before `session.prompt`, and the CCB job id is
+the native RPC id. The observer binds the exact durable
+`user/message.source.rpcId` to its owning `turn/start`, accepts only committed
+assistant-visible text from that turn, and requires the same turn's
+`turn/end.reason.kind=completed`.
+
+`aborted`, `blocked`, `error`, `max-tokens`, and `interrupted` are native
+failure terminals. A reasoning-only or empty assistant message, a completed
+turn without the exact native request anchor, a process exit without
+`turn/end`, malformed history, or an unknown terminal closes failed or
+incomplete. Pane text, pane quietness, and host exit are never fallback success
+signals.
+
+After ccbd restart, DSH resumes by scanning the same native session history
+for the exact persisted RPC and starting an observer-only bridge if needed.
+It never reposts an interrupted prompt. See
+`docs/dsh-service-provider-contract.md` for the full carrier, session,
+permission, clear, and compact boundaries.
 
 ## 11. Placement In Code
 
@@ -1036,7 +1106,33 @@ Add execution-layer tests for:
 - reliability timeout is provider-manifest-driven
 - degraded fallback decision is persisted and restorable
 
-### 12.7 Pi And OMP
+### 12.7 DeepSeek Harness
+
+Add tests for:
+
+- WebSocket-before-prompt ordering and exact RPC id submission
+- exact native user anchor, same-turn assistant reply, and completed terminal
+- all five non-success native terminal kinds
+- reasoning-only, empty, malformed, cross-turn, and missing-anchor evidence
+- process exit with reply text but no native terminal
+- history reconstruction and observer-only restore without prompt repost
+- native approval, question, cancellation, clear, and compact handling
+- isolated official-host no-credential failure closure
+
+### 12.8 Cursor
+
+Add tests for:
+
+- visible-pane default selection and explicit headless rollback
+- exact top-level request-anchor binding, stale/subagent exclusion, and
+  transcript-tail rewrite handling
+- busy-pane deferral, new terminal evidence, stable idle confirmation, and
+  exactly-once dispatch
+- assistant progress without terminalization, successful/error/empty terminal
+  outcomes, readiness/run timeout, dead pane, reply delivery, and cancellation
+- resubmit-required daemon restore diagnostics
+
+### 12.9 Pi And OMP
 
 Add tests for:
 

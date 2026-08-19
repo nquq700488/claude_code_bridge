@@ -30,6 +30,7 @@ import '../../transport/http_gateway_transport.dart';
 import '../../transport/route_provider.dart';
 import '../../transport/terminal_transport.dart';
 import '../agent_chat/agent_execution_status.dart';
+import '../terminal/host_terminal_screen.dart';
 import 'project_home_connection_details_panel_host.dart';
 import 'gateway_lan_network_banner.dart';
 import 'project_home_focus_coordinator.dart';
@@ -245,6 +246,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
   WideSidebarState _wideSidebarDragStartState = WideSidebarState.expanded;
   double _wideSidebarDragDelta = 0;
   bool _mobileAgentsCollapsed = false;
+  bool _agentTerminalMode = false;
   late final MobileSnapshotStore _snapshotStore = MobileSnapshotStore();
   late final GatewayInvalidationCursorStore _invalidationCursorStore;
   GatewayInvalidationConnectionState _gatewayConnectionState =
@@ -527,6 +529,8 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
                       GatewayInvalidationConnectionState.reconnecting
                   ? _retryGatewayConnection
                   : null,
+          terminalMode: _agentTerminalMode,
+          onTerminalModeChanged: _setAgentTerminalMode,
         );
       },
     );
@@ -887,6 +891,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       _activeProjectId = '';
       _openedProjectId = null;
       _selectedAgentName = null;
+      _agentTerminalMode = false;
       _serverProjectsFuture = _loadServerProjects();
     });
   }
@@ -909,6 +914,9 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         return ProjectHomeServerProjectListHost(
           projects: projects,
           onRefreshProjects: _retryServerProjects,
+          onOpenTerminal: () {
+            _openHomeTerminalLauncher(projects);
+          },
           onOpenSettings: _openPairingSettings,
           onOpenProject: _openServerProject,
           unreadProjectIds: _unreadProjectIds,
@@ -1014,8 +1022,10 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
         _selectAgent(agent.name);
       },
       onOpenTerminal: (agentName) {
-        _openAgentTerminal(view, agentName);
+        _showInlineAgentTerminal(view, agentName);
       },
+      terminalMode: _agentTerminalMode,
+      onShowChat: () => _setAgentTerminalMode(false),
       onProjectActivity: () {
         setState(() {
           _rememberProjectUsed(view.project.id);
@@ -1229,6 +1239,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     final outcome = openProjectHomeProject(view);
     setState(() {
       _openedProjectId = outcome.openedProjectId;
+      _agentTerminalMode = false;
     });
   }
 
@@ -1238,6 +1249,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       _activeProjectId = project.id;
       _openedProjectId = project.id;
       _selectedAgentName = null;
+      _agentTerminalMode = false;
       _viewFuture = _loadActiveProjectView();
     });
     _presenceCoordinator.updateTarget(
@@ -1319,6 +1331,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     final outcome = closeProjectHomeProject();
     setState(() {
       _openedProjectId = outcome.openedProjectId;
+      _agentTerminalMode = false;
     });
   }
 
@@ -1473,6 +1486,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       _serverProjectsFuture = session.projectsFuture;
       _openedProjectId = null;
       _selectedAgentName = null;
+      _agentTerminalMode = false;
       _terminalTransport = session.terminalTransport;
       _gatewayConnectionState = GatewayInvalidationConnectionState.connected;
       _gatewayReconnectRetryIn = null;
@@ -1614,6 +1628,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       _serverProjectsFuture = null;
       _openedProjectId = null;
       _selectedAgentName = null;
+      _agentTerminalMode = false;
       _terminalTransport = null;
       _gatewayConnectionState = GatewayInvalidationConnectionState.stopped;
       _gatewayReconnectRetryIn = null;
@@ -2212,47 +2227,60 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
     return null;
   }
 
-  Future<void> _openAgentTerminal(CcbProjectView view, String agentName) async {
-    if (_mode == AppRuntimeMode.pairedGateway) {
-      final transport = _terminalTransport;
-      final outcome = projectHomeGatewayTerminalNavigation(
-        view: view,
-        agentName: agentName,
-        hasTerminalTransport: transport != null,
-      );
-      if (outcome.kind == ProjectHomeTerminalNavigationKind.noTransport) {
-        _showSnack(outcome.snackMessage!);
-        return;
-      }
-      if (outcome.kind != ProjectHomeTerminalNavigationKind.open) {
-        return;
-      }
-      final spec = outcome.spec!;
-      await pushProjectHomeTerminalRoute(
-        context,
-        repository: _activeRepository,
-        projectId: spec.projectId,
-        agentName: spec.agentName,
-        expectedNamespaceEpoch: spec.namespaceEpoch,
-        expectedWindowName: spec.windowName,
-        expectedPaneId: spec.paneId,
-        terminalTransport: transport,
-        gatewayTerminal: spec.gatewayTerminal,
-      );
+  void _showInlineAgentTerminal(CcbProjectView view, String agentName) {
+    final outcome =
+        _mode == AppRuntimeMode.pairedGateway
+            ? projectHomeGatewayTerminalNavigation(
+              view: view,
+              agentName: agentName,
+              hasTerminalTransport: _terminalTransport != null,
+            )
+            : projectHomeFakeTerminalNavigation(
+              view: view,
+              agentName: agentName,
+            );
+    if (outcome.kind == ProjectHomeTerminalNavigationKind.noTransport) {
+      _showSnack(outcome.snackMessage!);
       return;
     }
-    final outcome = projectHomeFakeTerminalNavigation(
-      view: view,
-      agentName: agentName,
-    );
-    final spec = outcome.spec!;
-    pushProjectHomeTerminalRoute(
-      context,
-      repository: _activeRepository,
-      projectId: spec.projectId,
-      agentName: spec.agentName,
-      terminalTransport: null,
-      gatewayTerminal: spec.gatewayTerminal,
+    if (outcome.kind != ProjectHomeTerminalNavigationKind.open) {
+      _showSnack('Terminal target is unavailable. Refresh and retry.');
+      return;
+    }
+    setState(() {
+      _selectionRevision += 1;
+      _selectedAgentName = agentName;
+      _agentTerminalMode = true;
+    });
+  }
+
+  void _setAgentTerminalMode(bool value) {
+    if (_agentTerminalMode == value) {
+      return;
+    }
+    setState(() {
+      _agentTerminalMode = value;
+      if (value) {
+        _mobileAgentsCollapsed = true;
+      }
+    });
+  }
+
+  Future<void> _openHomeTerminalLauncher(List<CcbProject> _) async {
+    final strings = CcbMobileLocalizations.of(context);
+    final profile = _selectedProfile;
+    final transport = _terminalTransport;
+    if (profile == null ||
+        transport is! HostTerminalTransport ||
+        !profile.profile.scopes.contains('host_terminal')) {
+      _showSnack(strings.hostTerminalAccessUnavailable);
+      return;
+    }
+    final hostTransport = transport as HostTerminalTransport;
+    await Navigator.of(context).push<void>(
+      MaterialPageRoute(
+        builder: (context) => HostTerminalScreen(transport: hostTransport),
+      ),
     );
   }
 
@@ -2301,6 +2329,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
       setState(() {
         _openedProjectId = outcome.openedProjectId;
         _selectedAgentName = outcome.selectedAgentName;
+        _agentTerminalMode = false;
       });
     }
     _showSnack(outcome.snackMessage);
@@ -2687,6 +2716,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
           _activeProjectId = route.projectId!;
           _openedProjectId = route.projectId;
           _selectedAgentName = route.agentName;
+          _agentTerminalMode = false;
           _serverProjectsFuture = null;
           _viewFuture = SynchronousFuture(route.view!);
         });
@@ -2701,6 +2731,7 @@ class _ProjectHomeViewState extends State<_ProjectHomeView>
           _activeProjectId = '';
           _openedProjectId = null;
           _selectedAgentName = null;
+          _agentTerminalMode = false;
           _serverProjectsFuture = _loadServerProjects();
         });
     }

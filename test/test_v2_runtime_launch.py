@@ -909,7 +909,7 @@ def test_ensure_agent_runtime_relaunches_provider_identity_mismatch(monkeypatch,
         binding_runtime_alive_fn=runtime_launch._binding_runtime_alive,
         provider_executable_fn=runtime_launch._provider_executable,
         cleanup_stale_tmux_binding_fn=runtime_launch._cleanup_stale_tmux_binding,
-        launch_tmux_runtime_fn=_fake_launch,
+        launch_runtime_fn=_fake_launch,
         resolve_agent_binding_fn=_resolve_agent_binding,
     )
 
@@ -1135,6 +1135,48 @@ def test_binding_runtime_alive_rejects_title_based_runtime_ref(monkeypatch) -> N
 
     assert runtime_launch._binding_runtime_alive(binding) is False
     assert calls == []
+
+
+def test_herdr_liveness_check_reattaches_persisted_session_without_capability_env(monkeypatch) -> None:
+    import terminal_runtime.api as terminal_api
+
+    class FakeHerdrRequestAdapter:
+        socket_ref = 'herdr://local'
+
+        def __call__(self, operation: str, payload: dict[str, object]) -> dict[str, object]:
+            if operation == 'server_info':
+                return {
+                    'version': 'herdr 0.7.5-preview',
+                    'api_schema': 'Herdr API',
+                    'platform': 'windows',
+                    'arch': 'x64',
+                }
+            if operation == 'capture_pane':
+                assert payload['pane_id'] == 'wC:p1'
+                assert payload['session_name'] == 'ccb-demo'
+                return {'status': 'ok', 'pane_id': payload['pane_id'], 'text': 'ready'}
+            raise AssertionError(f'unexpected Herdr operation: {operation}')
+
+    monkeypatch.delenv('CCB_HERDR_CAPABILITY_REPORT', raising=False)
+    monkeypatch.setattr(terminal_api, '_herdr_request_adapter', lambda: FakeHerdrRequestAdapter())
+    binding = SimpleNamespace(
+        pane_id='wC:p1',
+        session_ref={
+            'terminal': 'mux',
+            'backend_impl': 'herdr',
+            'namespace_ref': {
+                'backend_family': 'herdr-native',
+                'backend_impl': 'herdr',
+                'namespace_id': 'wC',
+                'session_name': 'ccb-demo',
+                'ipc_kind': 'herdr_socket',
+                'ipc_ref': 'herdr://local',
+            },
+            'pane_id': 'wC:p1',
+        },
+    )
+
+    assert runtime_launch._herdr_liveness_check(binding) is True
 
 
 def test_ensure_agent_runtime_resumes_named_codex_session_by_agent_name(monkeypatch, tmp_path: Path) -> None:
@@ -2127,6 +2169,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     monkeypatch.delenv('GROK_START_CMD', raising=False)
     monkeypatch.delenv('KIRO_START_CMD', raising=False)
     monkeypatch.delenv('PI_START_CMD', raising=False)
+    monkeypatch.delenv('OMP_START_CMD', raising=False)
     monkeypatch.delenv('ZAI_START_CMD', raising=False)
 
     assert runtime_launch._provider_start_parts('gemini') == ['gemini']
@@ -2144,6 +2187,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
     assert runtime_launch._provider_start_parts('grok') == ['grok']
     assert runtime_launch._provider_start_parts('kiro') == ['kiro-cli']
     assert runtime_launch._provider_start_parts('pi') == ['pi']
+    assert runtime_launch._provider_start_parts('omp') == ['omp']
     assert runtime_launch._provider_start_parts('zai') == ['zai']
 
 
@@ -2159,6 +2203,7 @@ def test_provider_start_parts_fall_back_to_default_binary(monkeypatch: pytest.Mo
         ('grok', 'grok', 'HOME'),
         ('kiro', 'kiro-cli', 'HOME'),
         ('pi', 'pi', None),
+        ('omp', 'omp', None),
         ('zai', 'zai', 'HOME'),
     ],
 )
@@ -2177,6 +2222,11 @@ def test_native_cli_launcher_builds_provider_state_payload(
             lambda: 'Linux',
         )
     monkeypatch.delenv(f'{provider.upper()}_START_CMD', raising=False)
+    if provider == 'omp':
+        # Never use a developer's real OMP credential database in source tests.
+        source_home = tmp_path / 'source-home'
+        source_home.mkdir()
+        monkeypatch.setenv('CCB_SOURCE_HOME', str(source_home))
     project_root = tmp_path / f'repo-{provider}-launcher'
     (project_root / '.ccb').mkdir(parents=True)
     agent_name = f'{provider}1'
@@ -2294,6 +2344,17 @@ def test_native_cli_launcher_builds_provider_state_payload(
         assert extension_path.stat().st_mode & 0o077 == 0
         assert completion_event_log.stat().st_mode & 0o077 == 0
         assert dispatch_event_log.stat().st_mode & 0o077 == 0
+    elif provider == 'omp':
+        assert (
+            f'PI_CODING_AGENT_DIR={shlex.quote(str(state_dir / "home" / ".omp" / "agent"))}'
+            in start_cmd
+        )
+        assert visible_parts == [
+            default_executable,
+            '--session-dir',
+            str(state_dir / 'sessions'),
+            '--demo',
+        ]
     elif provider == 'zai':
         assert visible_parts == [
             default_executable,
@@ -4081,7 +4142,7 @@ def test_codex_launcher_build_start_cmd_forks_linked_authority_generation(
     )
     monkeypatch.setattr(
         'provider_backends.codex.launcher_runtime.command.supports_managed_app_server',
-        lambda parts: False,
+        lambda parts: True,
     )
 
     command = ParsedStartCommand(
@@ -4094,6 +4155,7 @@ def test_codex_launcher_build_start_cmd_forks_linked_authority_generation(
 
     assert 'fork old-codex-session-id' in cmd
     assert 'resume old-codex-session-id' not in cmd
+    assert '--remote' not in cmd
     rewritten = json.loads(session_file.read_text(encoding='utf-8'))
     assert rewritten['old_codex_session_id'] == 'old-codex-session-id'
     assert rewritten['old_codex_session_path'] == str(old_log)

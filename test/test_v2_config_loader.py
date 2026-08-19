@@ -355,6 +355,37 @@ def test_load_project_config_normalizes_mixed_case_compact_agent_names(tmp_path:
     )
 
 
+def test_load_project_config_normalizes_mixed_case_windows_agent_names(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-windows-mixed-case'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        '\n'.join(
+            [
+                'version = 2',
+                'entry_window = "main"',
+                '',
+                '[windows]',
+                'main = "Main_Claude:claude; Reviewer:codex"',
+                '',
+                '[agents.Main_Claude]',
+                'role = "agentroles.archi"',
+                '',
+                '[agents.Reviewer]',
+                'role = "agentroles.coder"',
+                '',
+            ]
+        ),
+    )
+
+    result = load_project_config(project_root)
+
+    assert result.config.windows[0].agent_names == ('main_claude', 'reviewer')
+    assert tuple(result.config.agents) == ('main_claude', 'reviewer')
+    assert result.config.agents['main_claude'].provider == 'claude'
+    assert result.config.agents['reviewer'].provider == 'codex'
+
+
 def test_load_project_config_rejects_case_insensitive_duplicates(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo'
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -922,6 +953,17 @@ home = ".ccb/provider-profiles/agent1/{provider}"
             },
             True,
         ),
+        (
+            'dsh',
+            'key = "deepseek-key"\nurl = "https://api.deepseek.com"\n',
+            'deepseek-key',
+            'https://api.deepseek.com',
+            {
+                'DEEPSEEK_API_KEY': 'deepseek-key',
+                'DEEPSEEK_BASE_URL': 'https://api.deepseek.com',
+            },
+            True,
+        ),
     ],
 )
 def test_load_project_config_supports_toml_agent_api_shortcut(
@@ -1145,6 +1187,7 @@ url = "https://api.example.test/v1"
         ('claude', 'opus', ('--model', 'opus')),
         ('gemini', 'gemini-2.5-pro', ('-m', 'gemini-2.5-pro')),
         ('opencode', 'openai/gpt-5', ('-m', 'openai/gpt-5')),
+        ('dsh', 'deepseek-v4-flash', ()),
     ],
 )
 def test_load_project_config_supports_agent_model_shortcut(
@@ -1202,6 +1245,8 @@ startup_args = ["--search"]
         ),
         ('deepseek', 'deepseek-v4-pro', 'max', ()),
         ('deepseek', 'deepseek-v4-flash', 'off', ()),
+        ('dsh', 'deepseek-v4-flash', 'high', ()),
+        ('dsh', 'deepseek-v4-pro', 'max', ()),
     ],
 )
 def test_load_project_config_supports_static_agent_thinking_shortcut(
@@ -2013,6 +2058,113 @@ main = "agent1:codex, rich:codex"
         load_project_config(project_root)
 
 
+def test_load_project_config_supports_native_windows_shell_aliases(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(
+        'agents.config_loader_runtime.parsing_runtime.topology.is_native_windows',
+        lambda: True,
+    )
+    project_root = tmp_path / 'repo-native-shell-alias'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        """version = 2
+
+[windows]
+main = "agent1:codex, pwsh"
+shells = "powershell, bash, wincmd"
+""",
+    )
+
+    result = load_project_config(project_root)
+
+    assert set(result.config.agents) == {'agent1'}
+    assert result.config.windows[0].agent_names == ('agent1',)
+    assert result.config.windows[0].tool_names == ('pwsh',)
+    assert result.config.windows[1].agent_names == ()
+    assert result.config.windows[1].tool_names == ('powershell', 'bash', 'wincmd')
+    assert not ({'pwsh', 'powershell', 'bash', 'wincmd'} & set(result.config.agents))
+
+
+def test_native_windows_shell_aliases_launch_the_requested_shell() -> None:
+    from agents.models import (
+        is_layout_tool_alias,
+        is_native_windows_only_layout_tool_alias,
+        layout_tool_alias_command,
+    )
+
+    expected = {
+        'pwsh': 'exec pwsh',
+        'powershell': 'exec powershell',
+        'bash': 'exec bash',
+        'wincmd': 'exec cmd',
+    }
+    for alias, command in expected.items():
+        assert is_layout_tool_alias(alias)
+        assert is_native_windows_only_layout_tool_alias(alias)
+        assert layout_tool_alias_command(alias) == command
+    # `rich` stays platform-agnostic.
+    assert is_layout_tool_alias('rich')
+    assert not is_native_windows_only_layout_tool_alias('rich')
+
+
+@pytest.mark.parametrize('alias', ['pwsh', 'powershell', 'bash', 'wincmd'])
+def test_load_project_config_rejects_native_windows_shell_alias_off_native_windows(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    monkeypatch.setattr(
+        'agents.config_loader_runtime.parsing_runtime.topology.is_native_windows',
+        lambda: False,
+    )
+    project_root = tmp_path / f'repo-native-shell-off-{alias}'
+    config_path = project_root / '.ccb' / 'ccb.config'
+    _write(
+        config_path,
+        f"""version = 2
+
+[windows]
+main = "agent1:codex, {alias}"
+""",
+    )
+
+    with pytest.raises(
+        ConfigValidationError,
+        match=f"tool alias '{alias}' is only available on native Windows",
+    ):
+        load_project_config(project_root)
+
+
+@pytest.mark.parametrize('alias', ['pwsh', 'powershell', 'bash', 'wincmd'])
+def test_native_windows_shell_alias_with_provider_remains_an_agent_name(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    alias: str,
+) -> None:
+    monkeypatch.setattr(
+        'agents.config_loader_runtime.parsing_runtime.topology.is_native_windows',
+        lambda: False,
+    )
+    project_root = tmp_path / f'repo-native-shell-agent-{alias}'
+    _write(
+        project_root / '.ccb' / 'ccb.config',
+        f'''version = 2
+
+[windows]
+main = "{alias}:codex"
+''',
+    )
+
+    result = load_project_config(project_root)
+
+    assert set(result.config.agents) == {alias}
+    assert result.config.windows[0].agent_names == (alias,)
+    assert result.config.windows[0].tool_names == ()
+
+
 def test_load_project_config_tool_windows_affect_topology_identity(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-tool-window-identity'
     config_path = project_root / '.ccb' / 'ccb.config'
@@ -2387,6 +2539,7 @@ url = "https://api.example.test/v1"
     [
         ('codex', 'gpt-5.5', 'xhigh'),
         ('deepseek', 'deepseek-v4-flash', 'high'),
+        ('dsh', 'deepseek-v4-pro', 'max'),
     ],
 )
 def test_render_project_config_text_round_trips_static_thinking(
