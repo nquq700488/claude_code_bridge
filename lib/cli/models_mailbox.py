@@ -45,6 +45,7 @@ class ParsedPendCommand:
     count: int | None = None
     observer_mode: str = 'snapshot'
     detail: bool = False
+    timeout_s: float | None = None
     kind: str = 'pend'
 
 

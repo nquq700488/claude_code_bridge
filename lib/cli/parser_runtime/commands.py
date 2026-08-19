@@ -91,14 +91,15 @@ def parse_compact(tokens: list[str], *, project: str | None, error_type) -> Pars
 
 
 def parse_restart(tokens: list[str], *, project: str | None, error_type) -> ParsedRestartCommand:
-    if len(tokens) != 1:
-        raise error_type('restart requires exactly one <agent_name>')
-    agent_name = str(tokens[0]).strip()
-    if not agent_name:
-        raise error_type('restart requires exactly one <agent_name>')
-    if agent_name.lower() == 'all':
-        raise error_type('restart all is not supported; restart exactly one configured agent')
-    return ParsedRestartCommand(project=project, agent_name=agent_name)
+    parser = argparse.ArgumentParser(prog='ccb restart', add_help=False)
+    parser.add_argument('agent_names', nargs='*')
+    namespace = parse_args(parser, tokens, error_message='invalid restart command', error_type=error_type)
+    agent_names = tuple(str(item).strip() for item in namespace.agent_names if str(item).strip())
+    if 'all' in {item.lower() for item in agent_names} and len(agent_names) > 1:
+        raise error_type('restart target "all" cannot be combined with agent names')
+    if tuple(item.lower() for item in agent_names) == ('all',):
+        agent_names = ()
+    return ParsedRestartCommand(project=project, agent_names=agent_names)
 
 
 def parse_maintenance(tokens: list[str], *, project: str | None, error_type) -> ParsedMaintenanceCommand:
@@ -1083,9 +1084,12 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
     parser.add_argument('--inbox', action='store_true')
     parser.add_argument('--queue', action='store_true')
     parser.add_argument('--detail', action='store_true')
+    parser.add_argument('--timeout', dest='timeout_s', type=float)
     parser.add_argument('target')
     parser.add_argument('count', nargs='?')
     namespace = parse_args(parser, tokens, error_message='invalid pend command', error_type=error_type)
+    if namespace.timeout_s is not None and float(namespace.timeout_s) <= 0:
+        raise error_type('pend --timeout must be positive')
     selected_modes = [name for name in ('watch', 'inbox', 'queue') if bool(getattr(namespace, name))]
     if len(selected_modes) > 1:
         raise error_type('pend supports at most one observer mode: --watch, --inbox, or --queue')
@@ -1114,6 +1118,7 @@ def parse_pend(tokens: list[str], *, project: str | None, error_type) -> ParsedP
         count=count,
         observer_mode=observer_mode,
         detail=bool(namespace.detail),
+        timeout_s=float(namespace.timeout_s) if namespace.timeout_s is not None else None,
     )
 
 
