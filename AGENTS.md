@@ -2,24 +2,25 @@
 
 ## 项目 Agent 团队
 
-本项目（claude_code_bridge-6）使用 CCB 管理以下 5 个 AI Agent：
+本项目（claude_code_bridge-6）使用 CCB 管理以下 4 个 AI Agent：
 
 | Agent | Provider | 角色职责 |
 |-------|----------|----------|
 | `planner` | Codex | 方案设计 - 负责系统架构、技术选型、模块划分 |
-| `executor` | Codex | 核心开发 - 负责编码实现、功能开发、Bug 修复 |
-| `reviewer` | Claude | 代码审查 - 负责代码质量、潜在风险、最佳实践检查 |
-| `tester` | Kimi | 执行分析测试 - 负责命令执行、结果分析、回归测试 |
-| `inspiration` | OpenCode | 弹性协作 - 跳过发散视角、补充备选方案，或按被替代角色规范代执行 |
+| `developer` | Claude | 核心开发 - 负责编码实现、功能开发、Bug 修复 |
+| `reviewer` | Codex | 代码审查 - 负责代码质量、潜在风险、最佳实践检查 |
+| `tester` | Claude | 执行分析测试 - 负责命令执行、结果分析、回归测试 |
+
+> 定义见 `.ccb/ccb-compact.config`（`config_profile = "compact"`）与 `.ccb/ccb.config` 的 `[teams.team]`。
 
 分屏布局（tmux）：
 ```
 ┌───────────────┬───────────────┐
-│    planner    │  executor     │
-│    (codex)    │  (claude)     │
+│    planner    │   developer   │
+│    (codex)    │   (claude)    │
 ├───────────────┼───────────────┼
-│   reviewer    │   tester      │
-│   (codex)     │   (kimi)      │
+│   reviewer    │    tester     │
+│   (codex)     │   (claude)    │
 └───────────────┴───────────────┘
 ```
 
