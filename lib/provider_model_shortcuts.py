@@ -22,9 +22,17 @@ _PROVIDER_MODEL_RUNTIME_ENV = {
     'deepseek': 'DEEPCODE_MODEL',
 }
 
+# These providers select the model through their structured control plane
+# after startup rather than exposing a stable startup flag or environment key.
+_PROVIDER_MODEL_CONTROL_PLANE = {'dsh'}
+
 
 def supported_provider_model_shortcuts() -> tuple[str, ...]:
-    names = set(_PROVIDER_MODEL_FLAGS) | set(_PROVIDER_MODEL_RUNTIME_ENV)
+    names = (
+        set(_PROVIDER_MODEL_FLAGS)
+        | set(_PROVIDER_MODEL_RUNTIME_ENV)
+        | set(_PROVIDER_MODEL_CONTROL_PLANE)
+    )
     for name in custom_provider_names():
         wiring = custom_provider_wiring(name)
         if wiring is not None and (wiring.model_env or wiring.model_flag):
@@ -52,7 +60,11 @@ def provider_model_startup_args(provider: str, *, model: str) -> tuple[str, ...]
             return ()
         raise ValueError(f'custom provider {normalized} does not declare model wiring')
     flag = _PROVIDER_MODEL_STARTUP_FLAGS.get(normalized)
-    if flag is None and normalized not in _PROVIDER_MODEL_RUNTIME_ENV:
+    if (
+        flag is None
+        and normalized not in _PROVIDER_MODEL_RUNTIME_ENV
+        and normalized not in _PROVIDER_MODEL_CONTROL_PLANE
+    ):
         supported = ', '.join(supported_provider_model_shortcuts())
         raise ValueError(f'model shortcut is supported only for providers: {supported}')
     resolved_model = str(model or '').strip()

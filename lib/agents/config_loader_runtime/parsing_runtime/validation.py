@@ -49,6 +49,10 @@ _MAINTENANCE_HEARTBEAT_KEYS = {
     'job_repeat_interval_s',
     'job_terminal_notice_count',
 }
+# runtime.mux.backend —— 原生 Windows 后端声明（herdr/rmux），驱动 backend 选择与 launch_mode
+_RUNTIME_TOP_LEVEL_KEYS = {'mux'}
+_RUNTIME_MUX_KEYS = {'backend'}
+_ALLOWED_MUX_BACKENDS = {'herdr', 'rmux'}
 
 
 def validate_project_config(
@@ -85,7 +89,7 @@ def validate_project_config(
         document,
         project_root=resolved_project_root,
     )
-    _validate_document_shape(document)
+    _validate_document_shape(document, source_path=source_path)
     # 全局状态纪律：snapshot 覆盖整个 parse 过程——AgentSpec.__post_init__ 在
     # agents 解析时就会调 model shortcut，sync 必须先于 agents 解析；任何后续
     # 校验失败都必须 restore，wiring 不得残留半份状态。
@@ -101,6 +105,7 @@ def validate_project_config(
             config_teams = parse_teams_section(raw_teams)
         else:
             config_teams = {}
+        runtime_mux_backend = _parse_runtime_mux_backend(document)
         validate_config_ui_settings(document.get('config_ui'))
         windows = parse_topology_windows(document.get('windows'))
         tool_windows = parse_tool_windows(document.get('tool_windows'))
@@ -133,6 +138,7 @@ def validate_project_config(
             loop_capacity=loop_capacity,
             custom_providers=custom_providers,
             teams=config_teams,
+            runtime_mux_backend=runtime_mux_backend,
             source_path=source_path,
         )
     except Exception:
@@ -140,14 +146,50 @@ def validate_project_config(
         raise
 
 
-def _validate_document_shape(document: dict[str, Any]) -> None:
+def _validate_document_shape(document: dict[str, Any], *, source_path: Path | None = None) -> None:
     unknown_top = sorted(set(document) - ALLOWED_TOP_LEVEL_KEYS)
     if unknown_top:
+        location = f' at {source_path}' if source_path is not None else ''
         raise ConfigValidationError(
-            f'config contains unknown top-level fields: {", ".join(unknown_top)}'
+            f'config contains unknown top-level fields: {", ".join(unknown_top)}{location}'
         )
     if document.get('version') != 2:
         raise ConfigValidationError('version must be 2')
+
+
+def _parse_runtime_mux_backend(document: dict[str, Any]) -> str | None:
+    """解析 v2 顶层 `runtime.mux.backend`（原生 Windows 后端声明）。
+
+    白名单最小面：`runtime` 只接受 `mux`，`mux` 只接受 `backend`，其余 fail-closed。
+    backend ∈ {herdr, rmux}；rmux 后端未实现，fail-closed 提示。
+    """
+    raw_runtime = document.get('runtime')
+    if raw_runtime is None:
+        return None
+    runtime = expect_mapping(raw_runtime, field_name='runtime')
+    unknown = sorted(set(runtime) - _RUNTIME_TOP_LEVEL_KEYS)
+    if unknown:
+        raise ConfigValidationError(f'runtime contains unknown fields: {", ".join(unknown)}')
+    raw_mux = runtime.get('mux')
+    if raw_mux is None:
+        return None
+    mux = expect_mapping(raw_mux, field_name='runtime.mux')
+    unknown_mux = sorted(set(mux) - _RUNTIME_MUX_KEYS)
+    if unknown_mux:
+        raise ConfigValidationError(
+            f'runtime.mux contains unknown fields: {", ".join(unknown_mux)}'
+        )
+    backend = mux.get('backend')
+    if backend is None:
+        return None
+    if not isinstance(backend, str) or backend not in _ALLOWED_MUX_BACKENDS:
+        raise ConfigValidationError('runtime.mux.backend must be one of: herdr, rmux')
+    if backend == 'rmux':
+        # rmux backend 未实现（独立 epic）：schema 保留类型预留，但 fail-closed 提示
+        raise ConfigValidationError(
+            "runtime.mux.backend='rmux' requires rmux backend which is not implemented yet"
+        )
+    return backend
 
 
 def validate_config_ui_settings(value: object) -> dict[str, object]:
@@ -320,6 +362,7 @@ def _build_project_config(
     loop_capacity,
     custom_providers,
     teams: dict | None = None,
+    runtime_mux_backend: str | None,
     source_path: Path | None,
 ) -> ProjectConfig:
     try:
@@ -338,6 +381,7 @@ def _build_project_config(
             loop_capacity=loop_capacity,
             custom_providers=custom_providers,
             teams=teams or {},
+            runtime_mux_backend=runtime_mux_backend,
             source_path=str(source_path) if source_path else None,
             windows_explicit=windows is not None,
         )

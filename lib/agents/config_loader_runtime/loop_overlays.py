@@ -326,6 +326,7 @@ def _copy_config(
         workflow=config.workflow,
         custom_providers=config.custom_providers,
         teams=config.teams,
+        runtime_mux_backend=config.runtime_mux_backend,
     )
 
 

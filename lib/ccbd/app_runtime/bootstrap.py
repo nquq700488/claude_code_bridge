@@ -33,8 +33,10 @@ from provider_custom.factory import build_custom_backends
 from provider_execution.registry import build_default_execution_registry
 from provider_execution.service import ExecutionService
 from provider_execution.state_store import ExecutionStateStore
+from project_command_trust import require_project_command_approval
 from storage.paths import PathLayout
 from storage.text_artifacts import sweep_expired_text_artifacts
+from runtime_env.source_identity import current_source_runtime_identity
 
 from .handlers import register_handlers
 from .request_guard import lifecycle_is_stopping, rejection_for_request
@@ -70,6 +72,10 @@ def initialize_app(
     keeper_startup_checkpoint=None,
 ) -> None:
     app.project_root = Path(project_root).expanduser().resolve()
+    # ccbd is non-interactive and is the authority that materializes project
+    # commands.  Refuse unapproved repository-authored command fields before
+    # creating project identity/runtime state or publishing the service graph.
+    require_project_command_approval(app.project_root)
     app.project_id = ensure_project_identity(app.project_root).project_id
     app.paths = PathLayout(app.project_root)
     app.paths.ensure_runtime_state_root()
@@ -84,6 +90,7 @@ def initialize_app(
     keeper_pid = str(os.environ.get('CCB_KEEPER_PID') or '').strip()
     app.keeper_pid = int(keeper_pid) if keeper_pid.isdigit() and int(keeper_pid) > 0 else None
     app.daemon_instance_id = uuid.uuid4().hex
+    app.source_runtime_identity = current_source_runtime_identity()
     app.expected_startup_fence = expected_startup_fence
     app.keeper_startup_checkpoint = keeper_startup_checkpoint
     app.start_maintenance_lock = threading.Lock()

@@ -7,6 +7,7 @@ from ccbd.reload_apply import run_additive_reload_apply
 from ccbd.reload_apply_results import status_of
 from ccbd.reload_drain_status import reload_drain_status_payload
 from ccbd.reload_plan import build_invalid_reload_dry_run_plan, build_reload_dry_run_plan
+from project_command_trust import require_project_command_approval
 from provider_core.catalog import build_default_provider_catalog
 from provider_custom.factory import build_custom_backends
 from provider_custom.wiring import (
@@ -40,6 +41,7 @@ def build_project_reload_config_handler(app, current_graph_fn):
                 if not config_path.is_file():
                     raise FileNotFoundError(f'project config not found: {config_path}')
                 new_config = load_project_config(app.project_root).config
+                require_project_command_approval(app.project_root)
             except Exception as exc:
                 plan = build_invalid_reload_dry_run_plan(
                     graph.config,

@@ -16,10 +16,15 @@ Date: 2026-06-13
 | `crush` | `crush` | `CRUSH_START_CMD` |
 | `pi` | `pi` | `PI_START_CMD` |
 | `grok` | `grok` | `GROK_START_CMD` |
+| `dsh` | `dsh` | `DSH_START_CMD` |
 
 The `deepseek` provider key follows user intent and model family language; the
 actual CLI command remains `deepcode` because that is the DeepSeek documented
 terminal integration.
+
+The separate `dsh` key is the official DeepSeek Harness. It is service-backed:
+the executable starts `dsh web`, while CCB uses the structured loopback Web
+carrier for requests and native events.
 
 The `cursor` provider key follows product naming; the default executable is
 `agent` because that is what the official Cursor Agent installer exposes.
@@ -47,13 +52,18 @@ These providers enter CCB as optional built-in managed providers:
 
 Most next-wave runtimes split visible pane startup from ask execution:
 
-- `qwen`, `copilot`, `cursor`, and `grok` use per-job subprocess
+- `qwen`, `copilot`, and `grok` use per-job subprocess
   execution with JSONL/stream-json parsing.
 - `crush` and `kiro` use per-job subprocess execution with process exit plus
   stdout as the completion signal.
 - Visible panes still use simple tmux launchers for user observation and
   runtime maintenance.
-- Pi is the deliberate exception: new asks execute in its managed visible
+- Cursor is a deliberate exception: new asks execute in the exact managed
+  visible pane, defer until stable idle, bind to an exact request anchor in a
+  top-level transcript, and terminalize only from the bound turn's
+  `turn_ended`. The earlier structured subprocess is an explicit headless
+  rollback path.
+- Pi is also a deliberate exception: new asks execute in its managed visible
   pane and an official Pi extension writes exact-request lifecycle evidence.
   The earlier per-job structured subprocess remains the explicit headless
   rollback and persisted `pi_run` compatibility path.
@@ -70,6 +80,11 @@ Most next-wave runtimes split visible pane startup from ask execution:
 - Existing partial backend directories for `qwen` and `copilot` have been
   upgraded to modern backend shape before registration:
   `manifest.py`, `launcher.py`, `execution.py`, and tests.
+- DSH is not part of the shared interactive native-CLI execution shape. The
+  current POSIX launcher may carry its signal-forwarding Web host wrapper in a
+  managed pane, but job submission and completion use HTTP/WebSocket only.
+  This avoids claiming a headless service supervisor that the mounted-runtime
+  lifecycle does not yet implement.
 
 ## Kimi Restart Session Authority
 
@@ -120,7 +135,10 @@ result streams:
    is ready-gated: CCB defers the prompt while the Antigravity pane is busy,
    sends only after an empty input prompt is observed, diagnoses native
    coalesced `CCB_REQ_ID` rows, and uses stable pane fallback only when
-   transcript persistence lags.
+   transcript persistence lags. Before launch, CCB refreshes AGY's own recent
+   keyring-failure marker inside the managed HOME so the public `1.1.13` CLI
+   selects file token storage immediately; no AGY storage setting is exported
+   to other providers or written into the source user HOME.
 7. MiMo asks run as native subprocesses using
    `mimo run --format json --dir <workdir>`. CCB emits `ASSISTANT_FINAL` from
    nested `part.text` events and emits `TURN_BOUNDARY` / terminal completed on
@@ -131,8 +149,10 @@ result streams:
    deterministic UUID session id. Only a non-error native `result` envelope
    with a normal stop reason completes the job; auth/error envelopes and a
    clean exit without `result` fail closed.
-10. Cursor asks parse `agent --print --output-format stream-json` envelopes and
-   terminalize from final result/completion events.
+10. Cursor asks execute in the named visible pane, bind the exact request
+   anchor in a top-level Cursor transcript, and terminalize only from a later
+   matching `turn_ended`. `agent --print --output-format stream-json` remains
+   the explicit headless rollback mode.
 11. Copilot asks parse `--output-format json` JSONL in prompt mode and
    terminalize from the final prompt-mode result event.
 11. Crush asks collect stdout from `crush run --quiet` and trust process exit;
@@ -151,9 +171,16 @@ result streams:
    assistant/result envelopes and JSON-RPC style `session/update`
    `agent_message_chunk` events, terminalizing from native stop/end events or
    process exit with captured reply text.
-15. Completed-native-empty replies are `incomplete` with
+15. DSH asks open the native event WebSocket first, submit with the CCB job id
+   as `session.prompt` RPC id, bind the exact durable
+   `user/message.source.rpcId`, and complete only from a committed non-empty
+   same-turn assistant reply plus `turn/end(completed)`. Every other native
+   terminal, missing anchor, malformed event, empty reply, process exit, and
+   timeout fails closed. Restore observes the same persisted RPC without
+   reposting.
+16. Completed-native-empty replies are `incomplete` with
    `empty_provider_reply` diagnostics, not `completed`.
-16. Long-running native CLI subprocesses terminalize with explicit
+17. Long-running native CLI subprocesses terminalize with explicit
    provider-specific timeout reasons such as `qwen_run_timeout` and terminate
    the child process group instead of waiting only for the outer reliability
    fallback.
@@ -215,6 +242,10 @@ Current behavior:
   docs. The first CCB slice uses prompt wrapping plus managed `HOME`; richer
   Grok skill/plugin projection should be designed only after a local contract
   is verified.
+- DSH receives optional user skills, Role skills, and required CCB control
+  skills through its native `$DSH_HOME/skills` surface. Its generated CCB
+  memory bundle uses `$DSH_HOME/AGENTS.md`; session/cache trees are not copied
+  from the user's source home.
 - `inherit_skills = false` disables inherited skill projection. For OpenCode,
   `inherit_memory = false` disables only the memory bridge; inherited ask
   instructions continue unless `inherit_skills = false` is also set.
@@ -241,7 +272,7 @@ Next-wave provider config:
 
 ```toml
 [windows]
-main = "qwen1:qwen, cursor1:cursor, copilot1:copilot, crush1:crush, grok1:grok, kiro1:kiro, pi1:pi"
+main = "qwen1:qwen, cursor1:cursor, copilot1:copilot, crush1:crush, grok1:grok, kiro1:kiro, pi1:pi, research:dsh"
 
 [agents.qwen1]
 provider = "qwen"
@@ -263,7 +294,17 @@ provider = "kiro"
 
 [agents.pi1]
 provider = "pi"
+
+[agents.research]
+provider = "dsh"
+model = "deepseek-v4-flash"
+thinking = "high"
 ```
+
+DSH supports `key`/`url` shortcuts through `DEEPSEEK_API_KEY` and
+`DEEPSEEK_BASE_URL`. It also honors inherited user-owned DSH credentials and
+API route according to provider-profile inheritance policy; CCB never obtains
+credentials.
 
 Not supported in first slice:
 
@@ -307,7 +348,10 @@ Focused unit tests should cover:
   modern manifest/launcher/execution contracts while old protocol helpers
   remain only for compatibility tests.
 - Qwen parser handles `stream-json` assistant and result envelopes.
-- Cursor parser handles `agent --print --output-format stream-json` envelopes.
+- Cursor defaults to visible-pane execution, waits for stable idle, dispatches
+  once, excludes stale/subagent transcripts, binds the exact request anchor,
+  and requires a matching `turn_ended`; its headless rollback parser still
+  handles `agent --print --output-format stream-json` envelopes.
 - Copilot parser handles prompt-mode JSONL output.
 - Crush execution treats nonzero exit as failure and zero exit/stdout as
   completion, with empty stdout producing an empty-reply diagnostic.
@@ -320,6 +364,11 @@ Focused unit tests should cover:
 - Crush visible pane launch includes `--data-dir <provider-state>/data`.
 - Native CLI provider-state classification covers session/cache/projected skill
   evidence for Qwen, Cursor, Copilot, Crush, Grok, Kiro, and Pi.
+- DSH tests cover service launch without prompt input, loopback endpoint
+  validation, exact RPC/turn completion, every native failure terminal,
+  empty/reasoning-only output, process exit without native terminal,
+  observer-only resume, native clear/compact control, managed home/authority,
+  config UI, updater, and storage classification.
 
 Source-runtime validation should run from `/home/bfly/yunwei/test_ccb2` using
 `/home/bfly/yunwei/ccb_source/ccb_test` and isolated source home. Real CLI

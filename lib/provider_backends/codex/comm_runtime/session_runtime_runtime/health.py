@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from provider_backends.codex.runtime_artifacts import _bridge_socket_path
+from provider_core.transport import endpoint_for_fifo_path
 
 
 def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[bool, str]:
@@ -30,11 +31,11 @@ def check_tmux_runtime_health(*, runtime_dir: Path, input_fifo: Path) -> tuple[b
     if not healthy:
         return healthy, status
 
-    # Dual-track health check: socket or FIFO.
+    # Dual-track health check: socket or FIFO (FIFO 经 endpoint 映射以兼容 Windows).
     bridge_socket = _bridge_socket_path(runtime_dir)
     if bridge_socket.exists():
         return True, "Session healthy (socket)"
-    if input_fifo.exists():
+    if endpoint_for_fifo_path(input_fifo).exists():
         return True, "Session healthy (fifo)"
     return False, "Communication pipe does not exist"
 

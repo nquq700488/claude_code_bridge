@@ -189,6 +189,7 @@ def test_provider_home_classifier_preserves_secret_precedence_and_unknowns(tmp_p
         ('kiro', ('data', 'kiro-cli', 'data.sqlite3')),
         ('mimo', ('.mimocode', 'token.json')),
         ('opencode', ('data', 'opencode', 'account.json')),
+        ('omp', ('.omp', 'agent', 'agent.db')),
         ('crush', ('data', 'providers.json')),
         ('zai', ('.zai', 'user-settings.json')),
     ),
@@ -205,6 +206,39 @@ def test_auth_bearing_mixed_provider_files_are_secret(
         f'agents/agent1/provider-state/{provider}/home/{"/".join(remainder)}',
         provider,
         'agent1',
+        remainder,
+        size=3,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == 'secret'
+    assert entry.reason == 'provider_mixed_auth_state'
+
+
+@pytest.mark.parametrize(
+    'name',
+    (
+        'agent.db-wal',
+        'agent.db-shm',
+        'config.yml',
+        'config.yaml',
+        'models.yml',
+        'models.yaml',
+        'models.json',
+        'oauth.json',
+        'settings.json',
+    ),
+)
+def test_omp_auth_capable_projection_files_are_secret(
+    tmp_path: Path,
+    name: str,
+) -> None:
+    remainder = ('.omp', 'agent', name)
+    entry = classify_provider_home(
+        tmp_path.joinpath(*remainder),
+        f'agents/omp1/provider-state/omp/home/{"/".join(remainder)}',
+        'omp',
+        'omp1',
         remainder,
         size=3,
         root_kind='project',
@@ -268,6 +302,37 @@ def test_qoder_config_skills_are_projected(
 
     assert entry.storage_class.value == 'projected_config'
     assert entry.reason == 'qoder_skill_projection'
+
+
+@pytest.mark.parametrize(
+    ('remainder', 'storage_class'),
+    (
+        (('.credentials.yaml',), 'secret'),
+        (('.env',), 'secret'),
+        (('settings.yaml',), 'projected_config'),
+        (('AGENTS.md',), 'projected_config'),
+        (('skills', 'ask', 'SKILL.md'), 'projected_config'),
+        (('sessions', 'session-1.jsonl'), 'session'),
+        (('.cache', 'catalog.json'), 'rebuildable_cache'),
+    ),
+)
+def test_dsh_managed_home_storage_boundaries(
+    tmp_path: Path,
+    remainder: tuple[str, ...],
+    storage_class: str,
+) -> None:
+    path = tmp_path.joinpath(*remainder)
+    entry = classify_provider_home(
+        path,
+        f'agents/dsh1/provider-state/dsh/home/{"/".join(remainder)}',
+        'dsh',
+        'dsh1',
+        remainder,
+        size=3,
+        root_kind='project',
+    )
+
+    assert entry.storage_class.value == storage_class
 
 
 def test_storage_classification_keeps_provider_authority_and_cache_separate(tmp_path: Path) -> None:

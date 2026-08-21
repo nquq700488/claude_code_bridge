@@ -984,7 +984,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_optional_tree_
     )
 
     assert not (target_home / 'skills.ccb-projection.json').exists()
-    for skill_name in ('ask', 'ccb-clear', 'ccb-diagnose', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
         assert (target_home / 'skills' / f'{skill_name}.ccb-projection.json').is_file()
     assert (source_skills / 'broken-role-skill').is_symlink()
@@ -1009,7 +1009,7 @@ def test_materialize_codex_home_config_keeps_required_skills_when_inheritance_is
     )
 
     assert not (target_home / 'skills' / 'optional').exists()
-    for skill_name in ('ask', 'ccb-clear', 'ccb-diagnose', 'reconnect'):
+    for skill_name in ('ask', 'ccb-clear', 'ccb-compact', 'ccb-diagnose', 'reconnect'):
         assert (target_home / 'skills' / skill_name / 'SKILL.md').is_file()
 
 
@@ -2457,6 +2457,78 @@ def test_materialize_claude_home_config_preserves_explicit_api_key_kind(tmp_path
     assert trust['customApiKeyResponses']['approved'] == ['system-api-key']
 
 
+def test_materialize_claude_home_config_drops_inherited_base_url_when_profile_sets_its_own(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_AUTH_TOKEN': 'system-token',
+                    'ANTHROPIC_BASE_URL': 'https://system.example.test',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    profile = ProviderProfileSpec(
+        env={
+            'ANTHROPIC_AUTH_TOKEN': 'agent-token',
+            'ANTHROPIC_BASE_URL': 'https://agent.example.test',
+        },
+    )
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home, profile=profile)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'ANTHROPIC_BASE_URL' not in payload.get('env', {})
+    assert 'ANTHROPIC_AUTH_TOKEN' not in payload.get('env', {})
+    assert payload.get('theme') == 'light'
+
+
+def test_materialize_claude_home_config_drops_inherited_env_when_agent_sets_its_own(
+    tmp_path: Path,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_settings = source_home / '.claude' / 'settings.json'
+    source_settings.parent.mkdir(parents=True, exist_ok=True)
+    source_settings.write_text(
+        json.dumps(
+            {
+                'env': {
+                    'ANTHROPIC_MODEL': 'deepseek-v4-pro[1M]',
+                    'ANTHROPIC_DEFAULT_OPUS_MODEL': 'deepseek-v4-pro[1M]',
+                    'MCP_TIMEOUT': '30000',
+                },
+                'theme': 'light',
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding='utf-8',
+    )
+    extra_env = {
+        'ANTHROPIC_MODEL': 'claude-opus-4-8[1M]',
+        'ANTHROPIC_DEFAULT_OPUS_MODEL': 'claude-opus-4-8[1M]',
+    }
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home, extra_env=extra_env)
+
+    payload = json.loads(layout.settings_path.read_text(encoding='utf-8'))
+    assert 'ANTHROPIC_MODEL' not in payload.get('env', {})
+    assert 'ANTHROPIC_DEFAULT_OPUS_MODEL' not in payload.get('env', {})
+    assert payload.get('env', {}).get('MCP_TIMEOUT') == '30000'
+    assert payload.get('theme') == 'light'
+
+
 def test_materialize_claude_home_config_projects_official_login_auth_into_managed_home(
     monkeypatch,
     tmp_path: Path,
@@ -2851,6 +2923,204 @@ def test_materialize_claude_home_config_projects_macos_keychain_login_auth(
     )
 
 
+def test_materialize_claude_home_config_refreshes_existing_macos_keychain_after_source_relogin(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    source_refresh = 'source-refresh-1'
+    managed_refresh: str | None = None
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def credential_payload(refresh_token: str) -> dict[str, object]:
+        return {'claudeAiOauth': {'refreshToken': refresh_token}}
+
+    def fake_run(argv, **_kwargs):
+        nonlocal managed_refresh
+        call = [str(part) for part in argv]
+        calls.append(call)
+        command = call[1]
+        service = call[call.index('-s') + 1]
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            return Result(0, json.dumps(credential_payload(source_refresh)))
+        if command == 'find-generic-password':
+            if managed_refresh is None:
+                return Result(44)
+            return Result(0, json.dumps(credential_payload(managed_refresh)))
+        if command == 'add-generic-password':
+            stored = json.loads(call[call.index('-w') + 1])
+            managed_refresh = stored['claudeAiOauth']['refreshToken']
+            return Result(0)
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    managed_service = claude_home_runtime._managed_macos_keychain_service(layout)
+    assert managed_refresh == 'source-refresh-1'
+
+    calls.clear()
+    source_refresh = 'source-refresh-2'
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
+    assert payload['claudeAiOauth']['refreshToken'] == 'source-refresh-2'
+    assert managed_refresh == 'source-refresh-2'
+    updates = [
+        call
+        for call in calls
+        if call[1] == 'add-generic-password'
+    ]
+    assert len(updates) == 1
+    assert '-U' in updates[0]
+    assert updates[0][updates[0].index('-s') + 1] == managed_service
+    assert not any(
+        call[1] in {'add-generic-password', 'delete-generic-password'}
+        and call[call.index('-s') + 1] == 'Claude Code-credentials'
+        for call in calls
+    )
+
+
+def test_materialize_claude_home_config_preserves_private_macos_keychain_refresh_when_source_is_unchanged(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    source_refresh = 'source-refresh'
+    managed_refresh: str | None = None
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def credential_payload(refresh_token: str) -> dict[str, object]:
+        return {'claudeAiOauth': {'refreshToken': refresh_token}}
+
+    def fake_run(argv, **_kwargs):
+        nonlocal managed_refresh
+        call = [str(part) for part in argv]
+        calls.append(call)
+        command = call[1]
+        service = call[call.index('-s') + 1]
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            return Result(0, json.dumps(credential_payload(source_refresh)))
+        if command == 'find-generic-password':
+            if managed_refresh is None:
+                return Result(44)
+            return Result(0, json.dumps(credential_payload(managed_refresh)))
+        if command == 'add-generic-password':
+            stored = json.loads(call[call.index('-w') + 1])
+            managed_refresh = stored['claudeAiOauth']['refreshToken']
+            return Result(0)
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+    assert managed_refresh == source_refresh
+
+    managed_refresh = 'managed-refresh'
+    calls.clear()
+    materialize_claude_home_config(target_home, source_home=source_home)
+
+    payload = json.loads(layout.credentials_path.read_text(encoding='utf-8'))
+    assert payload['claudeAiOauth']['refreshToken'] == source_refresh
+    assert managed_refresh == 'managed-refresh'
+    assert not any(call[1] == 'add-generic-password' for call in calls)
+
+
+def test_materialize_claude_home_config_does_not_follow_owned_credentials_symlink_during_keychain_refresh(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    external_credentials = tmp_path / 'external-credentials.json'
+    source_home.mkdir(parents=True)
+    target_credentials = target_home / '.claude' / '.credentials.json'
+    target_credentials.parent.mkdir(parents=True)
+    external_credentials.write_text(
+        '{"claudeAiOauth":{"refreshToken":"external-untouched"}}\n',
+        encoding='utf-8',
+    )
+    target_credentials.symlink_to(external_credentials)
+    (target_home / '.ccb-auth-projection.json').write_text(
+        json.dumps(
+            {
+                'schema_version': 1,
+                'record_type': 'ccb_claude_auth_projection',
+                'status': 'inherited_auth',
+                'source_home': str(source_home),
+                'projected_files': ['.claude/.credentials.json'],
+                'projected_env_keys': [],
+            }
+        ),
+        encoding='utf-8',
+    )
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def fake_run(argv, **_kwargs):
+        call = [str(part) for part in argv]
+        calls.append(call)
+        command = call[1]
+        service = call[call.index('-s') + 1]
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            return Result(
+                0,
+                json.dumps({'claudeAiOauth': {'refreshToken': 'source-refresh'}}),
+            )
+        if command == 'find-generic-password':
+            return Result(
+                0,
+                json.dumps({'claudeAiOauth': {'refreshToken': 'managed-stale'}}),
+            )
+        if command == 'add-generic-password':
+            return Result(0)
+        return Result(44)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    layout = materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert layout.credentials_path.is_file()
+    assert not layout.credentials_path.is_symlink()
+    assert json.loads(layout.credentials_path.read_text(encoding='utf-8')) == {
+        'claudeAiOauth': {'refreshToken': 'source-refresh'}
+    }
+    assert json.loads(external_credentials.read_text(encoding='utf-8')) == {
+        'claudeAiOauth': {'refreshToken': 'external-untouched'}
+    }
+    assert any(call[1] == 'add-generic-password' and '-U' in call for call in calls)
+
+
 def test_materialize_claude_home_config_observes_macos_keychain_logout(
     tmp_path: Path,
     monkeypatch,
@@ -2958,6 +3228,46 @@ def test_materialize_claude_home_config_keychain_error_preserves_projection(
         materialize_claude_home_config(target_home, source_home=source_home)
 
     assert layout.credentials_path.read_bytes() == projected
+
+
+def test_materialize_claude_home_config_private_keychain_inspection_error_fails_closed(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    source_home = tmp_path / 'system-home'
+    target_home = tmp_path / 'managed-home'
+    source_home.mkdir(parents=True)
+    calls: list[list[str]] = []
+
+    class Result:
+        def __init__(self, returncode: int, stdout: str = '') -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ''
+
+    def fake_run(argv, **_kwargs):
+        call = [str(part) for part in argv]
+        calls.append(call)
+        command = call[1]
+        service = call[call.index('-s') + 1]
+        if command == 'find-generic-password' and service == 'Claude Code-credentials':
+            return Result(
+                0,
+                json.dumps({'claudeAiOauth': {'refreshToken': 'source-refresh'}}),
+            )
+        if command == 'find-generic-password':
+            return Result(36)
+        return Result(0)
+
+    monkeypatch.setattr(claude_home_runtime.platform, 'system', lambda: 'Darwin')
+    monkeypatch.setattr(claude_home_runtime.shutil, 'which', lambda name: '/usr/bin/security')
+    monkeypatch.setattr(claude_home_runtime.subprocess, 'run', fake_run)
+    monkeypatch.setenv('USER', 'mac-user')
+
+    with pytest.raises(RuntimeError, match='cannot inspect agent-private Claude Keychain login'):
+        materialize_claude_home_config(target_home, source_home=source_home)
+
+    assert not any(call[1] == 'add-generic-password' for call in calls)
 
 
 def test_materialize_claude_home_config_does_not_project_macos_keychain_preferences(
@@ -3461,6 +3771,7 @@ def test_materialize_claude_home_config_projects_inherited_skills_and_commands(t
 
     assert 'name: ask' in (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'commands' / 'ask.md').read_text(encoding='utf-8') == 'ask command\n'
     assert (layout.claude_dir / 'skills' / 'ask.ccb-projection.json').is_file()
     assert (layout.claude_dir / 'commands.ccb-projection.json').is_file()
@@ -3623,6 +3934,7 @@ def test_materialize_droid_home_config_projects_inherited_skills(tmp_path: Path)
     assert (target_home / 'sessions').is_dir()
     assert 'name: ask' in (target_home / 'skills' / 'ask' / 'SKILL.md').read_text(encoding='utf-8')
     assert (target_home / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (target_home / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     assert (target_home / 'skills' / 'ask.ccb-projection.json').is_file()
 
 
@@ -4137,6 +4449,7 @@ def test_materialize_claude_home_config_respects_inherit_skills_without_disablin
     assert not (layout.claude_dir / 'skills' / 'review').exists()
     assert (layout.claude_dir / 'skills' / 'ask' / 'SKILL.md').is_file()
     assert (layout.claude_dir / 'skills' / 'ccb-clear' / 'SKILL.md').is_file()
+    assert (layout.claude_dir / 'skills' / 'ccb-compact' / 'SKILL.md').is_file()
     memory_text = (layout.claude_dir / 'CLAUDE.md').read_text(encoding='utf-8')
     assert '# CCB Managed Agent Memory' in memory_text
     assert 'claude-md' in memory_text

@@ -43,6 +43,7 @@ class ProjectConfig:
     windows_explicit: bool | None = None
     maintenance_heartbeat: MaintenanceHeartbeatConfig | None = None
     loop_capacity: LoopCapacityConfig | None = None
+    runtime_mux_backend: str | None = None
     workflow: WorkflowConfig | None = None
     custom_providers: dict[str, CustomProviderSpec] = field(default_factory=dict)
     teams: dict[str, object] = field(default_factory=dict)
@@ -157,6 +158,8 @@ class ProjectConfig:
             }
         if self.teams:
             payload['teams'] = {name: spec.to_record() for name, spec in self.teams.items()}
+        if self.runtime_mux_backend is not None:
+            payload['runtime'] = {'mux': {'backend': self.runtime_mux_backend}}
         if self.workflow is not None:
             payload['workflow'] = self.workflow.to_record()
         return payload

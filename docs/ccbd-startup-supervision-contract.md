@@ -35,6 +35,10 @@ Managed Claude conversation isolation rules live in [docs/claude-session-isolati
 Common provider asset projection and effective-root rules live in
 [docs/provider-asset-projection-contract.md](/home/bfly/yunwei/ccb_source/docs/provider-asset-projection-contract.md).
 
+Official DeepSeek Harness service, session, transport, completion, and context
+control rules live in
+[docs/dsh-service-provider-contract.md](/home/bfly/yunwei/ccb_source/docs/dsh-service-provider-contract.md).
+
 ## 2. Problem Statement
 
 The current codebase already contains pieces of the required behavior:
@@ -164,6 +168,13 @@ Out of scope:
 - `.ccb/ccb.config` is the highest-priority forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When `.ccb/ccb.config` is absent, `~/.ccb/ccb.config` is the user-level forward authority for the project's desired agent mount set and foreground layout when it exists.
 - When both files are absent, the built-in default config is the forward authority for the desired agent mount set and foreground layout.
+- Before CLI startup performs provider/backend probing, it must inspect the two
+  project-local executable config fields defined by the layout contract and
+  obtain a matching user-state approval in an interactive terminal. ccbd is a
+  non-interactive enforcement boundary: bootstrap must reject missing or stale
+  approval before publishing runtime state or materializing the service graph.
+  Reload and the final tool/provider shell execution sinks must re-check the
+  exact current authority to close config-to-execution races.
 - The built-in default desired set contains exactly one `demo` agent in the
   `main` window. Its provider is the first locally available supported CLI in
   built-in priority order (`codex`, `claude`, `gemini`, then optional
@@ -251,6 +262,9 @@ Rules:
   - helper manifests and runtime records may define ownership for cleanup and restart purposes
   - runtime authority and helper ownership must be written from the same agent-authority update path; later outer-layer field patching must not leave helper ownership on an older daemon/runtime generation
   - helper pids, detached parents, or process names alone are evidence only
+  - the managed DSH Web host is a slot-owned service process; its current pane
+    is only the POSIX lifecycle/log carrier, while the loopback endpoint record
+    and native DSH session/RPC events provide transport and completion evidence
   - a managed Codex app-server used by the visible TUI is a child of the
     slot-owned Codex bridge process group; its socket and pid live only in that
     agent's provider-runtime directory
@@ -474,9 +488,19 @@ Managed provider startup mutation rules:
   successful semantic completion must still wait for process exit and output
   closure, and zero exit without the required native event closes as
   `incomplete` rather than completed. Older event shapes fail closed.
+- managed DSH startup launches the official `dsh web` profile on an
+  ephemeral loopback port through a signal-forwarding host wrapper. The
+  current POSIX implementation may place that wrapper in the assigned pane,
+  but it must never submit prompts, parse replies, infer quiet completion, or
+  turn process exit into success from pane state. DSH asks use HTTP/WebSocket
+  session RPC and exact native `source.rpcId` plus same-turn
+  `assistant/message` and `turn/end(completed)` evidence as defined by
+  `docs/dsh-service-provider-contract.md`. Any future non-pane service
+  supervisor must preserve project ownership, restart, shutdown, diagnostics,
+  and zero-orphan guarantees before replacing this carrier.
 - managed Qoder and Qoder CLI CN startup must resolve the final explicit or
   managed `--config-dir` before projecting skills; optional system skills, Role
-  skills, and packaged `ask`/`ccb-clear`/`ccb-diagnose` controls
+  skills, and packaged `ask`/`ccb-clear`/`ccb-compact`/`ccb-diagnose` controls
   target that same effective root for both visible and headless execution. The
   released provider key
   `qoderclicn` remains stable. An explicit config root equal to the source
@@ -485,7 +509,12 @@ Managed provider startup mutation rules:
 - managed AGY must use private agent-local `.gemini` and `.antigravity`
   directories. It may copy allowlisted authentication/config files from the
   user's Windows provider home, but it must not symlink or junction either
-  managed directory back to that source.
+  managed directory back to that source. Before every launch, CCB must safely
+  refresh AGY's provider-recognized
+  `.gemini/antigravity-cli/cache/antigravity-keyring-unavailable` marker inside
+  that private home so AGY selects file token storage without first waiting on
+  the OS keyring. This marker must not be injected globally, placed in the
+  source home, or shared with any other provider.
 - managed Droid must set the OS `HOME` and `FACTORY_HOME_OVERRIDE` to
   `.ccb/agents/<agent>/provider-state/droid/home/`, set `FACTORY_HOME` to its
   `.factory/` child, and set `FACTORY_DISABLE_KEYRING=true`; known v2 keyring
@@ -493,8 +522,15 @@ Managed provider startup mutation rules:
   `auth.v2.key`
 - managed Cursor must set `AGENT_CLI_CREDENTIAL_STORE=file`; on macOS it may
   read Cursor's split token services and create only the private
-  `<managed-home>/.cursor/auth.json`. Managed Copilot must set
-  `COPILOT_DISABLE_KEYTAR=1`.
+  `<managed-home>/.cursor/auth.json`. New Cursor asks execute in the exact
+  managed visible pane by default so configured startup/model arguments and
+  pane continuity remain authoritative. CCB defers delivery until the pane is
+  stably idle, binds the turn to an exact `CCB_REQ_ID` in a top-level Cursor
+  transcript under that managed home, and completes only from a later matching
+  `turn_ended` record; stale and subagent transcripts are not terminal
+  authority. `CCB_CURSOR_EXECUTION_MODE=headless` is the explicit rollback
+  path, and interrupted pane jobs remain resubmit-required. Managed Copilot
+  must set `COPILOT_DISABLE_KEYTAR=1`.
 - managed Kiro may snapshot the known source SQLite database only through a
   read-only connection and retain only auth/config tables. Kiro must fail
   closed on macOS while its current CLI exposes no private credential-store
@@ -667,12 +703,16 @@ Lifecycle startup mutation rules:
   Delayed shutdown finalization must confirm that the same project still has a
   live shutdown intent and remains stopped; it is a no-op after a later start
   has cleared the intent or published a running transaction
-- keeper readiness accepts a child only when the ping comes from the exact
-  spawned PID and daemon instance and the response independently reports the
-  expected lease generation plus a matching `mounted/running` lifecycle,
-  startup id, and mounted startup stage.  The ping itself is linearly ordered
-  after the final publication gate opens; serving-process memory or a mounted
-  file observed while that gate is held is not sufficient authority
+- keeper readiness accepts a child only when the ping reports a positive
+  serving PID and a non-empty daemon instance and independently proves the
+  expected startup id and lease/lifecycle generation plus a matching
+  `mounted/running` lifecycle and mounted startup stage. The serving PID need
+  not equal the immediate `Popen.pid`: a Windows venv launcher or another
+  process wrapper may re-exec the daemon under a different PID. The startup
+  transaction identity and generation fences remain authoritative. The ping
+  itself is linearly ordered after the final publication gate opens; serving-
+  process memory or a mounted file observed while that gate is held is not
+  sufficient authority
 - if readiness waiting fails or times out, keeper must terminate and reap only
   the independently spawned child process group before recording the failed
   attempt; a late child must not remain able to publish authority
@@ -925,7 +965,7 @@ Project namespace compatibility:
 - project-namespace bootstrap must create the authoritative silent-placeholder session as its first tmux mutation:
   - startup must not issue a standalone `start-server` before `new-session`, because a tmux server with no session may exit immediately
   - `new-session` must establish the server and authoritative project session in one operation
-  - CCB-managed tmux policy that may require a live server/session, such as `destroy-unattached off`, `mouse on`, `history-limit 50000`, `set-clipboard on`, `allow-passthrough on`, `mode-keys vi`, vi copy-mode bindings, and Vim-style pane focus/resize bindings, must be applied only after the authoritative project session exists
+  - CCB-managed tmux policy that may require a live server/session, such as `destroy-unattached off`, `mouse on`, `history-limit 10000` (overridable with `CCB_TMUX_HISTORY_LIMIT`), `set-clipboard on`, `allow-passthrough on`, `mode-keys vi`, vi copy-mode bindings, and Vim-style pane focus/resize bindings, must be applied only after the authoritative project session exists
   - tmux environment synchronization must preserve terminal/media capability signals including `TERM`, `TERM_PROGRAM`, `TERM_PROGRAM_VERSION`, WezTerm/Kitty image-protocol identifiers, and CCB rich-workbench variables such as `CCB_WORKBENCH_TERMINAL_PROGRAM`, so CCB-owned tool panes can make the same rich-media decision as the foreground launcher
 - project-owned pane mutation commands, including `respawn-pane` used by `cmd` bootstrap and pane-backed runtime launch/relaunch, must use the same shared tmux ready-retry budget as namespace create/reflow rather than a separate shorter timeout
 - namespace session liveness on the project-owned tmux socket must treat `can't find session`, `no server running on <project socket>`, and a missing project socket reported as `error connecting ... (No such file or directory)` as "namespace absent" for create/recreate decisions; startup must not fail that path as a generic tmux inspect error
@@ -933,6 +973,14 @@ Project namespace compatibility:
 - `cmd` bootstrap must directly `exec` the resolved user shell and must not depend on shell-language-specific inline bootstrap snippets that assume the wrapper shell is POSIX-compatible
 - `cmd`-anchored projects must treat exact project-namespace pane membership as the reuse gate for pane-backed bindings
 - provider-specific live runtime identity proof may further narrow that reuse gate
+- a persisted resolved Provider profile further narrows binding reuse:
+  - if its provider, Agent identity, normalized explicit runtime home, API/env
+    authority, MCP/plugin projection, inheritance flags, inherited-skill
+    filters, or skill overlays differ from the current desired profile,
+    startup must reject the reused binding and run normal managed Provider
+    preparation before relaunch
+  - rejecting a binding for profile drift must preserve restore policy and
+    conversation history; it is not conversation clear authority
 - for project-namespace reuse, exact membership means:
   - same project-owned tmux socket
   - same authoritative tmux session
@@ -957,6 +1005,10 @@ Project namespace compatibility:
   - if provider live-identity proof is merely unavailable or `unknown`, startup may still reuse that legacy instance-scoped binding
   - if provider live-identity proof is explicitly `mismatch`, startup must reject it and relaunch
   - inferred default-server socket facts must not override an otherwise valid instance-scoped legacy binding
+- native Herdr layout materialization must split from the exact requested
+  `parent_pane`, including a non-root parent; redirecting a requested child
+  split back to the workspace root changes the declared topology and is not a
+  valid compatibility fallback
 
 ### 5.6 Runtime Supervision Is A Daemon Responsibility
 

@@ -92,45 +92,40 @@ def _wait_for_socket(path: Path, timeout: float = 3.0) -> None:
     raise AssertionError(f'timed out waiting for {path}; last_error={last_error!r}')
 
 
-def test_restart_parser_accepts_single_agent_and_rejects_all() -> None:
+def test_restart_parser_accepts_multi_agent() -> None:
     parser = CliParser()
 
-    assert parser.parse(['restart', 'agent1']) == ParsedRestartCommand(project=None, agent_name='agent1')
+    assert parser.parse(['restart', 'agent1']) == ParsedRestartCommand(project=None, agent_names=('agent1',))
+    assert parser.parse(['restart']) == ParsedRestartCommand(project=None, agent_names=())
+    assert parser.parse(['restart', 'agent1', 'agent2']) == ParsedRestartCommand(
+        project=None, agent_names=('agent1', 'agent2')
+    )
+    assert parser.parse(['restart', 'all']) == ParsedRestartCommand(project=None, agent_names=())
 
-    with pytest.raises(CliUsageError, match='restart all is not supported'):
-        parser.parse(['restart', 'all'])
-    with pytest.raises(CliUsageError, match='restart requires exactly one'):
-        parser.parse(['restart', 'agent1', 'agent2'])
+    with pytest.raises(CliUsageError, match='restart target "all" cannot be combined'):
+        parser.parse(['restart', 'agent1', 'all'])
 
 
 def test_phase2_restart_sends_request_and_renders_summary(monkeypatch, tmp_path: Path) -> None:
     import cli.phase2 as phase2_module
 
     fake_context = SimpleNamespace(project=SimpleNamespace(project_root=tmp_path, project_id='proj-restart'))
-    calls: list[tuple[str, str]] = []
+    calls: list[tuple[str, tuple[str, ...]]] = []
 
     monkeypatch.setattr(phase2_module, '_build_context', lambda command, cwd, out: fake_context)
     monkeypatch.setattr(phase2_module, 'ensure_bootstrap_project_config', lambda project_root: None)
 
     def _restart_agent(context, command):
-        calls.append((context.project.project_id, command.agent_name))
+        calls.append((context.project.project_id, command.agent_names))
         return {
-            'restart_status': 'ok',
-            'agent_name': command.agent_name,
-            'restartable_agents': ['agent1', 'agent2'],
-            'busy_gate': {
-                'passed': True,
-                'runtime_state': 'idle',
-                'runtime_queue_depth': 0,
-                'queue_depth': 0,
-                'pending_reply_count': 0,
-                'active_job_id': None,
-                'active_inbound_event_id': None,
-                'pending_callback_count': 0,
-            },
-            'old_runtime': {'state': 'idle', 'health': 'healthy', 'pane_id': '%1', 'active_pane_id': '%1'},
-            'new_runtime': {'state': 'idle', 'health': 'healthy', 'pane_id': '%2', 'active_pane_id': '%2'},
-            'result': {'agent': command.agent_name, 'status': 'restarted', 'pane_id': '%2'},
+            'status': 'scheduled',
+            'agent_names': list(command.agent_names),
+            'restart_mode': 'in_place',
+            'recreate_reason': 'manual_restart_panes',
+            'results': [
+                {'agent': name, 'status': 'restarted', 'pane_id': '%2'}
+                for name in command.agent_names
+            ],
         }
 
     monkeypatch.setattr(phase2_module, 'restart_agent', _restart_agent)
@@ -140,38 +135,37 @@ def test_phase2_restart_sends_request_and_renders_summary(monkeypatch, tmp_path:
     code = maybe_handle_phase2(['restart', 'agent1'], cwd=tmp_path, stdout=stdout, stderr=stderr)
 
     assert code == 0
-    assert calls == [('proj-restart', 'agent1')]
-    assert 'restart_status: ok\n' in stdout.getvalue()
-    assert 'agent_name: agent1\n' in stdout.getvalue()
-    assert 'restart_busy_gate: passed=true' in stdout.getvalue()
-    assert 'old_runtime: state=idle health=healthy pane_id=%1 active_pane_id=%1' in stdout.getvalue()
-    assert 'new_runtime: state=idle health=healthy pane_id=%2 active_pane_id=%2' in stdout.getvalue()
+    assert calls == [('proj-restart', ('agent1',))]
+    assert 'restart_status: scheduled\n' in stdout.getvalue()
+    assert 'agent_names: agent1\n' in stdout.getvalue()
+    assert 'restart_mode: in_place' in stdout.getvalue()
     assert stderr.getvalue() == ''
 
 
 def test_restart_service_uses_current_mounted_daemon(monkeypatch) -> None:
     import cli.services.restart as restart_module
 
-    calls: list[str] = []
+    calls: list[tuple[str, ...]] = []
 
     class _Client:
-        def project_restart_agent(self, agent_name: str) -> dict:
-            calls.append(agent_name)
-            return {'restart_status': 'ok', 'agent_name': agent_name}
+        def project_restart_panes(self, agent_names) -> dict:
+            calls.append(tuple(agent_names))
+            return {'status': 'scheduled', 'agent_names': list(agent_names), 'restart_mode': 'in_place'}
 
     monkeypatch.setattr(
         restart_module,
-        'connect_current_mounted_daemon',
-        lambda context: SimpleNamespace(client=_Client()),
+        'invoke_mounted_daemon',
+        lambda context, allow_restart_stale, request_fn: request_fn(_Client()),
     )
 
     payload = restart_module.restart_agent(
         SimpleNamespace(),
-        ParsedRestartCommand(project=None, agent_name='agent1'),
+        ParsedRestartCommand(project=None, agent_names=('agent1',)),
     )
 
-    assert payload == {'restart_status': 'ok', 'agent_name': 'agent1'}
-    assert calls == ['agent1']
+    assert payload['status'] == 'scheduled'
+    assert payload['agent_names'] == ['agent1']
+    assert calls == [('agent1',)]
 
 
 def test_project_restart_agent_handler_rejects_unknown_with_current_graph_list() -> None:
@@ -298,51 +292,47 @@ def test_project_restart_agent_handler_restarts_one_agent(monkeypatch) -> None:
     assert calls == [('agent1',)]
 
 
-def test_project_restart_agent_rebuilds_current_provider_launch(monkeypatch, tmp_path: Path) -> None:
-    session = SimpleNamespace(data={}, start_cmd='old-provider-command', pane_id='%1')
-    runtime = _runtime(pane_id='%1')
-    calls: list[dict[str, object]] = []
-
-    class _Supervisor:
-        def start(self, **kwargs):
-            calls.append(kwargs)
-            runtime.pane_id = '%1'
-            runtime.active_pane_id = '%1'
-            return SimpleNamespace(
-                agent_results=(SimpleNamespace(agent_name='agent1', action='relaunched', health='healthy'),),
-            )
-
-    app = _app(runtimes={'agent1': runtime})
+def test_project_restart_agent_handler_defers_herdr_namespace_without_tmux_backend(monkeypatch) -> None:
+    app = _app(runtimes={'agent1': _runtime(pane_id='herdr-pane-1')})
     app.project_namespace = SimpleNamespace(
-        load=lambda: SimpleNamespace(tmux_socket_path=str(tmp_path / '.tmux' / 'tmux.sock')),
+        load=lambda: SimpleNamespace(
+            namespace_backend_family='herdr-native',
+            backend_impl='herdr',
+            tmux_socket_path='',
+        )
     )
-    app.runtime_supervisor = _Supervisor()
-    app.start_policy_store = SimpleNamespace(load=lambda: None)
-    monkeypatch.setattr(project_restart, '_load_agent_provider_session', lambda *args, **kwargs: session)
+    handler = build_project_restart_agent_handler(app)
 
-    result = project_restart.restart_project_agent_panes_in_place(app, agent_names=('agent1',))
+    payload = handler({'agent_name': 'agent1'})
 
-    assert result == ({
+    assert payload['status'] == 'unsupported'
+    assert payload['restart_status'] == 'deferred'
+    assert payload['reason'] == 'deferred_to_provider_runtime_on_herdr'
+    assert payload['result']['status'] == 'deferred'
+    assert payload['result']['backend_impl'] == 'herdr'
+    assert payload['result']['restart_evidence'] == {
+        'backend_impl': 'herdr',
+        'namespace_backend_family': 'herdr-native',
+        'restart_surface': 'provider_runtime_required',
+        'restart_status': 'deferred',
+        'reason': 'deferred_to_provider_runtime_on_herdr',
+        'respawn_evidence': 'not_attempted',
+        'session_binding_evidence': 'not_attempted',
         'agent': 'agent1',
-        'status': 'restarted',
-        'pane_id': '%1',
-        'action': 'relaunched',
-    },)
-    assert calls == [{
-        'agent_names': ('agent1',),
-        'restore': True,
-        'auto_permission': True,
-        'cleanup_tmux_orphans': False,
-        'interactive_tmux_layout': True,
-        'restart_agent_panes': {'agent1': '%1'},
-        'recreate_reason': project_restart.RESTART_AGENT_REASON,
-    }]
+    }
+    assert payload['old_runtime']['pane_id'] == 'herdr-pane-1'
+    assert payload['new_runtime']['pane_id'] == 'herdr-pane-1'
 
 
 def test_project_restart_agent_socket_targets_one_agent(tmp_path: Path, monkeypatch) -> None:
     project_root = tmp_path / 'repo-restart-socket'
     _write(project_root / '.ccb' / 'ccb.config', 'agent1:codex,agent2:codex\n')
     app = CcbdApp(project_root)
+    monkeypatch.setattr(
+        app,
+        'execute_project_stop',
+        lambda **kwargs: SimpleNamespace(to_record=lambda: {'status': 'ok'}),
+    )
     calls: list[tuple[str, ...]] = []
 
     def _restart(app_arg, *, agent_names):
