@@ -52,7 +52,8 @@
   ],
   "scripts": {
     "postinstall": "node bin/ccb-npm-install.js",
-    "pack:check": "npm pack --dry-run"
+    "pack:check": "npm pack --dry-run",
+    "team:ui": "ccb team ui ${CCB_TEAM:-team}"
   },
   "engines": {
     "node": ">=18"

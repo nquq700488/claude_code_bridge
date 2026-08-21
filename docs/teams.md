@@ -31,16 +31,16 @@ Team 是 CCB 的多 Agent 编组功能。在项目中用 `[teams.<name>]` TOML �
 在项目 `.ccb/ccb.config` 中添加 `[teams]` 段（推荐写在 `ccb.config`，compact 和 multi 模式共用）：
 
 ```toml
-[teams.demo]
+[teams.team]
 topology = "mesh"
 description = "示例团队"
 
-[[teams.demo.members]]
+[[teams.team.members]]
 name = "alice"
 provider = "claude"
 description = "架构设计"
 
-[[teams.demo.members]]
+[[teams.team.members]]
 name = "bob"
 provider = "codex"
 description = "代码实现"
@@ -49,13 +49,13 @@ description = "代码实现"
 **2. 启动 team**
 
 ```bash
-ccb team start demo
+ccb team start team
 ```
 
 **3. 打开群聊 UI**
 
 ```bash
-ccb team ui demo
+ccb team ui team
 ```
 
 浏览器自动打开 `http://127.0.0.1:8888/`，可以在群聊界面中 @成员发送消息。
@@ -257,6 +257,28 @@ ccb team ui <name> [--port PORT]
 | 空闲超时 | 30 分钟无请求自动退出 |
 | 鉴权 | 无需 token，127.0.0.1 即信任边界 |
 
+### 启动步骤与前置条件
+
+**正常启动（正式入口）**：
+
+```bash
+# 1. （可选）先启动 team — 为成员创建动态 agent 并注入协作协议
+ccb team start team
+
+# 2. 启动群聊 UI（浏览器自动打开 http://127.0.0.1:8888/）
+ccb team ui team
+
+# 指定端口
+ccb team ui team --port 9000
+```
+
+> `ccb team ui` 走 CCB 的 v2 命令入口（parser → dispatch → `team_lifecycle.team_ui` → `prepare_team_ui`），是 Team UI 的正式启动方式。
+
+**前置条件**：
+
+1. **源码需与全局安装同步**。Team UI 通过项目 `.ccb/runtime/teams/<name>/state.json` 读取成员；若全局安装的 CCB 是旧版（没有 config 回退），且 team 未 `start`，UI 会显示 `not_up` 且成员为空。请用 `sync-local`（`/sync-local` skill）把本地源码同步到全局安装目录，使 `ccb team ui` 使用最新逻辑。
+2. **team 未启动时的回退显示**（新版本）：即使没有执行 `ccb team start`，UI 也会从 `[teams.<name>]` 配置读取成员定义，并从 `.ccb/agents/<name>/runtime.json` 读取运行中 agent 的实时状态（provider、idle/working 等）进行显示。此时成员状态标记为 `running`（有 agent 在跑）或 `not_up`（无 agent 运行），可直接发消息给运行中的 agent。
+
 ---
 
 ## Team UI 群聊页面
@@ -265,7 +287,7 @@ ccb team ui <name> [--port PORT]
 
 ```
 ┌──────────────────────────────────────────────┐
-│  demo · mesh · ● running         [Start][Stop]│
+│  team · mesh · ● running         [Start][Stop]│
 ├─────────────┬────────────────────────────────┤
 │  成员 (4)    │  时间线                         │
 │  ● planner  │  ┌────────────────────────────┐ │
@@ -362,7 +384,7 @@ ccb team ui <name> [--port PORT]
 
 ```json
 {
-  "team_name": "demo",
+  "team_name": "team",
   "topology": "mesh",
   "upped_at": "2026-07-23T08:00:00Z",
   "definition_hash": "a1b2c3d4e5f6g7h8",

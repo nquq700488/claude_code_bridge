@@ -258,7 +258,7 @@ def _make_handler(data: dict):
 
 def _build_state_payload(root: Path, team_name: str) -> dict:
     """Read team instance state + member lifecycle states from disk."""
-    instance = _load_json(_team_state_path(root, team_name))
+    instance = _load_team_instance(root, team_name)
     if not instance:
         return {'team': team_name, 'status': 'not_up', 'topology': '?', 'members': []}
 
@@ -270,15 +270,29 @@ def _build_state_payload(root: Path, team_name: str) -> dict:
         has_data = _find_agent_file(root, name, 'jobs.jsonl').is_file() or \
                    _find_agent_file(root, name, 'events.jsonl').is_file()
         lc = _load_json(_member_lifecycle_path(root, name))
-        state = lc.get('lifecycle_state', 'visible') if lc else ('visible' if has_data else 'missing')
-        model = lc.get('model') if lc else None
+        if lc:
+            # Team-managed member — lifecycle.json is authoritative
+            state = lc.get('lifecycle_state', 'visible')
+            status = lc.get('agent_lifecycle_status', 'active')
+            model = lc.get('model')
+        else:
+            # Config fallback — reflect real agent runtime state when available
+            runtime = m.get('runtime')  # prefetched by _config_team_instance
+            if runtime:
+                state = 'working' if runtime.get('lifecycle_state') == 'working' else 'visible'
+                status = 'running'
+                model = runtime.get('model')
+            else:
+                state = 'visible' if has_data else 'missing'
+                status = 'active' if has_data else 'missing'
+                model = None
         members.append({
             'name': name,
             'provider': provider,
             'model': model,
             'description': m.get('description'),
             'state': state,
-            'status': lc.get('agent_lifecycle_status', 'active') if lc else ('active' if has_data else 'missing'),
+            'status': status,
         })
 
     # Try to get topology from config
@@ -306,7 +320,7 @@ def _build_timeline_payload(root: Path, team_name: str, cursor: str) -> dict:
     and .ccb/runtime/agents/<name>/events.jsonl for completion replies.
     Returns incremental events since the cursor timestamp.
     """
-    instance = _load_json(_team_state_path(root, team_name))
+    instance = _load_team_instance(root, team_name)
     if not instance:
         return {'events': [], 'cursor': cursor or ''}
 
@@ -443,7 +457,7 @@ def _handle_send(root: Path, team_name: str, body: dict) -> dict:
         return {'status': 'error', 'error': 'to and body are required'}
 
     # Validate target is a member of this team instance
-    instance = _load_json(_team_state_path(root, team_name))
+    instance = _load_team_instance(root, team_name)
     if not instance:
         return {'status': 'error', 'error': 'team not up'}
     member_names = {m.get('name', '') for m in instance.get('members', [])}
@@ -501,7 +515,7 @@ def _submit_or_record(root, team_name, target, msg, instance):
 
 def _broadcast(root: Path, team_name: str, msg: str) -> dict:
     """Send to all team members."""
-    instance = _load_json(_team_state_path(root, team_name))
+    instance = _load_team_instance(root, team_name)
     if not instance:
         return {'status': 'error', 'error': 'team not up'}
 
@@ -612,6 +626,58 @@ def _load_json(path: Path) -> dict | None:
         return data if isinstance(data, dict) else None
     except Exception:
         return None
+
+
+def _load_team_instance(root: Path, team_name: str) -> dict | None:
+    """Load team instance state; falls back to config-defined members when
+    the team was never started. Lets the UI show live agents (name + provider +
+    real runtime state) without requiring `ccb team start`."""
+    instance = _load_json(_team_state_path(root, team_name))
+    if instance:
+        return instance
+    return _config_team_instance(root, team_name)
+
+
+def _config_team_instance(root: Path, team_name: str) -> dict | None:
+    """Build a pseudo team instance from config when the team never started.
+
+    Members come from [teams.<name>]; live state is prefetched from
+    .ccb/agents/<name>/runtime.json so the UI reflects real running agents.
+    Returns None when the team is not defined or has no members.
+    """
+    try:
+        from agents.config_loader import load_project_config
+        config = load_project_config(root, include_loop_overlays=False).config
+        team = config.teams.get(team_name)
+    except Exception:
+        return None
+    if not team:
+        return None
+
+    members = []
+    any_running = False
+    for m in team.members:
+        runtime = _load_json(root / '.ccb' / 'agents' / m.name / 'runtime.json')
+        if runtime:
+            any_running = True
+        members.append({
+            'name': m.name,
+            'provider': m.provider,
+            'model': m.model,
+            'description': m.description,
+            'has_runtime': runtime is not None,
+            'runtime': runtime,
+        })
+    if not members:
+        return None
+
+    return {
+        'team_name': team_name,
+        'topology': team.topology,
+        'upped_at': None,  # never started — don't filter timeline history
+        'status': 'running' if any_running else 'not_up',
+        'members': members,
+    }
 
 
 def _read_jsonl(path: Path) -> list[dict]:
