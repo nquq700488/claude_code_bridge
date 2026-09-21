@@ -6,7 +6,7 @@
 **Coordene Codex, Claude, Gemini e outros agentes CLI em fluxos visíveis e controláveis que você pode assumir diretamente**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.6-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.1-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -184,7 +184,7 @@ Esse comando orienta a instalação e a configuração.
 
 O CCB 8.6.6 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
 
-- [Baixar CCB Mobile v8.6.6 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.6/ccb-mobile-v8.6.6.apk)
+- [Baixar CCB Mobile v8.7.1 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.1/ccb-mobile-v8.7.1.apk)
 - Fonte do app: [`mobile/app`](../mobile/app)
 - Fonte do gateway servidor: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -247,7 +247,7 @@ Para a configuração normal do projeto, use o painel **⚙ Configurações**. P
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=da517368" alt="Grupo WeChat" width="240">
+  <img src="../assets/weixin.png?v=5d912c6b" alt="Grupo WeChat" width="240">
 </p>
 
 <a id="community"></a>
@@ -263,6 +263,15 @@ Obrigado ao [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 
 ## Notas de versão
 
 <details open>
+<summary><b>v8.7.1</b></summary>
+
+[English / 简体中文 — v8.7.1](../docs/releases/v8.7.1.md)
+
+[v8.7.0](../docs/releases/v8.7.0.md) · [v8.6.19](../docs/releases/v8.6.19.md)
+
+</details>
+
+<details>
 <summary><b>v8.4.0</b> - Relay móvel criptografado, pareamento simples, identidade estável e reconexão Codex</summary>
 
 - Adiciona Relay móvel com criptografia ponta a ponta, convites de uso único, streams multiplexados e modos oficial ou auto-hospedado.

@@ -1,5 +1,13 @@
 # CCB 接入 MiniMax (mmx) 完整流程与踩坑记录
 
+> ⚠️ **MMX provider 当前不可达 —— 本指南暂不可直接照做。**
+>
+> 本 Fork 的 MMX 注册项（`OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC`）自 **v8.5.4 合并**后缺失，`mmx` 不在运行时注册表中，config 校验（`workflow_v3` 的 provider 白名单）会拒绝它。`lib/provider_backends/mmx/` 下的代码与 `bin/mmx-daemon` 仍在，但不构成可用支持。
+>
+> **修复方式**：把这三处注册项恢复到 `lib/provider_core/registry_runtime/builtin_backends.py` 与 `lib/provider_core/runtime_specs.py`；`test/test_v2_config_loader.py::test_builtin_default_provider_priority_tracks_runtime_registry` 的断言（`SUPPORTED_PROVIDER_NAMES == CORE + OPTIONAL`）可作为验收标准 —— 该测试当前因 MMX 缺失而失败（`At index 7 diff: 'mmx' != 'deepseek'`）。
+>
+> 恢复注册之后，下文流程仍然适用。
+>
 > 记录将 MiniMax CLI (`mmx`) 接入 CCB (Collaborative Code Bridge) 的全过程。
 >
 > **名称演变**：CCB 最初代表 "Claude Code Bridge"，现在代表 "Collaborative Code Bridge"。

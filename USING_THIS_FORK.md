@@ -1,22 +1,29 @@
 # 使用此 Fork 版本的 CCB
 
-> **核心原则**：系统里只保留这一个 CCB 安装。它是官方 CCB（v8.0.16）的 Fork，额外添加了 **MiniMax (mmx)** provider 支持，并对 **Kimi** provider 做了增强（更健壮的 CLI 可执行文件查找 + 新 session 格式兼容）。官方版本已收录 Kimi、Gemini、Codex、Claude 等 15 个 CLI 家族。
+> **核心原则**：系统里只保留这一个 CCB 安装。它是官方 CCB 的 Fork，当前上游基线为 **v8.7.1**（`SeemSeam/claude_codex_bridge`，本 Fork 为 `nquq700488/claude_code_bridge`）。在官方功能之上，本 Fork 保留了下列定制。
 
 ---
 
 ## 1. 这个 Fork 与官方版本的区别
 
-| 特性 | 官方 CCB (v8.0.16) | 此 Fork |
-|------|---------------------|---------|
-| Claude | ✅ | ✅ |
-| Codex (OpenAI) | ✅ | ✅ |
-| Gemini | ✅ | ✅ |
-| Kimi | ✅ | ✅（增强版） |
-| **MiniMax (mmx)** | ❌ | ✅ |
-| MiMo / Qwen / Cursor / Copilot / Crush / Kiro / Pi / Z.ai / OpenCode / Antigravity / Droid | ✅ | ✅ |
+| 特性 | 官方 CCB | 此 Fork |
+|------|----------|---------|
+| 15 个 CLI 家族（Codex / Claude / Gemini / Kimi / MiMo / Qwen / Cursor / Copilot / Crush / Kiro / Pi / Z.ai / OpenCode / Antigravity / Droid） | ✅ | ✅ |
+| config profile 路由（`ccb.config` 单行 `config_profile` 切换布局） | ❌ | ✅ |
+| tmux 状态栏窗口标签（`#{W:}`） | ❌ | ✅ |
+| pane 权重语法 `(N)`（与 `@N` 百分比、`(worktree)` 并存） | ❌ | ✅ |
+| 多 Agent 重启 `ccb restart <agent>...` | ❌ | ✅ |
+| `ccb pend --watch --timeout <秒>` 显式超时 | ❌ | ✅ |
+| Claude / Codex 内容安全中断检测（pane 侧发出 `TURN_ABORTED`） | ❌ | ✅ |
+| `.ccb/` 项目配置与脚本（`clean.sh` 保留 `ccb_memory.md` 等） | ❌ | ✅ |
+| **MiniMax (mmx) provider** | ❌ | ⚠️ 代码保留但**当前不可达**（注册项缺失，见第 4 节） |
+
+> **两处已过时的历史卖点，不要再当真**：
+> - **"Kimi 增强"不再是差异项** —— 上游已收录同等实现，`lib/provider_backends/kimi` 与上游逐字节一致。
+> - **"额外支持 MMX"目前名不副实** —— `lib/provider_backends/mmx/` 代码仍在，但 `OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC` 自 v8.5.4 合并后缺失，config 校验与运行时注册表均不识别 `mmx`。
 
 - **安装目录**：`~/.local/share/ccb`
-- **源码位置**：`/Users/zhangtao/Documents/study/claude_code_bridge`
+- **源码位置**：`/Users/zhangtao/Documents/study/claude_code_bridge-6`
 
 ---
 
@@ -61,7 +68,7 @@ ccb
 
 ```bash
 # 进入当前项目（脚本模板所在位置）
-cd /Users/zhangtao/Documents/study/claude_code_bridge
+cd /Users/zhangtao/Documents/study/claude_code_bridge-6
 
 # 安装脚本到目标项目（复制 start.sh / stop.sh / restart.sh）
 ./.ccb/install.sh /path/to/your-project --links
@@ -313,6 +320,20 @@ config_profile = "compact"  # 切回紧凑布局
 ccb reload
 ```
 
+### 两套档案的布局与写法
+
+两套档案用的是**两种不同的布局配置格式**，且同一个 agent 名在两边可绑定不同 provider：
+
+| | `ccb-compact.config` | `ccb-multi.config` |
+|---|---|---|
+| 窗口数 | 1（单窗口） | 2（`main` / `work`；`test` 已注释） |
+| 格式 | 经典单行布局 `(a; b), (c; d)` | v2 格式 `version = 2` + `[windows]` |
+| Agent 数 | 4：planner / developer / reviewer / tester | 4（同上） |
+| `developer` | **Claude** | **Codex** |
+| `reviewer` | **Codex** | **Claude** |
+
+完整布局图与配置文件内容见 [.ccb/README.md](./.ccb/README.md#配置档案) 与 [AGENTS.md](./AGENTS.md#项目-agent-团队)。
+
 ### 添加自定义档案
 
 创建 `.ccb/ccb-<name>.config`，然后在 `ccb.config` 中引用即可。不存在的 profile 会在启动时报错提示。
@@ -324,7 +345,7 @@ ccb reload
 ### 3.1 首次安装
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge
+cd /Users/zhangtao/Documents/study/claude_code_bridge-6
 bash install.sh install
 ```
 
@@ -333,7 +354,7 @@ bash install.sh install
 修改源码后同步到安装目录：
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge
+cd /Users/zhangtao/Documents/study/claude_code_bridge-6
 bash install.sh install
 ```
 
@@ -342,7 +363,7 @@ bash install.sh install
 ### 3.3 完全重装
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge
+cd /Users/zhangtao/Documents/study/claude_code_bridge-6
 bash install.sh uninstall
 CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 ```
@@ -353,18 +374,18 @@ CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 
 ### ❌ 绝对不要运行 `ccb update`
 
-`ccb update` 会从官方 release 渠道下载最新版本，**这会覆盖掉此 Fork 中添加的 mmx provider 和 Kimi 增强**，导致这些功能失效。
+`ccb update` 会从官方 release 渠道下载最新版本并**覆盖本地源码**，从而清除此 Fork 的全部定制：config profile 路由、tmux 状态栏窗口标签、pane 权重语法 `(N)`、多 Agent 重启、`pend --watch --timeout`、Claude/Codex 内容安全中断检测、`.ccb/` 项目配置与脚本。
 
 如果看到以下提示，**忽略它**：
 
 ```
-📦 Release update available: v6.0.7
+📦 Release update available: v8.7.2
    Run: ccb update
 ```
 
 **正确做法**：
-- 如果需要官方新功能，先 `git pull` 或 `git merge` 合并官方代码到此 Fork
-- 然后重新运行 `bash install.sh install`
+- 在源码目录执行 `git fetch upstream`，再 `git merge upstream/main` 合并官方代码到此 Fork
+- 解决冲突后重新运行 `bash install.sh install`
 
 ### 其他注意事项
 
@@ -415,20 +436,24 @@ ccb status
 mmx text chat --message "hello" --output json
 ```
 
-### Q: 提示 `kimi` 或 `mmx` provider 未找到？
+### Q: 提示 `kimi` provider 未找到？
 
 说明安装被官方版本覆盖了。重新安装此 Fork：
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge
+cd /Users/zhangtao/Documents/study/claude_code_bridge-6
 bash install.sh uninstall
 CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 ```
+
+### Q: 提示 `mmx` provider 未找到？
+
+**这与安装无关，重装无法解决。** 本 Fork 的 MMX 注册项（`OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC`）自 v8.5.4 合并后缺失，`mmx` 不在运行时注册表中，因此 config 校验会拒绝它。`lib/provider_backends/mmx/` 与 `bin/mmx-daemon` 仍在，但不构成可用支持。修复方式是把这些注册项恢复到注册表与 runtime spec。
 
 ### Q: 修改了代码但没生效？
 
 ```bash
 # 同步到安装目录
-bash sync-to-install.sh
+bash sync-to-local.sh
 
 # 重启 ccb
 ccb stop

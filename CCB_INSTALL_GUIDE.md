@@ -1,29 +1,30 @@
 # CCB 跨设备安装指南 (Cross-Device Installation Guide)
 
-> 版本：适用于 CCB v8.0.16 | 最后更新：2026-07-06
+> 版本：适用于 CCB v8.7.1 | 最后更新：2026-09-22
 
 ---
 
 ## 目录
 
 1. [CCB 简介](#ccb-简介)
-2. [环境要求](#环境要求)
-3. [方式一：Git Clone 全新安装](#方式一git-clone-全新安装)
-4. [方式二：Release 包安装](#方式二release-包安装)
-5. [安装后验证](#安装后验证)
-6. [项目配置（在新设备上创建 Agent 团队）](#项目配置在新设备上创建-agent-团队)
-7. [更新与升级](#更新与升级)
-8. [卸载](#卸载)
-9. [常见问题排查](#常见问题排查)
-10. [配置文件速查](#配置文件速查)
-11. [开发工具与实用工具](#开发工具与实用工具)
-12. [架构说明](#架构说明)
+2. [Fork 更新方式与行为变更](#fork-更新方式与行为变更)
+3. [环境要求](#环境要求)
+4. [方式一：Git Clone 全新安装](#方式一git-clone-全新安装)
+5. [方式二：Release 包安装](#方式二release-包安装)
+6. [安装后验证](#安装后验证)
+7. [项目配置（在新设备上创建 Agent 团队）](#项目配置在新设备上创建-agent-团队)
+8. [更新与升级](#更新与升级)
+9. [卸载](#卸载)
+10. [常见问题排查](#常见问题排查)
+11. [配置文件速查](#配置文件速查)
+12. [开发工具与实用工具](#开发工具与实用工具)
+13. [架构说明](#架构说明)
 
 ---
 
 ## CCB 简介
 
-> **名称演变**：CCB 最初代表 **Claude Code Bridge**。随着项目扩展到支持多模型协作（15 个 CLI 家族：Codex、Claude、Gemini、Kimi、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Pi、Z.ai、OpenCode、Antigravity、Droid，Fork 额外支持 MMX），这个缩写现在代表 **Collaborative Code Bridge** —— 协作代码桥。
+> **名称演变**：CCB 最初代表 **Claude Code Bridge**。随着项目扩展到支持多模型协作（15 个 CLI 家族：Codex、Claude、Gemini、Kimi、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Pi、Z.ai、OpenCode、Antigravity、Droid），这个缩写现在代表 **Collaborative Code Bridge** —— 协作代码桥。
 
 **CCB (Collaborative Code Bridge)** 是一个多 AI Agent CLI 协作平台。它基于 **tmux** 终端多路复用器，让你在一个终端窗口中同时运行和管理多个 AI Agent，并让它们通过 `/ask`、`/ping`、`/pend` 命令互相通信和委派任务。
 
@@ -36,11 +37,62 @@
 - **Sidebar 面板高度可配置（v7.1.1+）**：Tree/Agent、Comms、Tips 三个面板的高度支持自定义（百分比或行数）
 - **Dynamic Reload（v7.1.0+）**：编辑 `ccb.config` 后无需重启整个项目，通过 `ccb reload` 动态应用支持的配置变更
 - **多窗口拓扑（v7.0+）**：一个项目可配置多个 tmux 窗口，每个窗口有独立的 Agent 布局和 Sidebar
-- Agent 间通信（支持同步等待和异步发送）
+- Agent 间通信（`ask` 为异步提交、立即返回；等待回复由调用方执行 `ccb pend --watch <job_id>`）
+- **消息统一队列（v8.6.19+）**：请求与返回结果在每个 Agent 上共用一条时间顺序队列，返回结果占用执行槽直至对端回合结束，后续消息不会插队
+- **输入草稿保护（v8.7.1+）**：用户正在输入框编辑时，已排队的消息最多等待 180 秒，到期清空一次并确认空输入后再投递
+- **`ccb screen <agent>`（v8.6.19+）**：只读抓取 tmux 屏幕文字，用于排查 Agent 卡住或异常
+- **Rich 文件面板系统打开（v8.7.1+）**：点击文件或按 Enter 用系统默认应用打开（macOS `open` / Linux `gio open` / WSL `wslview`）
 - 按项目配置 Agent 团队和 tmux 分屏布局
 - 每个 Agent 独立配置 API key、模型、端点
 - 可选 git worktree 隔离
 - 会话持久化和恢复
+
+---
+
+## Fork 更新方式与行为变更
+
+> 本节针对**本 Fork**（`nquq700488/claude_code_bridge`）。官方上游为 `SeemSeam/claude_codex_bridge`。
+
+### ⚠️ 不要运行 `ccb update`
+
+`ccb update` 会从官方 release 渠道下载并**覆盖本地源码**，从而清除本 Fork 的全部改动（config profile 路由、tmux 状态栏标签、pane 权重语法、多 Agent restart、`pend --timeout`、内容安全中断检测等）。
+
+**正确的更新方式：**
+
+```bash
+cd /path/to/claude_code_bridge
+git fetch upstream
+git merge upstream/main      # 合并官方代码，解决冲突
+./install.sh install         # 重新安装以更新 links、skills 与 entrypoint
+```
+
+### 升级到 v8.7.1 的动作
+
+| 目标 | 动作 |
+|------|------|
+| 加载新版 daemon 与 OMP 扩展 | 完成当前任务并保存草稿 → `ccb kill` → `ccb` |
+| 启用 Rich 文件面板系统打开 | `ccb update rich`，然后重新打开文件面板（**无需**重启 Agent） |
+| OMP 输入保护 | 需要新版扩展 + 默认 Status Band 输入布局 |
+
+无需手动迁移项目、配对或 Provider 认证状态。
+
+### v8.6.17 → v8.7.1 行为变更（会影响你的日常使用）
+
+1. **消息统一队列（v8.6.19+）**：请求与返回结果在每个 Agent 上共用一条按时间排序的队列。**返回结果会占用执行槽，直到接收方 Provider 的处理回合结束** —— 后续消息不会打断进行中的回合。不同目标 Agent 仍可并行。
+2. **输入草稿保护（v8.7.0/8.7.1）**：用户正在输入框编辑时，已满足投递条件的队首消息**最多等待 180 秒**；到期仍检测到草稿则清空一次、确认输入框为空后再投递。**继续键入不会重置计时**，草稿不会被无限期保留。这是最容易被误判为"卡住"的行为。
+3. **空结果不再自动重试（v8.6.19+）**：空或异常的 `ask` 回复改为注入英文排查提示（先看目标屏幕 → 用 `ccb trace` 核对原任务 → 由调用方决定等待/取结果/继续/重发/暂停）。原始错误、取消、成功静默与链式交接语义保持不变。
+4. **`ccb screen <agent>`（v8.6.19+）**：只读抓取 tmux 屏幕文字。`--lines 120` 取滚动历史，`--json` 输出结构化结果。会校验 pane 归属，拒绝缺失/死亡/已变更的绑定；不发送按键、不切换焦点、不启动 daemon。**这是诊断证据，不是任务记录。**
+5. **Rich 文件面板系统打开（v8.7.1+）**：点击文件或按 Enter 用系统默认应用打开；点击目录仍在 Yazi 内导航。macOS 用 `open`，Linux 优先 `gio open`（无 GIO 才退 `xdg-open`），WSL 用 `wslview`（缺少时明确报错，不静默退回 Linux GUI）。
+6. **Codex 错误类别保留（v8.6.17+）**：Codex 的安全阻断与终止错误始终以失败结果返回并保留错误类别，不再把早期进度文字提升为成功。
+7. **OMP 重启恢复（v8.6.19+）**：OMP 重启与 pane 恢复使用 `--resume` 恢复已观察到的原生对话；证据缺失或无效时记录明确的新建会话原因，不按文件新旧猜测。
+8. **移动端 Agent 状态（v8.6.18+）**：手机端区分工作中/空闲/异常/未读，选中状态与工作状态解耦；设置中提供离线背景图。
+
+### 已知限制
+
+- **输入保护仅覆盖 Claude / Codex / OMP**。其他 Provider 与旧 OMP 挂载仍为无保护投递。
+- Codex/Claude 到期清空使用 **`Ctrl-C`**，可能中断同时由用户启动的回合；抓屏、清空、粘贴、Enter **不是原子操作**，且**不备份草稿**。
+- 强制停止 daemon 后，**Codex 远程会话不会自动恢复**。需先 `ccb screen <agent>` 与 `ccb trace <job_id>` 检查，再取消尚未发送的排队任务、重启 Agent、重新提交。
+- **本 Fork 特有**：`mmx` provider 的注册项（`OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC`）自 v8.5.4 合并后缺失，代码虽在但**不可达**；`webhook` 与 `ask --notify-sender` 的运行时接线缺失，同样不可用。
 
 ---
 
@@ -236,7 +288,7 @@ cd claude_code_bridge
 | `CCB_TMUX_CONFIG` | `/dev/null` | 显式指定 CCB 管理的 tmux 配置文件 |
 | `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
 | `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
-| `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒） |
+| `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒）；⚠️ 未加入控制面 allowlist，daemon 不会转发该变量 |
 | `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` 默认超时（秒，v7.2.1+） |
 | `CCB_WAIT_POLL_INTERVAL_S` | `0.1` | `pend --watch` 轮询间隔（秒） |
 | `CCB_KEYCHAIN_SERVICE_OVERRIDE` | 空 | macOS Keychain 服务名覆盖（v7.0.4+） |
@@ -537,8 +589,8 @@ cmd; writer:codex, reviewer:claude; qa:gemini(worktree)
 # 同一 Provider 不同模型
 cmd; fast:codex, deep:codex
 
-# 全部 Provider（v7.5.2+ 支持 14 个 CLI 家族：Codex、Claude、Gemini、Kimi、Antigravity、OpenCode、Droid、MMX、DeepSeek、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Pi）
-cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:mmx, agent5:agy
+# 全部 Provider（v7.5.2+ 支持 15 个 CLI 家族：Codex、Claude、Gemini、Kimi、Antigravity、OpenCode、Droid、DeepSeek、MiMo、Qwen、Cursor、Copilot、Crush、Kiro、Pi）
+cmd, agent1:codex; agent2:claude, agent3:kimi; agent4:grok, agent5:agy
 
 # 按权重非对称布局：主面板更宽
 cmd; main:codex(3), reviewer:claude; qa:gemini
@@ -549,28 +601,31 @@ cmd; main:codex@70, reviewer:claude; qa:gemini
 
 #### Chain Ask（链式委派，v8.0.9+）
 
-当 Agent 正在处理 CCB 任务时，如果需要另一个 Agent 的结果才能继续，必须使用 `--chain`（旧名 `--callback`）而非普通 `ask`：
+当 Agent 正在处理 CCB 任务时，如果需要另一个 Agent 的结果才能继续，必须使用 `--chain` 而非普通 `ask`（旧名 `--callback` 已不再被 parser 接受）：
 
 ```bash
 # 在 Agent 内部调用（支持链式委派：agent2 -> agent4 -> agent1 -> agent3）
 ccb ask --chain reviewer <<'EOF'
 Review this failing test and return the minimal blocker.
 EOF
-
-# --callback 作为兼容别名仍然可用
-ccb ask --callback reviewer <<'EOF'
-Review this failing test and return the minimal blocker.
-EOF
 ```
+
+> 旧名 `--callback` 曾被作为兼容别名接受，**现已不再被 parser 接受**；请统一使用 `--chain`。
 
 CCB 会记录父子任务关系，子任务完成后自动将结果回传给父 Agent 作为新的 continuation 任务。普通 `ask` 仅在**没有活跃 CCB 任务**时使用；在活跃任务内使用普通 `ask` 可能导致任务状态混乱。
 
-#### Notify Sender（v7.0.9+）
+#### Notify Sender（v7.0.9+，⚠️ 当前不可用）
 
-当向其他 Agent 发送任务后，除了默认的同步等待回复外，还可以通过 `--notify-sender` 要求**在任务完成时向 sender inbox 发送一条通知**（无论成功、失败或取消）：
+`--notify-sender` 用于在任务完成时向 sender inbox 发送一条通知（无论成功、失败或取消）。
+
+> ⚠️ **本 Fork 当前无法使用该功能**：终局处理侧的 `_maybe_notify_sender` 仍在（`lib/ccbd/services/dispatcher_runtime/finalization_runtime/service.py`），它读取 `route_options['notify_sender']`；但该值仅由 `lib/cli/services/ask_runtime/submission.py` 从 `command.notify_sender` 派生，而 `ParsedAskCommand` 已无此字段、parser 也已不接受 `--notify-sender`。因此该标志在命令行无效，通知不会发出。
+>
+> 需要等待任务结果时，请使用 `ccb pend --watch <job_id>`。
+
+以下为**该功能设计时的**预期用法，仅在标志恢复后有效：
 
 ```bash
-# 发任务时附加通知标志
+# 发任务时附加通知标志（当前无效）
 ccb ask --notify-sender planner <<'EOF'
 请设计登录页面
 EOF
@@ -585,9 +640,10 @@ CCB job job_abc for agent `planner` has finished with status: completed.
 Use `ccb trace job_abc` to view the full result.
 ```
 
-与 `--chain`（旧名 `--callback`）的区别：
+与 `--chain`（旧名 `--callback` 已不再被接受）的区别：
+
 - `--chain`：标记为链式任务，创建 continuation job，**要求 parent Agent 有活跃的 provider session 来接收回传任务**（Claude/Codex 支持，Kimi pane-log 模式不支持持续 watch）
-- `--notify-sender`：仅在任务完成时向 sender inbox 发送一条系统 notice，**不创建 continuation job，不依赖 provider watch 机制**，适合所有 provider（包括 Kimi）
+- ⚠️ `--notify-sender`：**当前不可用**。终局处理侧的 `_maybe_notify_sender` 仍在，但 CLI 侧 `--notify-sender` 标志与 `ParsedAskCommand.notify_sender` 字段已被移除，因此该路径无法从命令行触发。若需要"任务完成时通知 sender"，请改用 `ccb pend --watch <job_id>` 主动等待。
 - 两者可以独立使用，也可以组合使用
 
 #### Artifact Transport（v7.3.0+）
@@ -680,6 +736,10 @@ ccb tools doctor neovim
 ---
 
 ## 更新与升级
+
+> ⚠️ **本 Fork 请勿使用 `ccb update`** —— 它会从官方 release 渠道下载并覆盖本地源码，清除本 Fork 的全部改动。正确做法见 [Fork 更新方式与行为变更](#fork-更新方式与行为变更)：`git merge upstream/main` + `./install.sh install`。
+>
+> 本节以下的 `ccb update` / 自动更新说明**仅适用于官方 CCB**。
 
 ### 自动更新
 
@@ -852,13 +912,15 @@ which claude     # 若使用 Claude agent
 which codex      # 若使用 Codex agent
 which gemini     # 若使用 Gemini agent
 which kimi       # 若使用 Kimi agent
-which mmx-daemon # 若使用 MMX agent
+which mmx-daemon # 若使用 MMX agent（⚠️ 见下方 MMX 提示：provider 当前不可达）
 which agy        # 若使用 Antigravity agent
 ```
 
 > **Kimi 安装提示**：Kimi Code 是 VS Code 扩展，需要先在 VS Code 中安装 [Kimi Code 扩展](https://marketplace.visualstudio.com/items?itemName=moonshot-ai.kimi-code)。`kimi` CLI 通常位于 `~/.local/bin/kimi` 或 VS Code 扩展目录中。
 >
 > **MMX 安装提示**：`mmx-daemon` 随 CCB 一起安装到 `~/.local/bin/mmx-daemon`，无需额外安装。
+>
+> ⚠️ **MMX provider 当前不可达**：本 Fork 的 MMX 注册项（`OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC`）自 v8.5.4 合并后缺失，`lib/provider_backends/mmx/` 下的代码虽在，但 config 校验与运行时注册表均不识别 `mmx`，因此无法在 `ccb.config` 中挂载 MMX Agent。`mmx-daemon` 二进制仍会被安装，但不构成可用支持。修复方式是把这些注册项恢复到注册表与 runtime spec 中。
 
 ### Q6: `ccb` 命令找不到
 
@@ -950,7 +1012,7 @@ v7.6.4+ 为所有 Agent 引入项目级可配置的 Job Heartbeat 超时检测�
 ```bash
 # 方式一：环境变量（Kimi/MMX 专用，向后兼容）
 export CCB_KIMI_NO_TERMINAL_TIMEOUT_S=300
-export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300
+export CCB_MMX_NO_TERMINAL_TIMEOUT_S=300   # ⚠️ MMX provider 当前不可达，且该变量未在控制面 allowlist 中
 ccb
 ```
 
@@ -1188,14 +1250,15 @@ ccb tools doctor <tool>          # 诊断托管工具健康状态
 # 安装/更新
 ./install.sh install   # 安装或更新
 ./install.sh uninstall # 卸载
-ccb update             # 更新到最新版
+ccb update             # 更新到最新版（⚠️ 本 Fork 请勿使用，见「Fork 更新方式与行为变更」）
+ccb update rich        # 仅更新 Rich 文件面板配置（v8.7.1+，不重启 Agent）
 ccb reinstall          # 重新安装
 
 # Agent 间通信（在 Agent 内部使用）
-/ask <agent> <message>            # 向指定 Agent 委派任务（默认同步等待回复）
+/ask <agent> <message>            # 向指定 Agent 委派任务（提交后立即返回；等待回复见下方 pend --watch）
 ccb ask --silence <agent>         # 静默提交（不等待回复，v6.2.x+）
-ccb ask --callback <agent>        # 链式委派（--callback 兼容别名，v8.0.9+ 推荐 --chain）
-ccb ask --notify-sender <agent>   # 任务完成后通知 sender（v7.0.9+）
+ccb ask --chain <agent>           # 链式委派（v8.0.9+；旧名 --callback 已不再被接受）
+ccb ask --artifact-io <agent>     # 大消息溢写为 text artifact（v7.3.0+）
 /ping <agent|ccbd>                # 检查 Agent 或控制平面健康
 /pend <agent|job_id>              # 查看 Agent 回复
 
@@ -1216,7 +1279,10 @@ ccb queue              # 查看 Agent 队列状态
 ccb queue --detail     # 查看详细队列状态（v6.2.x+）
 ccb inbox <agent>      # 查看 Agent 收件箱
 ccb trace <id>          # 查看任务/消息/回复的完整 lineage
+ccb screen <agent>      # 只读抓取 tmux 屏幕文字（--lines N / --json，v8.6.19+）
 ccb repair ack <agent>  # 确认 Agent 的回复/收件箱进度
 ccb repair retry <id>   # 重试失败的任务
 ccb clear [agent...]    # 发送 /clear 到 Agent pane
 ```
+
+> **`ask` 的同步/异步说明**：`ccb ask` 始终为**异步提交**并立即返回 job_id；`--sync` / `--async` 两个标志已被移除（"async submit is already the default"）。需要阻塞等待回复时，由调用方显式执行 `ccb pend --watch <job_id>`，本 Fork 的 skill 与 CLAUDE 模板即采用此工作流。

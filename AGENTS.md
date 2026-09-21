@@ -2,28 +2,44 @@
 
 ## 项目 Agent 团队
 
-本项目（claude_code_bridge-6）使用 CCB 管理以下 5 个 AI Agent：
+本项目（claude_code_bridge-6）当前使用 CCB 管理以下 4 个 AI Agent。下表以**生效中的布局**为准（`.ccb/ccb.config` 路由 `config_profile = "compact"` → `.ccb/ccb-compact.config`）：
 
-| Agent | Provider | 角色职责 |
+| CCB Agent id | Provider | 角色职责 |
 |-------|----------|----------|
 | `planner` | Codex | 方案设计 - 负责系统架构、技术选型、模块划分 |
-| `executor` | Codex | 核心开发 - 负责编码实现、功能开发、Bug 修复 |
-| `reviewer` | Claude | 代码审查 - 负责代码质量、潜在风险、最佳实践检查 |
+| `developer` | Claude | 核心开发 - 负责编码实现、功能开发、Bug 修复（评审框架中的 `executor` 角色） |
+| `reviewer` | Codex | 代码审查 - 负责代码质量、潜在风险、最佳实践检查 |
 | `tester` | Kimi | 执行分析测试 - 负责命令执行、结果分析、回归测试 |
-| `inspiration` | OpenCode | 弹性协作 - 跳过发散视角、补充备选方案，或按被替代角色规范代执行 |
 
-分屏布局（tmux）：
-```
+> **`inspiration`（OpenCode）当前未挂载**：`ccb-compact.config` 中没有该 agent，`ccb-multi.config` 中的定义处于注释状态。
+>
+> **切换到 multi profile 后 provider 分配会变**：`.ccb/ccb-multi.config` 中为 `main = "planner:codex; developer:codex"`、`work = "reviewer:claude; tester:kimi"`，与上表不同。
+
+分屏布局（tmux）——两套档案，改 `.ccb/ccb.config` 的 `config_profile` 一行切换：
+
+**compact（当前生效）** — 单窗口：
+
+```text
 ┌───────────────┬───────────────┐
-│    planner    │  executor     │
+│    planner    │  developer    │
 │    (codex)    │  (claude)     │
-├───────────────┼───────────────┼
+├───────────────┼───────────────┤
 │   reviewer    │   tester      │
 │   (codex)     │   (kimi)      │
 └───────────────┴───────────────┘
 ```
 
-- 通过 `/ask` skill 或 `ccb ask <agent> <message>` 向指定 agent 发送任务。默认**同步等待回复**（`ask` → 解析 job_id → `pend --watch <job_id>`），`--silence` 跳过等待。
+**multi** — 双窗口（`main` / `work`；`test` 已注释未启用）：
+
+```text
+窗口 main:  窗口 work:
+┌──────────┬──────────┐   ┌──────────┬──────────┐
+│ planner  │developer │   │ reviewer │  tester  │
+│ (codex)  │ (codex)  │   │ (claude) │  (kimi)  │
+└──────────┴──────────┘   └──────────┴──────────┘
+```
+
+- 通过 `/ask` skill 或 `ccb ask <agent> <message>` 向指定 agent 发送任务。`ask` 本身**异步提交并立即返回** job_id（`--sync`/`--async` 标志已被移除）；需要同步等待时由调用方执行 `ccb pend --watch <job_id>`，`--silence` 表示连这一步也跳过。
 - 手动查看回复：`ccb pend <agent>` 或 `ccb pend --watch <agent>`。
 - **时区注意**：CCB 日志时间戳均为 **UTC**。向用户报告时，必须换算为 **北京时间（UTC+8）**。
 

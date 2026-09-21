@@ -15,6 +15,14 @@ Date: 2026-08-18
 
 ## Done
 
+- Corrected managed Claude API-key approval for explicit profile/agent env and
+  allowed ambient credentials without external writes. Local implementation:
+  [approval evidence](evidence/claude-explicit-key-approval-20260917.md).
+
+- PR353 merged with owner authorization; local compatibility follow-up keeps
+  custom endpoints without keys usable while binding explicit/allowed inherited
+  keys. [Regression and real HTTP evidence](evidence/pr353-env-key-20260917.md).
+
 - Established the one-way external-state requirement and explicit CCB-local
   configuration boundary.
 - Confirmed current CCB already gives explicit `key/url` authority precedence
@@ -107,6 +115,9 @@ Date: 2026-08-18
 
 ## In Progress
 
+- Qualify the local PR350 integration and repaired auth boundaries on
+  `integrate/pr350-auth-fixes`; native platform and remote OAuth qualification
+  remain open. See [integration evidence](../../baseline/evidence/pr350-local-integration-20260916.md).
 - Complete organic real-fault qualification for `codex-reconnect` without
   manufacturing provider pressure.
 - Close the writable-home boundary for `provider_profile.home`.

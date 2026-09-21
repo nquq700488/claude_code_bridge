@@ -1,5 +1,11 @@
 # Kimi Provider 接入 CCB 流程与踩坑记录
 
+> ⚠️ **本文为历史记录，请勿按此重新实现。**
+>
+> 上游官方现已原生支持 Kimi，且本 Fork 的 `lib/provider_backends/kimi/` 与上游**逐字节一致**（不再存在 Fork 特有的 Kimi 增强）。下文描述的接入过程是本 Fork 早期（CCB v6 时代，官方尚不支持 kimi）的做法，保留作为踩坑参考。
+>
+> 排查 Kimi 问题请看 [CCB_INSTALL_GUIDE.md](./CCB_INSTALL_GUIDE.md) 的 Q14 / Q15。
+
 ## 背景
 
 CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot）"。但 Kimi CLI（v1.43.0+）实际上具备 session 管理（`--session`/`--continue`）和结构化日志（`context.jsonl`），具备接入 CCB 的条件。

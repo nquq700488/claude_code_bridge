@@ -5,6 +5,7 @@ from typing import Iterable
 
 from stdio_runtime import read_stdin_text
 from cli.models import ParsedCommand, ParsedStartCommand
+from .parser_runtime.screen import parse_screen
 
 from .parser_runtime import (
     SUBCOMMANDS,
@@ -76,6 +77,7 @@ _COMMAND_PARSERS = {
     'ack': parse_ack,
     'agent': parse_agent,
     'logs': parse_logs,
+    'screen': parse_screen,
     'loop': parse_loop,
     'plan': parse_plan,
     'question': parse_question,
