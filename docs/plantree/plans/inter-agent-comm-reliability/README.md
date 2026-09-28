@@ -2,7 +2,57 @@
 
 Date: 2026-06-14
 
-Last updated: 2026-09-21
+Last updated: 2026-09-26
+
+## v8.7.1 delivery-stall repair / v8.7.2 qualification
+
+Published v8.7.3 verification is tracked in
+[release qualification](evidence/release-873-verification-20260928.md).
+Scope: model-independent Codex observation and regression/evidence coverage;
+six V3 preview roles are also removed from install/update recommendations.
+GitHub artifacts and a fresh npm installation are verified; native Claude
+plugins remain experimental. A post-merge macOS timing failure is tracked
+separately in the qualification record, including its bounded rerun.
+
+2026-09-28: [real native Claude composer plugin probe](evidence/claude-native-composer-live-20260928.md)
+confirms opt-in draft read/fill and live Tab suggestion separation. Edit events
+miss Tab/paste transitions; modal and unbound reads can both be empty. This is
+an isolated prototype, not a replacement for the shipped guard.
+
+2026-09-27 local follow-up: [model-independent composer detection](evidence/composer-model-independence-20260927.md)
+removes Codex model-prefix matching and verifies Claude/OMP model independence.
+This follow-up is included in v8.7.3; existing live projects were not upgraded.
+[Claude suggestion/return tests](evidence/claude-suggestion-reply-delivery-20260927.md)
+verify unaccepted ghost release, accepted-draft protection and ordered return
+delivery. A fresh live rerun after the owner switched API source also passed
+Claude shell work, Claude-to-Claude result continuation and subsequent delivery;
+live Tab/ghost transitions still rely on earlier captures.
+[Continuous real qualification](evidence/claude-continuous-queue-live-20260927.md)
+passed 19 jobs: three same-session chains, human busy gating, early/deadline
+draft release, return-before-ask FIFO, and model-menu exit recovery.
+
+[v8.7.2 qualification](evidence/release-872-verification-20260926.md): repair
+and separated release metadata merged through PRs #357–#359. The candidate
+passed full Linux/macOS suites and real macOS/WSL communication, recovery and
+stress gates. An actual v8.7.1 corrupted command was upgraded through the npm
+candidate without clearing the session; queued Codex-to-Codex crash recovery
+passed. Tag v8.7.2 points to `91fb0a4d2`; public assets, checksums, npm latest
+and a fresh registry installation are verified. The reporter's remaining
+healthy-pane stall is still open.
+
+[Incident and source fix](evidence/ask-stall-871-20260926.md): Bun reports
+ENOENT for an abandoned OMP editor socket, preventing bridge recovery and
+holding pre-claim delivery indefinitely. The isolated fix handles that error
+with unchanged ownership checks and exposes cached draft-guard reasons in
+`ccb queue`. Additional Codex-to-Codex crash testing reproduced #356's exit-2
+resume error locally: an unrecognized CCB-generated hook-trust flag caused
+repeated `resume <id>` suffixes. The parser fix passed real same-session crash
+recovery and queued child delivery, plus 567 regressions. This does not establish
+every healthy-pane composer stall in the reporter's environment has the same cause.
+Fresh-project verification: Codex completed a real ask; OMP recovered its stale
+socket after a crash and preserved FIFO through a real 180-second draft wait.
+OMP model completion remains unverified because the configured service returned
+402 (insufficient balance); delivery was independently confirmed.
 
 ## Current Input-Guard Slice
 

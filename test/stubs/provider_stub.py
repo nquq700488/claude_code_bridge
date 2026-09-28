@@ -1676,7 +1676,7 @@ def _print_guarded_idle_composer(provider: str) -> None:
     if not sys.stdout.isatty():
         return
     if provider == "codex":
-        sys.stdout.write("\r\x1b[J› Ask Codex to do anything\r\n  ? for shortcuts\x1b[1A\x1b[3G")
+        sys.stdout.write("\r\x1b[J› Ask Codex to do anything\r\n\r\n  ? for shortcuts\x1b[2A\x1b[3G")
     elif provider == "claude":
         sys.stdout.write("\r\x1b[J──────────────────────────────\r\n❯ \r\n──────────────────────────────\x1b[1A\x1b[3G")
     sys.stdout.flush()
@@ -1925,10 +1925,17 @@ def main(argv: list[str]) -> int:
             time.sleep(0.05)
             continue
         line = line.rstrip("\n")
+        current_lines, current_req = _sync_prompt_buffer_request(line, current_lines, current_req)
+        if provider in {"codex", "claude"} and not current_req and not DONE_RE.match(line):
+            # Exact-turn completion can precede optional guidance. The sender
+            # strips trailing newlines, so its delayed Enter may finish a
+            # nonempty guidance line. It is not a new anchored request; repaint
+            # after terminal echo, just as a native idle TUI would.
+            current_lines = []
+            _print_guarded_idle_composer(provider)
+            continue
         if not line and not current_lines:
             continue
-
-        current_lines, current_req = _sync_prompt_buffer_request(line, current_lines, current_req)
 
         current_lines.append(line)
 

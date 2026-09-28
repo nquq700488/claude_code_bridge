@@ -6,6 +6,52 @@ Last updated: 2026-09-20
 
 ## Current Slice: Unified FIFO And Empty-Result Notices
 
+v8.7.3 is published; [qualification](evidence/release-873-verification-20260928.md)
+records merged source, passing candidate gates, public hashes and a fresh npm
+installation with verified six-role recommendation filtering. No native Claude
+plugin enablement is included. Post-merge macOS timing failure/rerun evidence
+is tracked separately; reporter-specific unsupported layouts remain open.
+
+2026-09-28: [native Claude plugin experiment](evidence/claude-native-composer-live-20260928.md)
+passed real editor read/fill, ghost acceptance and negative-control probes.
+Production integration is not ready: qualify modal/busy binding, folded-paste
+and attachment clear, freshness and experimental-interface compatibility first.
+
+2026-09-27: owner requires model-independent observation for Codex/Claude/OMP.
+[Local implementation and tests](evidence/composer-model-independence-20260927.md)
+remove Codex model-prefix matching; Claude/OMP retain their existing structural
+and native-editor checks. Next: review and live layout qualification before release.
+Claude [dynamic-suggestion return-delivery regressions](evidence/claude-suggestion-reply-delivery-20260927.md)
+are recorded locally: suggestions do not hold the covered FIFO return paths;
+accepted drafts remain protected. Fresh live qualification remains pending.
+The fresh dual-Claude attempt delivered requests but hit upstream API 502
+access-forbidden errors before tool work or replies. A working provider route
+and startup-hook interpreter verification blocked that initial acceptance attempt.
+After the owner switched source, a fresh project passed real Claude question,
+shell work, Claude-to-Claude result continuation and subsequent delivery; both
+queues drained. The persistent test venv also avoided the startup-hook error.
+Live Tab/ghost transition qualification remains separate from this passing chain.
+[Continuous real qualification](evidence/claude-continuous-queue-live-20260927.md)
+subsequently passed 19 jobs, all one attempt: three chains, manual busy turn,
+early clear, real 180-second draft gate, held return and menu recovery. Journal
+timestamps confirm FIFO; queues drained. This is local evidence, not publication.
+
+2026-09-26 maintenance: [v8.7.1 ask-stall repair](evidence/ask-stall-871-20260926.md)
+reproduces Bun stale editor-socket recovery failure and adds queue wait reasons.
+Source changes and focused tests are isolated from the shared installation.
+Fresh-project Codex ask, OMP same-socket crash recovery and real 180-second
+draft/FIFO delivery checks passed; OMP responses are blocked by provider 402.
+Codex-to-Codex testing additionally reproduced duplicate resume arguments after
+a crash; recognizing CCB's generated hook-trust flag fixes the accumulation.
+Same-session auto-recovery and queued child delivery passed; 567 regressions pass.
+Promotion: PRs #357–#359 merged; v8.7.2 tagged at `91fb0a4d2`. Full Linux/macOS
+regressions and real macOS/WSL gates passed, including the candidate rerun.
+Actual old-package upgrade and npm-installed Codex-to-Codex recovery passed;
+see [release qualification](evidence/release-872-verification-20260926.md).
+Public GitHub assets/checksums, npm 8.7.2 latest and a fresh registry install
+are verified. Next: collect the reporter's remaining healthy-pane
+delivery-stall evidence. Issue #356 stays open.
+
 Status: Implemented in the working tree; the watchdog overlap found in
 [independent review](evidence/agent1-independent-review-20260919.md) is fixed by
 [reusing existing provider turn completion](evidence/provider-turn-end-only-20260919.md),

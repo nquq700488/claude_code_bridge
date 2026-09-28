@@ -1,5 +1,21 @@
 # Changelog
 
+## v8.7.3 (2026-09-28)
+
+- Stop recommending six V3 preview roles during install/update onboarding, while preserving explicit installs, installed-role updates and missing-source diagnostics.
+
+- Remove model-name and capitalization dependencies from supported Codex composer footer recognition (#361).
+- Add Claude dynamic-suggestion, accepted-draft, deferred-send and return-before-ask FIFO regressions; preserve the fixed 180-second policy.
+- Record 322 focused passing tests and 19 completed real Claude jobs. Experimental native composer plugins remain disabled.
+- English and Chinese notes, upgrade guidance and layout limitations: [v8.7.3](docs/releases/v8.7.3.md).
+
+## v8.7.2 (2026-09-26)
+
+- Fix Codex recovery commands accumulating duplicate resume arguments (#356).
+- Recover abandoned OMP editor sockets under Bun and expose input-guard queue reasons.
+- Recognize right-padded Codex empty placeholders while retaining unknown-input protection and FIFO.
+- English and Chinese notes, upgrade guidance and remaining issue scope: [v8.7.2](docs/releases/v8.7.2.md).
+
 ## v8.7.1 (2026-09-21)
 
 - Rich files open with the system default application on click or Enter; folders stay in Yazi.
