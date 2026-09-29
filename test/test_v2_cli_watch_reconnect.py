@@ -919,3 +919,179 @@ def test_inbox_target_passes_detail_flag(monkeypatch: pytest.MonkeyPatch, tmp_pa
     inbox_service.inbox_target(context, ParsedInboxCommand(project=None, agent_name='claude', detail=True))
 
     assert detail_seen == [True]
+
+
+def test_watch_target_fails_fast_when_agent_health_is_stopped(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-health-stopped'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    class _StoppedHealthClient:
+        def __init__(self) -> None:
+            self.watch_calls = 0
+            self.queue_calls = 0
+
+        def watch(self, target: str, *, cursor: int = 0) -> dict:
+            del target, cursor
+            self.watch_calls += 1
+            return {
+                'job_id': 'job_demo',
+                'agent_name': 'reviewer',
+                'cursor': 0,
+                'generation': 1,
+                'terminal': False,
+                'status': 'running',
+                'reply': '',
+                'events': [],
+            }
+
+        def queue(self, agent_name: str) -> dict:
+            assert agent_name == 'reviewer'
+            self.queue_calls += 1
+            return {
+                'agent': {
+                    'agent_name': agent_name,
+                    'runtime_state': 'stopped',
+                    'runtime_health': 'stopped',
+                    'pane_state': 'dead',
+                }
+            }
+
+    client = _StoppedHealthClient()
+    monkeypatch.setattr(
+        watch_service,
+        'connect_mounted_daemon',
+        lambda _context, allow_restart_stale: SimpleNamespace(client=client),
+    )
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '600')
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+    monkeypatch.setattr(watch_service.time, 'time', lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match='Agent reviewer health is stopped'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert client.watch_calls == 1
+    assert client.queue_calls == 1
+
+
+def test_watch_target_requires_two_consecutive_dead_pane_health_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-health-pane'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    class _PaneHealthClient:
+        def __init__(self) -> None:
+            self.watch_calls = 0
+            self.queue_calls = 0
+            self.pane_states = iter(('dead', 'alive', 'dead', 'dead'))
+
+        def watch(self, target: str, *, cursor: int = 0) -> dict:
+            del target, cursor
+            self.watch_calls += 1
+            return {
+                'job_id': 'job_demo',
+                'agent_name': 'reviewer',
+                'cursor': 0,
+                'generation': 1,
+                'terminal': False,
+                'status': 'running',
+                'reply': '',
+                'events': [],
+            }
+
+        def queue(self, agent_name: str) -> dict:
+            assert agent_name == 'reviewer'
+            self.queue_calls += 1
+            return {
+                'agent': {
+                    'agent_name': agent_name,
+                    'runtime_state': 'busy',
+                    'runtime_health': 'healthy',
+                    'pane_state': next(self.pane_states),
+                }
+            }
+
+    client = _PaneHealthClient()
+    clock = [0.0]
+
+    def now() -> float:
+        value = clock[0]
+        clock[0] += 5.0
+        return value
+
+    monkeypatch.setattr(
+        watch_service,
+        'connect_mounted_daemon',
+        lambda _context, allow_restart_stale: SimpleNamespace(client=client),
+    )
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '600')
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+    monkeypatch.setattr(watch_service.time, 'time', now)
+
+    with pytest.raises(RuntimeError, match='Agent reviewer pane is dead'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert client.watch_calls == 4
+    assert client.queue_calls == 4
+
+
+def test_watch_target_fails_after_consecutive_health_probe_errors(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-health-errors'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    class _UnavailableHealthClient:
+        def __init__(self) -> None:
+            self.watch_calls = 0
+            self.queue_calls = 0
+
+        def watch(self, target: str, *, cursor: int = 0) -> dict:
+            del target, cursor
+            self.watch_calls += 1
+            return {
+                'job_id': 'job_demo',
+                'agent_name': 'reviewer',
+                'cursor': 0,
+                'generation': 1,
+                'terminal': False,
+                'status': 'running',
+                'reply': '',
+                'events': [],
+            }
+
+        def queue(self, agent_name: str) -> dict:
+            assert agent_name == 'reviewer'
+            self.queue_calls += 1
+            raise CcbdClientError('reviewer node unavailable')
+
+    client = _UnavailableHealthClient()
+    clock = [0.0]
+
+    def now() -> float:
+        value = clock[0]
+        clock[0] += 5.0
+        return value
+
+    monkeypatch.setattr(
+        watch_service,
+        'connect_mounted_daemon',
+        lambda _context, allow_restart_stale: SimpleNamespace(client=client),
+    )
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '600')
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+    monkeypatch.setattr(watch_service.time, 'time', now)
+
+    with pytest.raises(RuntimeError, match='Health check failed 3 consecutive times'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert client.watch_calls == 3
+    assert client.queue_calls == 3

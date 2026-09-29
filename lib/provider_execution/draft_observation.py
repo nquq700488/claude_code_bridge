@@ -122,24 +122,33 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
 
 
 def _codex_footer(lines, styled, cursor_y: int) -> int | None:
-    # The status bar is the last nonblank row, separated from the editor by
-    # a blank row. Its configurable labels (including model names) are opaque.
+    # The status bar ends with a recognized shortcut/context row. Newer Codex
+    # builds may place a model/workspace row immediately above it without a
+    # blank separator; accept that pair only when the whole footer is separated
+    # from the editor by a blank row.
     footer = next((i for i in range(len(lines)-1, cursor_y, -1) if lines[i].strip()), None)
-    if footer is None or footer <= cursor_y+1 or lines[footer-1].strip():
+    if footer is None or not lines[footer].startswith('  '):
         return None
-    row = lines[footer]
-    if not row.startswith('  '):
+    if not re.match(r'^  (?:\d+% [Cc]ontext\b|\? for shortcuts\b)', lines[footer]):
+        # Custom status bars separate fields with a dim middle dot. Require the
+        # rendering attribute as well as spacing; ordinary draft prose is not a
+        # status bar just because it contains a dot or a model-like word.
+        if not any(char == '·' and dim and 0 < i < len(lines[footer])-1
+                   and lines[footer][i-1:i+2] == ' · '
+                   for i, (char, dim, _) in enumerate(styled[footer])):
+            return None
+    start = footer
+    previous = footer - 1
+    if (
+        previous > cursor_y + 1
+        and lines[previous].startswith('  ')
+        and ' · ' in lines[previous]
+    ):
+        start = previous
+    if start <= cursor_y + 1 or lines[start - 1].strip():
         return None
-    if re.match(r'^  (?:\d+% [Cc]ontext\b|\? for shortcuts\b)', row):
-        return footer
-    # Custom status bars separate fields with a dim middle dot. Require the
-    # rendering attribute as well as spacing; ordinary draft prose is not a
-    # status bar just because it contains a dot or a model-like word.
-    if any(char == '·' and dim and 0 < i < len(row)-1
-           and row[i-1:i+2] == ' · '
-           for i, (char, dim, _) in enumerate(styled[footer])):
-        return footer
-    return None
+    return start
+
 
 
 def _editor_mode_in_footer(lines: list[str]) -> bool:

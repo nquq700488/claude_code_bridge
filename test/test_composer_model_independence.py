@@ -61,6 +61,20 @@ def test_codex_draft_below_footer_like_text_is_not_ignored():
     assert inspect_screen('codex', screen, binding='pane').state == 'unknown'
 
 
+def test_codex_two_row_status_footer_without_internal_blank_is_supported():
+    screen = {
+        'text': (
+            '› Ask Codex to do anything\n\n'
+            '  claude-sonnet-4-20250514 medium · ~/Documents/project\n'
+            '  ? for shortcuts                       ⚠ 4 warnings · f2 to view'
+        ),
+        'cursor_x': 2,
+        'cursor_y': 0,
+    }
+    assert inspect_screen('codex', screen, binding='pane').state == 'empty'
+
+
+
 def test_codex_multiline_placeholder_is_not_empty():
     screen = {'text': '› Ask Codex to do anything\n  remaining draft\n\n  ? for shortcuts',
               'cursor_x': 2, 'cursor_y': 0}

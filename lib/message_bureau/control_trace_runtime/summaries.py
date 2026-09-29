@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from message_bureau.control_queue_runtime.common import delivery_stage_for_inbound_status
 from message_bureau.reply_metadata import (
     reply_heartbeat_silence_seconds,
     reply_last_progress_at,
@@ -100,6 +101,8 @@ def event_summary(service, event) -> dict[str, object]:
         'inbound_event_id': event.inbound_event_id,
         'agent_name': event.agent_name,
         'event_type': event.event_type.value,
+        'delivery_stage': delivery_stage_for_inbound_status(event.status)[0],
+        'delivery_reason': delivery_stage_for_inbound_status(event.status)[1],
         'message_id': event.message_id,
         'attempt_id': event.attempt_id,
         'payload_ref': event.payload_ref,

@@ -1879,3 +1879,31 @@ def test_render_inbox_and_ack_include_reply_delivery_details() -> None:
     assert 'reply_notice: false' in ack_lines
     assert 'next_inbound_event_id: iev_3' in ack_lines
     assert ack_lines[-1] == 'reply: done'
+
+
+def test_render_trace_includes_delivery_stage_events() -> None:
+    lines = render_trace(
+        {
+            'target': 'job_123',
+            'resolved_kind': 'job',
+            'delivery_events': [
+                {
+                    'event_id': 'evt_delivery',
+                    'job_id': 'job_123',
+                    'event_type': 'provider_start_failed',
+                    'timestamp': '2026-09-29T00:00:01Z',
+                    'payload': {
+                        'delivery_stage': 'provider_start_failed',
+                        'delivery_reason': 'provider_start_exception',
+                        'delivery_error': 'wrong tmux socket',
+                    },
+                },
+            ],
+        }
+    )
+
+    assert (
+        'delivery_event: id=evt_delivery job=job_123 type=provider_start_failed '
+        'stage=provider_start_failed reason=provider_start_exception '
+        'error=wrong tmux socket timestamp=2026-09-29T00:00:01Z'
+    ) in lines

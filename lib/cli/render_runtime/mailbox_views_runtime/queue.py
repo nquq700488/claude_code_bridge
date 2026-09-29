@@ -88,11 +88,19 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
         lines.append('queue_details: omitted; rerun with `ccb pend --queue --detail <agent>` or `ccb queue --detail <agent>` for queued-event detail')
         return tuple(lines)
     for event in queued_events or ():
-        lines.append(
+        line = (
             'queue_event: '
             f'pos={event["position"]} event={event["inbound_event_id"]} type={event["event_type"]} '
-            f'status={event["status"]} priority={event["priority"]} '
-            f'message={event["message_id"]} attempt={event["attempt_id"]} job={event["job_id"]}'
+            f'status={event["status"]} '
+        )
+        delivery_stage = event.get('delivery_stage')
+        delivery_reason = event.get('delivery_reason')
+        if delivery_stage or delivery_reason:
+            line += f'stage={delivery_stage} reason={delivery_reason} '
+        lines.append(
+            line
+            + f'priority={event["priority"]} message={event["message_id"]} '
+            f'attempt={event["attempt_id"]} job={event["job_id"]}'
         )
     return tuple(lines)
 

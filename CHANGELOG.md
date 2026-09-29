@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Make `ccb restart <agent>` recreate a missing managed pane through the normal startup flow when the Provider session is still available, instead of silently skipping the restart.
+- Make `ccb pend --watch` stop early with the agent health or pane failure when the target cannot proceed, while preserving transient reconnects and the configured timeout as a final bound.
+- Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
+- Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
+
 ## v8.7.3 (2026-09-28)
 
 - Stop recommending six V3 preview roles during install/update onboarding, while preserving explicit installs, installed-role updates and missing-source diagnostics.

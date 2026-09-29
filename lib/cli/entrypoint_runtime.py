@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import TextIO
 
@@ -8,10 +7,7 @@ from cli.ask_usage import write_ask_usage
 from cli.auxiliary import cmd_droid_subcommand
 from cli.management import cmd_install, cmd_reinstall, cmd_uninstall, cmd_update, cmd_version
 from cli.management_runtime.commands_runtime.update import maybe_handle_post_update_command
-from cli.management_runtime.startup_update import (
-    maybe_handle_background_update_refresh_command,
-    maybe_handle_startup_release_update,
-)
+from cli.management_runtime.startup_update import maybe_handle_background_update_refresh_command
 from cli.phase2 import maybe_handle_phase2
 from cli.parser_runtime.constants import SUBCOMMANDS
 from cli.router import dispatch_auxiliary_command, dispatch_management_command, print_command_help, print_kill_help, print_start_help
@@ -156,7 +152,9 @@ def _dispatch_management(tokens: list[str], *, script_root: Path) -> int | None:
     return dispatch_management_command(
         tokens,
         install_handler=lambda args: cmd_install(args, script_root=script_root),
-        update_handler=lambda args: cmd_update(args, script_root=script_root),
+        # Fork: ccb update 已禁用（会下载官方 release 覆盖 Fork 改动）
+        # update_handler=lambda args: cmd_update(args, script_root=script_root),
+        update_handler=lambda args: 0,
         version_handler=lambda args: cmd_version(args, script_root=script_root),
         uninstall_handler=lambda args: cmd_uninstall(args, script_root=script_root),
         reinstall_handler=lambda args: cmd_reinstall(args, script_root=script_root),
@@ -303,16 +301,18 @@ def run_cli_entrypoint(
     if auto_rich_result is not None:
         return auto_rich_result
 
-    startup_update_result = maybe_handle_startup_release_update(
-        tokens,
-        script_root=script_root,
-        cwd=cwd,
-        stdout=stdout,
-        stderr=stderr,
-        stdin=sys.stdin,
-    )
-    if startup_update_result is not None:
-        return startup_update_result
+    # Fork: disable startup release updates as well; they bypass the update handler
+    # and could replace Fork files with an official upstream release.
+    # startup_update_result = maybe_handle_startup_release_update(
+    #     tokens,
+    #     script_root=script_root,
+    #     cwd=cwd,
+    #     stdout=stdout,
+    #     stderr=stderr,
+    #     stdin=sys.stdin,
+    # )
+    # if startup_update_result is not None:
+    #     return startup_update_result
 
     return maybe_handle_phase2(tokens, cwd=cwd, stdout=stdout, stderr=stderr)
 __all__ = ["run_cli_entrypoint"]

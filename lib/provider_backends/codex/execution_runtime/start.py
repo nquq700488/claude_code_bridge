@@ -76,6 +76,12 @@ def start_active_submission(
         runtime_state={
             **guard_state,
             'prompt_sent': not guard_state['draft_guard_enabled'],
+            'delivery_stage': (
+                'awaiting_input_guard'
+                if guard_state['draft_guard_enabled']
+                else 'pane_send_succeeded'
+            ),
+            'delivery_mechanism': 'tmux_backend',
             'pending_prompt': prompt if guard_state['draft_guard_enabled'] else '',
             'mode': 'active',
             'reader': reader,
@@ -122,6 +128,7 @@ def dispatch_guarded_prompt(submission, *, now):
         state['state'] = state['reader'].capture_state()
         guarded_send(state, lambda: send_prompt_to_runtime_target(
             state['backend'], state['pane_id'], str(state['pending_prompt'])))
+        state['delivery_stage'] = 'pane_send_succeeded'
         state['prompt_sent_at'] = now
         state['delivery_started_at'] = '' if state.get('no_wrap') else now
         state['delivery_last_progress_at'] = state['delivery_started_at']
@@ -213,6 +220,8 @@ def _runtime_not_ready_submission(
     diagnostics = {
         'provider': provider,
         'mode': 'error',
+        'delivery_stage': 'provider_runtime_not_ready',
+        'delivery_reason': 'runtime_unavailable',
         'reason': 'runtime_unavailable',
         'error': 'codex_runtime_not_ready',
         'error_type': 'codex_runtime_not_ready',
@@ -232,6 +241,8 @@ def _runtime_not_ready_submission(
         diagnostics=diagnostics,
         runtime_state={
             'mode': 'error',
+            'delivery_stage': 'provider_runtime_not_ready',
+            'delivery_reason': 'runtime_unavailable',
             'reason': 'runtime_unavailable',
             'error': 'codex_runtime_not_ready',
             'diagnostics': diagnostics,

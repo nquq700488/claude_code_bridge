@@ -23,8 +23,19 @@ def post_launch(backend: object, pane_id: str, runtime_dir: Path, launch_session
     # 交互 codex CLI 已通过 respawn 进 herdr pane，bridge RPC 为辅助，失败不阻塞。
     if _backend_is_herdr(backend):
         return
-    spawn_codex_bridge(runtime_dir=runtime_dir, pane_id=pane_id, prepared_state=prepared_state)
+    spawn_codex_bridge(
+        runtime_dir=runtime_dir,
+        pane_id=pane_id,
+        prepared_state=prepared_state,
+        tmux_socket_path=_backend_tmux_socket_path(backend),
+    )
     validate_bridge_bootstrap(runtime_dir)
+
+
+def _backend_tmux_socket_path(backend: object) -> str | None:
+    value = getattr(backend, '_socket_path', None) or os.environ.get('CCB_TMUX_SOCKET_PATH')
+    text = str(value or '').strip()
+    return text or None
 
 
 def _backend_is_herdr(backend: object) -> bool:
@@ -36,9 +47,20 @@ def _backend_is_herdr(backend: object) -> bool:
     return str(getattr(backend, 'backend_impl', '') or '').strip() == 'herdr'
 
 
-def spawn_codex_bridge(*, runtime_dir: Path, pane_id: str, prepared_state: dict[str, object] | None = None) -> None:
+def spawn_codex_bridge(
+    *,
+    runtime_dir: Path,
+    pane_id: str,
+    prepared_state: dict[str, object] | None = None,
+    tmux_socket_path: str | None = None,
+) -> None:
     artifacts = codex_runtime_artifact_layout(runtime_dir)
     env = os.environ.copy()
+    resolved_tmux_socket_path = str(
+        tmux_socket_path or env.get('CCB_TMUX_SOCKET_PATH') or ''
+    ).strip()
+    if resolved_tmux_socket_path:
+        env['CCB_TMUX_SOCKET_PATH'] = resolved_tmux_socket_path
     # TODO(herdr): CODEX_TERMINAL 应随 backend 选择（herdr→'herdr'，tmux→'tmux'）。
     # 当前硬编码 'tmux' 不影响 herdr pane 内交互 codex CLI（respawn 已进 pane）；
     # bridge 为辅助 RPC，CODEX_TERMINAL 适配留后续 herdr integration。

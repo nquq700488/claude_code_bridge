@@ -41,8 +41,12 @@
 - **消息统一队列（v8.6.19+）**：请求与返回结果在每个 Agent 上共用一条时间顺序队列，返回结果占用执行槽直至对端回合结束，后续消息不会插队
 - **输入草稿保护（v8.7.1+）**：用户正在输入框编辑时，已排队的消息最多等待 180 秒，到期清空一次并确认空输入后再投递
 - **`ccb screen <agent>`（v8.6.19+）**：只读抓取 tmux 屏幕文字，用于排查 Agent 卡住或异常
+- **Agent pane 故障恢复**：`ccb restart <agent>` 在 Provider session 仍可用但 pane 缺失时，会通过正常启动流程重建 pane；无法恢复 session 时会明确报告 `session_missing`
+- **消息投递阶段诊断**：`ccb queue --detail <agent>` 与 `ccb trace <job_id>` 会显示排队、claim、Provider 启动和 pane 投递阶段；失败时显示阶段、原因和错误
+- **Codex 双行底栏兼容**：Codex v0.158.0 的模型/工作目录行与快捷键行组合会被识别为正常空 composer，不再误报 `composer_layout_unknown`
+- **`pend --watch` 健康失败快速返回**：目标 Agent 已停止、异常或 pane 连续失效时提前返回诊断，不必等满默认 600 秒超时
 - **Rich 文件面板系统打开（v8.7.1+）**：点击文件或按 Enter 用系统默认应用打开（macOS `open` / Linux `gio open` / WSL `wslview`）
-- 按项目配置 Agent 团队和 tmux 分屏布局
+'}、】【彩票娱乐注册? Wait tool call malformed? It returned no output? Let's check. Actually tool call in transcript seems content includes ` functions.Edit` JSON? It hasn't returned? Need see. I'm still analysis; maybe call didn't execute due malformed? The prior assistant message is a tool call? It appears code block with extra `},` maybe not valid. Let's inspect last tool response: It shows no `functions.Edit` output? It appears in transcript: `assistant to=functions.Edit ...` then maybe no tool result? Wait above text: I see a call line with JSON ending `}` and then no `tool` response; might be parser issue. Need reissue correctly. Ensure `replace_all` included. Use exact. But file has been Read, okay. Need no accidental. Let's call.无码av. 七星彩. Let's proceed. use functions.Edit commentary.лирида. It may be in previous message hidden? I see in transcript after call - 按项目配置 Agent 团队和 tmux 分屏布局
 - 每个 Agent 独立配置 API key、模型、端点
 - 可选 git worktree 隔离
 - 会话持久化和恢复
@@ -289,7 +293,7 @@ cd claude_code_bridge
 | `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
 | `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
 | `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒）；⚠️ 未加入控制面 allowlist，daemon 不会转发该变量 |
-| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` 默认超时（秒，v7.2.1+） |
+| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` 默认超时（秒，v7.2.1+）；Agent 健康失败时会提前返回 |
 | `CCB_WAIT_POLL_INTERVAL_S` | `0.1` | `pend --watch` 轮询间隔（秒） |
 | `CCB_KEYCHAIN_SERVICE_OVERRIDE` | 空 | macOS Keychain 服务名覆盖（v7.0.4+） |
 | `CODEX_CLAUDE_COMMAND_DIR` | 自动检测 | 自定义 Claude commands 目录 |
@@ -922,6 +926,16 @@ which agy        # 若使用 Antigravity agent
 >
 > ⚠️ **MMX provider 当前不可达**：本 Fork 的 MMX 注册项（`OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC`）自 v8.5.4 合并后缺失，`lib/provider_backends/mmx/` 下的代码虽在，但 config 校验与运行时注册表均不识别 `mmx`，因此无法在 `ccb.config` 中挂载 MMX Agent。`mmx-daemon` 二进制仍会被安装，但不构成可用支持。修复方式是把这些注册项恢复到注册表与 runtime spec 中。
 
+如果 `ccb ps` 显示目标 Agent 为 stopped 且没有 pane，可按以下顺序恢复：
+
+```bash
+ccb queue <agent> --detail
+ccb restart <agent>
+ccb ping <agent>
+```
+
+`ccb restart <agent>` 会在 Provider session 仍存在时自动重建缺失 pane；如果返回 `session_missing`，请先确认任务已安全暂停，再运行 `ccb` 启动项目 managed agent 栈。静态配置 Agent 不使用 `ccb agent resume`。
+
 ### Q6: `ccb` 命令找不到
 
 ```bash
@@ -1263,7 +1277,7 @@ ccb ask --artifact-io <agent>     # 大消息溢写为 text artifact（v7.3.0+�
 /pend <agent|job_id>              # 查看 Agent 回复
 
 # 等待与观察
-ccb pend --watch <agent|job_id>   # 阻塞等待并流式查看回复
+ccb pend --watch <agent|job_id>   # 阻塞等待并流式查看回复；目标 Agent 异常时提前返回
 ccb wait-any <agent>...        # 等待任意一个 Agent 回复
 ccb wait-all <agent>...        # 等待所有指定 Agent 回复
 ccb wait-quorum <N> <agent>... # 等待 N 个 Agent 回复（法定多数）

@@ -111,6 +111,19 @@ cd /path/to/your-project
 - `start.sh` 会检查 ccb 是否已在运行，避免重复启动
 - 彩色输出，状态一目了然
 
+### 2.3.1 Agent pane 故障恢复
+
+如果某个静态配置 Agent 停止或 pane 丢失，进入目标项目后使用：
+
+```bash
+ccb ps
+ccb queue <agent> --detail
+ccb restart <agent>
+ccb ping <agent>
+```
+
+`ccb restart <agent>` 会在 Provider session 仍可用时通过正常启动流程重建缺失 pane。若返回 `session_missing`，先确认没有未完成任务，再运行 `ccb` 启动项目的 managed agent 栈；静态配置 Agent 不使用 `ccb agent resume`。使用 `ccb queue <agent> --detail` 和 `ccb trace <job_id>` 可查看排队、claim、Provider 启动及 pane 投递阶段和错误原因；`ccb pend --watch <job_id>` 会在目标 Agent 健康失败时提前返回，不必等满超时时间。
+
 ### 2.4 使用 `ccb ask` 向指定 agent 发送消息
 
 ```bash

@@ -237,12 +237,32 @@ def process_request(
     timestamp = timestamp_now()
     log_bridge(
         state,
-        json.dumps({'marker': marker, 'question': content, 'time': timestamp}, ensure_ascii=False),
+        json.dumps(
+            {
+                'delivery_stage': 'bridge_received',
+                'marker': marker,
+                'question': content,
+                'time': timestamp,
+            },
+            ensure_ascii=False,
+        ),
     )
     append_history(state, 'claude', content, marker, log_console_fn=log_console_fn)
 
     try:
         state.codex_session.send(content)
+        log_bridge(
+            state,
+            json.dumps(
+                {
+                    'delivery_stage': 'pane_send_succeeded',
+                    'marker': marker,
+                    'pane_id': getattr(state.codex_session, 'pane_id', None),
+                    'time': timestamp_now(),
+                },
+                ensure_ascii=False,
+            ),
+        )
     except Exception as exc:
         message = f'Failed to send to Codex: {exc}'
         log_comm_event(
@@ -252,6 +272,20 @@ def process_request(
             endpoint='codex_session',
             event='forward_to_pane_failed',
             error=exc,
+        )
+        log_bridge(
+            state,
+            json.dumps(
+                {
+                    'delivery_stage': 'pane_send_failed',
+                    'marker': marker,
+                    'pane_id': getattr(state.codex_session, 'pane_id', None),
+                    'error_type': type(exc).__name__,
+                    'error': str(exc),
+                    'time': timestamp_now(),
+                },
+                ensure_ascii=False,
+            ),
         )
         append_history(state, 'codex', message, marker, log_console_fn=log_console_fn)
         log_console_fn(message)

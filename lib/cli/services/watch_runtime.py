@@ -7,6 +7,22 @@ from .watch_fallback import load_persisted_terminal_watch_payload
 
 _DEFAULT_POLL_INTERVAL_S = 0.1
 _DEFAULT_TIMEOUT_S: float | None = 600.0
+_HEALTH_CHECK_INTERVAL_S = 5.0
+_MAX_HEALTH_CHECK_ERRORS = 3
+_PANE_DEAD_CONFIRM_COUNT = 2
+_FATAL_RUNTIME_HEALTHS = frozenset({
+    'daemon-unavailable',
+    'degraded',
+    'failed',
+    'namespace-crashed',
+    'orphaned',
+    'pane-dead',
+    'pane-missing',
+    'process-dead',
+    'start-failed',
+    'stopped',
+})
+_FATAL_RUNTIME_STATES = frozenset({'failed', 'stopped'})
 
 
 @dataclass(frozen=True)
@@ -57,6 +73,9 @@ def watch_target(
         raise
     assert handle.client is not None
     poll_interval = poll_interval_seconds_fn()
+    last_health_check = -_HEALTH_CHECK_INTERVAL_S
+    health_check_errors = 0
+    pane_dead_count = 0
 
     while True:
         try:
@@ -117,7 +136,67 @@ def watch_target(
                 pass
 
             raise RuntimeError(f"watch timed out for target {command.target}")
+
+        last_health_check, health_check_errors, pane_dead_count = _check_agent_health(
+            handle.client,
+            batch,
+            reconnect_error_classes=reconnect_error_classes,
+            last_health_check=last_health_check,
+            health_check_errors=health_check_errors,
+            pane_dead_count=pane_dead_count,
+            now=time_fn(),
+        )
         sleep_fn(poll_interval)
+
+
+def _check_agent_health(
+    client,
+    batch: WatchEventBatch,
+    *,
+    reconnect_error_classes: tuple[type[BaseException], ...],
+    last_health_check: float,
+    health_check_errors: int,
+    pane_dead_count: int,
+    now: float,
+) -> tuple[float, int, int]:
+    queue_fn = getattr(client, 'queue', None)
+    if not batch.agent_name or not callable(queue_fn):
+        return last_health_check, health_check_errors, pane_dead_count
+    if now - last_health_check < _HEALTH_CHECK_INTERVAL_S:
+        return last_health_check, health_check_errors, pane_dead_count
+
+    try:
+        health_payload = queue_fn(batch.agent_name)
+        agent = health_payload.get('agent') or {}
+        runtime_health = str(agent.get('runtime_health') or '').strip().lower()
+        runtime_state = str(agent.get('runtime_state') or '').strip().lower()
+        if runtime_health in _FATAL_RUNTIME_HEALTHS or runtime_state in _FATAL_RUNTIME_STATES:
+            observed = runtime_health or runtime_state or 'unknown'
+            raise RuntimeError(
+                f'Agent {batch.agent_name} health is {observed}. '
+                f'Job {batch.job_id} cannot proceed.'
+            )
+
+        pane_state = agent.get('pane_state')
+        if pane_state is not None and pane_state != 'alive':
+            pane_dead_count += 1
+            if pane_dead_count >= _PANE_DEAD_CONFIRM_COUNT:
+                raise RuntimeError(
+                    f'Agent {batch.agent_name} pane is {pane_state} '
+                    f'(confirmed {pane_dead_count} times). '
+                    f'Job {batch.job_id} is stuck.'
+                )
+        else:
+            pane_dead_count = 0
+        return now, 0, pane_dead_count
+    except reconnect_error_classes + (AttributeError,) as exc:
+        health_check_errors += 1
+        if health_check_errors >= _MAX_HEALTH_CHECK_ERRORS:
+            raise RuntimeError(
+                f'Health check failed {health_check_errors} consecutive times '
+                f'for agent {batch.agent_name}: {exc}'
+            ) from exc
+        return now, health_check_errors, pane_dead_count
 
 
 def _watch_deadline(timeout_s: float | None, *, time_fn) -> float | None:

@@ -568,7 +568,6 @@ def test_run_cli_entrypoint_does_not_auto_launch_rich_when_guard_blocks(monkeypa
         "launch_rich_ccb",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("auto rich should not launch")),
     )
-    monkeypatch.setattr(entrypoint_runtime, "maybe_handle_startup_release_update", lambda *_, **__: None)
     monkeypatch.setattr(entrypoint_runtime, "maybe_handle_phase2", lambda *_args, **_kwargs: 31)
 
     result = run_cli_entrypoint(

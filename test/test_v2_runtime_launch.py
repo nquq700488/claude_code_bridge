@@ -41,6 +41,7 @@ from provider_backends.claude.launcher_runtime.home import (
     prepare_claude_home_overrides as prepare_claude_home_overrides_for_test,
 )
 from provider_backends.codex import launcher as codex_launcher
+from provider_backends.codex.launcher_runtime import bridge as codex_bridge
 from provider_backends.codex.launcher_runtime.command import (
     prepare_codex_home_overrides as prepare_codex_home_overrides_for_test,
 )
@@ -2110,13 +2111,54 @@ def test_codex_post_launch_requires_declared_runtime_artifacts(monkeypatch: pyte
     codex_launcher.prepare_runtime(runtime_dir)
 
     class FakeTmuxBackend:
+        _socket_path = str(tmp_path / 'project-tmux.sock')
+
         def _tmux_run(self, args, capture=False, timeout=None):
             return subprocess.CompletedProcess(args=args, returncode=0, stdout='4242\n', stderr='')
 
-    monkeypatch.setattr('provider_backends.codex.launcher_runtime.bridge.spawn_codex_bridge', lambda **kwargs: None)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        'provider_backends.codex.launcher_runtime.bridge.spawn_codex_bridge',
+        lambda **kwargs: captured.update(kwargs),
+    )
 
     with pytest.raises(RuntimeError, match='bridge.pid'):
         codex_launcher.post_launch(FakeTmuxBackend(), '%42', runtime_dir, 'ccb-agent1-test', {})
+
+    assert captured['tmux_socket_path'] == str(tmp_path / 'project-tmux.sock')
+
+
+def test_spawn_codex_bridge_passes_explicit_tmux_socket(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime_dir = tmp_path / 'codex-runtime-socket'
+    codex_launcher.prepare_runtime(runtime_dir)
+    captured: dict[str, object] = {}
+
+    class FakePopen:
+        pid = 9911
+
+    def fake_popen(args, **kwargs):
+        captured['args'] = args
+        captured.update(kwargs)
+        return FakePopen()
+
+    monkeypatch.delenv('CCB_TMUX_SOCKET_PATH', raising=False)
+    monkeypatch.setattr(codex_bridge.subprocess, 'Popen', fake_popen)
+
+    codex_bridge.spawn_codex_bridge(
+        runtime_dir=runtime_dir,
+        pane_id='%42',
+        prepared_state={},
+        tmux_socket_path='/tmp/ccb-project/tmux.sock',
+    )
+
+    env = captured['env']
+    assert isinstance(env, dict)
+    assert env['CCB_TMUX_SOCKET_PATH'] == '/tmp/ccb-project/tmux.sock'
+    assert env['CODEX_TMUX_SESSION'] == '%42'
+    assert (runtime_dir / 'bridge.pid').read_text(encoding='utf-8') == '9911\n'
 
 
 def test_inside_tmux_detects_tmux_session_without_extra_flag(monkeypatch: pytest.MonkeyPatch) -> None:
