@@ -7,6 +7,42 @@
 - Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
 - Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
 
+## v8.7.8 (2026-10-08)
+
+- Complete the Codex fullscreen/interrupt-text delivery repair and restore installed native executable/script entrypoints (PR #372).
+- 完整发布 Codex 全屏底栏/中断提示投递修复，修复安装后的原生程序/脚本入口（PR #372）。
+- Supersede the incomplete v8.7.7 prerelease; its tag remains unchanged and npm 8.7.7 was not published.
+- [Full bilingual notes](docs/releases/v8.7.8.md).
+
+## v8.7.7 (2026-10-08)
+
+- Fix Codex fullscreen footer and historical interrupt-text false vetoes; preserve drafts, native busy/menu blocking and ordered delivery.
+- 修复 Codex 双行底栏和历史回复中断提示误判，保留草稿、原生活动/菜单保护与有序投递。
+- Retain earlier Claude/Codex repairs and include separately reviewed platform-specific reliability changes from PR #368.
+- [Full bilingual notes](docs/releases/v8.7.7.md).
+
+## v8.7.6 (2026-10-06)
+
+- Recognize native Claude pasted request envelopes across anchor, lifecycle and stop-hook paths (#354).
+- Release empty Codex composers with newer custom/context status bars while preserving draft, busy and menu guards.
+- The post-paste symptom in #356 remains unconfirmed; experimental PR #366 is excluded.
+- 修复 Claude 原生粘贴包装与 Codex 空输入状态栏识别，保留草稿保护；#356 未复现部分继续跟进，未包含 PR #366。
+- [Full bilingual notes](docs/releases/v8.7.6.md).
+
+## v8.7.5 (2026-09-30)
+
+- Keep OMP/Pi asks bound when `/model` or another control-only input event opens a native selector.
+- Move replacement-turn detection to the actual `before_agent_start` lifecycle boundary while preserving explicit session-switch and real new-turn supersession.
+- Pass 302 focused regressions and a real OMP 18.3.5 active-turn model switch with one exact non-empty reply and no `request_superseded` event.
+- Pi shares the repaired generated extension and passes Bun lifecycle replay; a separate authenticated Pi TUI model-switch run remains unqualified. [Full bilingual notes](docs/releases/v8.7.5.md).
+
+## v8.7.4 (2026-09-29)
+
+- Prefer Claude/Codex local conversation restoration across account, key and gateway changes; retain explicit fresh behavior and ownership checks.
+- Preserve continuity metadata, Pi manual-session observations and OMP title-slot history compatibility.
+- Verify native cross-route replay and repeat reopening with synthetic credentials; 402 combined checks passed.
+- Refresh the WeChat QR image. [Full bilingual notes and limitations](docs/releases/v8.7.4.md).
+
 ## v8.7.3 (2026-09-28)
 
 - Stop recommending six V3 preview roles during install/update onboarding, while preserving explicit installs, installed-role updates and missing-source diagnostics.

@@ -62,9 +62,11 @@ def test_codex_draft_below_footer_like_text_is_not_ignored():
 
 
 def test_codex_two_row_status_footer_without_internal_blank_is_supported():
+    # Codex renders the empty placeholder dim; the composer may only be
+    # released in that exact rendering, so the capture has to carry it.
     screen = {
         'text': (
-            '› Ask Codex to do anything\n\n'
+            '› \x1b[2mAsk Codex to do anything\x1b[0m\n\n'
             '  claude-sonnet-4-20250514 medium · ~/Documents/project\n'
             '  ? for shortcuts                       ⚠ 4 warnings · f2 to view'
         ),
@@ -72,7 +74,6 @@ def test_codex_two_row_status_footer_without_internal_blank_is_supported():
         'cursor_y': 0,
     }
     assert inspect_screen('codex', screen, binding='pane').state == 'empty'
-
 
 
 def test_codex_multiline_placeholder_is_not_empty():

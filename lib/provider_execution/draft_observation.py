@@ -66,16 +66,11 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
         if not arrows:
             return result('unknown', 'composer_missing')
         top = arrows[-1]
-        # The phrase alone also occurs in ordinary answers and user drafts.
-        # Only the native animated status row outside the composer vetoes send.
-        # Join its continuation rows for narrow terminals.
-        if any(re.match(r'^[•◦]\s', line) and re.search(
-                r'\([^)]*esc to interrupt', ' '.join(lines[i:min(i+3, top)]), re.I)
-               for i, line in enumerate(lines[:top])):
+        if _codex_busy(lines[:top]):
             return result('unknown', 'provider_busy')
         # Default main composer has a status footer below the cursor. Selection
         # menus use the same arrow; their confirmation footer is not accepted.
-        footer = _codex_footer(lines, styled, cursor_y)
+        footer = _codex_footer(lines, styled, cursor_x, cursor_y)
         if footer is None:
             return result('unknown', 'composer_layout_unknown')
         if _editor_mode_in_footer(lines[footer:]):
@@ -121,34 +116,74 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
     return result('nonempty', 'claude_draft')
 
 
-def _codex_footer(lines, styled, cursor_y: int) -> int | None:
-    # The status bar ends with a recognized shortcut/context row. Newer Codex
-    # builds may place a model/workspace row immediately above it without a
-    # blank separator; accept that pair only when the whole footer is separated
-    # from the editor by a blank row.
-    footer = next((i for i in range(len(lines)-1, cursor_y, -1) if lines[i].strip()), None)
-    if footer is None or not lines[footer].startswith('  '):
-        return None
-    if not re.match(r'^  (?:\d+% [Cc]ontext\b|\? for shortcuts\b)', lines[footer]):
-        # Custom status bars separate fields with a dim middle dot. Require the
-        # rendering attribute as well as spacing; ordinary draft prose is not a
-        # status bar just because it contains a dot or a model-like word.
-        if not any(char == '·' and dim and 0 < i < len(lines[footer])-1
-                   and lines[footer][i-1:i+2] == ' · '
-                   for i, (char, dim, _) in enumerate(styled[footer])):
-            return None
-    start = footer
-    previous = footer - 1
-    if (
-        previous > cursor_y + 1
-        and lines[previous].startswith('  ')
-        and ' · ' in lines[previous]
-    ):
-        start = previous
-    if start <= cursor_y + 1 or lines[start - 1].strip():
-        return None
-    return start
+def _codex_busy(lines: list[str]) -> bool:
+    from provider_pane_status.codex_pane import (
+        CODEX_RECONNECT_LINE_RE, CODEX_TOOL_LINE_RE, CODEX_WORKING_LINE_RE,
+        WORKED_FOR_RE,
+    )
 
+    active = completed = -1
+    for index, line in enumerate(lines):
+        # A wrapped native row may continue on indented lines, never on the
+        # next assistant bullet or a user prompt. Reuse the status vocabulary
+        # rather than treating arbitrary quoted interrupt hints as activity.
+        parts = [line]
+        for continuation in lines[index+1:index+3]:
+            if not continuation.strip() or not continuation.startswith('  '):
+                break
+            parts.append(continuation.strip())
+        status = ' '.join(parts)
+        # Fullscreen Codex 0.159.2 renders this native summary with two-space
+        # indentation instead of a bullet. Keep the same timer grammar.
+        completed_status = re.sub(r'^  (?=worked\s+for\b)', '• ', status, flags=re.I)
+        if WORKED_FOR_RE.match(completed_status):
+            completed = index
+        if any(pattern.match(status) for pattern in (
+                CODEX_RECONNECT_LINE_RE, CODEX_TOOL_LINE_RE, CODEX_WORKING_LINE_RE)):
+            active = index
+    return active > completed
+
+
+def _codex_footer(lines, styled, cursor_x: int, cursor_y: int) -> int | None:
+    # A contiguous native status/hint region follows the editor's blank
+    # separator. Model/status labels remain opaque; extra rows must be native
+    # hints, so arbitrary indented draft continuation cannot become a footer.
+    footer = next((i for i in range(len(lines)-1, cursor_y, -1) if lines[i].strip()), None)
+    if footer is None:
+        return None
+    bottom = footer
+    while footer > cursor_y+1 and lines[footer-1].strip():
+        footer -= 1
+    if footer <= cursor_y+1 or lines[footer-1].strip():
+        return None
+    if any(not re.match(r'^  \? for shortcuts\b', row)
+           for row in lines[footer+1:bottom+1]):
+        return None
+    row = lines[footer]
+    if not row.startswith('  '):
+        return None
+    if re.match(r'^  (?:\d+% [Cc]ontext\b|\? for shortcuts\b)', row):
+        return footer
+    if re.fullmatch(r'  Context (?:100|[1-9]?\d)% left *', row):
+        return footer
+    # Custom status bars separate fields with a dim middle dot. Require the
+    # rendering attribute as well as spacing; ordinary draft prose is not a
+    # status bar just because it contains a dot or a model-like word.
+    if any(char == '·' and dim and 0 < i < len(row)-1
+           and row[i-1:i+2] == ' · '
+           for i, (char, dim, _) in enumerate(styled[footer])):
+        return footer
+    # New native status bars need not dim their separators, and may contain
+    # only one configured field. Authorize only the EMPTY native composer in
+    # that layout: exact dim placeholder, initial cursor, no continuation text.
+    # Plain draft prose and arbitrary model labels cannot establish a boundary
+    # for clearing nonempty input. Unknown draft layouts still fail closed.
+    if (cursor_x == 2
+            and lines[cursor_y].rstrip(' ') == '› Ask Codex to do anything'
+            and all(dim for char, dim, _ in styled[cursor_y][2:] if not char.isspace())
+            and all(not line.strip() for line in lines[cursor_y+1:footer])):
+        return footer
+    return None
 
 
 def _editor_mode_in_footer(lines: list[str]) -> bool:

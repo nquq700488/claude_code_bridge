@@ -6,6 +6,18 @@ Last updated: 2026-09-20
 
 ## Current Slice: Unified FIFO And Empty-Result Notices
 
+2026-10-07: [fullscreen footer/busy-text repair](evidence/codex-multiline-footer-20261007.md)
+passes 585 related regressions and real managed queue roundtrips on the
+PR #368 merge baseline. Source and separated metadata are merged and the
+exact v8.7.8 candidate passes qualification. See
+[publication verification](evidence/release-878-verification-20261008.md)
+for public assets and registry checks; issue #356's post-paste symptom remains open.
+
+2026-10-05: [Codex status-bar compatibility repair](evidence/codex-status-bar-20261005.md)
+is implemented and verified locally (237 regressions, native guarded matrix and
+remote turn). Empty custom status rows no longer strand the guard. The owner authorized a
+local commit on 2026-10-06; deployment is not included; issue 356 post-paste reproduction remains open.
+
 v8.7.3 is published; [qualification](evidence/release-873-verification-20260928.md)
 records merged source, passing candidate gates, public hashes and a fresh npm
 installation with verified six-role recommendation filtering. No native Claude

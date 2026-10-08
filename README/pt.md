@@ -6,7 +6,7 @@
 **Coordene Codex, Claude, Gemini e outros agentes CLI em fluxos visíveis e controláveis que você pode assumir diretamente**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.7.3-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.8-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -184,7 +184,7 @@ Esse comando orienta a instalação e a configuração.
 
 O CCB 8.6.6 inclui o código Flutter do CCB Mobile em [`mobile/`](../mobile/) e publica o APK Android pelo GitHub Releases:
 
-- [Baixar CCB Mobile v8.7.3 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.3/ccb-mobile-v8.7.3.apk)
+- [Baixar CCB Mobile v8.7.8 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.8/ccb-mobile-v8.7.8.apk)
 - Fonte do app: [`mobile/app`](../mobile/app)
 - Fonte do gateway servidor: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -263,6 +263,47 @@ Obrigado ao [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) 
 ## Notas de versão
 
 <details open>
+<summary><b>v8.7.8</b> - Delivery and native installation fixes</summary>
+
+Complete the Codex fullscreen delivery update and repair installed native `ccb.exe`/`ccb.cmd` entrypoints. Supersedes the interrupted v8.7.7 publication.
+
+[Full bilingual notes](../docs/releases/v8.7.8.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.7</b> - Codex fullscreen delivery fixes</summary>
+
+Fix accepted jobs waiting behind native Codex fullscreen status/shortcut rows and ordinary replies mentioning `esc to interrupt`, while preserving human drafts, busy/menu guards and FIFO.
+
+[Full bilingual notes](../docs/releases/v8.7.7.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.6</b> - Claude/Codex delivery reliability</summary>
+
+Recognize native Claude pasted envelopes and empty Codex composers with newer status bars; preserve draft protection.
+
+[Full bilingual notes](../docs/releases/v8.7.6.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.5</b> - Safe OMP/Pi model selection</summary>
+
+[Full bilingual notes](../docs/releases/v8.7.5.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.4</b> - Conversation continuity first</summary>
+
+[Full bilingual notes](../docs/releases/v8.7.4.md).
+
+</details>
+
+<details>
 <summary><b>v8.7.3</b></summary>
 
 [English / 简体中文 — v8.7.3](../docs/releases/v8.7.3.md)
