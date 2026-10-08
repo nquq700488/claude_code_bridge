@@ -280,7 +280,7 @@ def test_run_cli_entrypoint_prints_start_help_without_phase2() -> None:
     assert "ccb pend <agent|job_id> [N]" in stdout.getvalue()
     assert "ccb pend --queue [--detail] <agent|all>" in stdout.getvalue()
     assert "Advanced views:" in stdout.getvalue()
-    assert "ccb queue [--detail] <agent|all>" in stdout.getvalue()
+    assert "ccb queue [--detail] <agent_name|all>" in stdout.getvalue()
     assert "ccb trace <id>" in stdout.getvalue()
     assert "Advanced recovery:" in stdout.getvalue()
     assert "ccb repair <ack|retry|resubmit> ..." in stdout.getvalue()
@@ -745,7 +745,7 @@ def test_run_cli_entrypoint_prints_pend_help_as_supplementary_status() -> None:
     )
 
     assert result == 0
-    assert "usage: ccb pend [--watch|--inbox|--queue] [--detail] <agent|job_id|all> [N]" in stdout.getvalue()
+    assert "usage: ccb pend [--watch|--inbox|--queue] [--detail] [--timeout S] <agent|job_id|all> [N]" in stdout.getvalue()
     assert "Diagnostics-only weak observer surface:" in stdout.getvalue()
     assert "These commands are not part of normal ask workflows." in stdout.getvalue()
     assert "ccb pend --watch <agent|job_id>" in stdout.getvalue()
@@ -1173,7 +1173,7 @@ def test_run_cli_entrypoint_prints_pend_help_with_converged_observer_modes() -> 
     )
 
     assert result == 0
-    assert "usage: ccb pend [--watch|--inbox|--queue] [--detail] <agent|job_id|all> [N]" in stdout.getvalue()
+    assert "usage: ccb pend [--watch|--inbox|--queue] [--detail] [--timeout S] <agent|job_id|all> [N]" in stdout.getvalue()
     assert "ccb pend --watch <agent|job_id>" in stdout.getvalue()
     assert "ccb pend --inbox --detail <agent>" in stdout.getvalue()
     assert "ccb pend --queue --detail <agent>" in stdout.getvalue()
