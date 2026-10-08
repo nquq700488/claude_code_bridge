@@ -35,12 +35,17 @@ def print_phase2_error(
 
 def _exception_causes(exc: BaseException) -> tuple[str, ...]:
     seen: set[int] = set()
+    seen_text: set[str] = set()
     causes: list[str] = []
+    primary = _single_line_exception(exc)
     cause = exc.__cause__
     while cause is not None and id(cause) not in seen:
         seen.add(id(cause))
         text = _single_line_exception(cause)
-        if text and text != _single_line_exception(exc):
+        # A wrapper often re-raises the same text as its own cause (e.g. a
+        # transport error wrapped once more); report each distinct cause once.
+        if text and text != primary and text not in seen_text:
+            seen_text.add(text)
             causes.append(text)
         cause = cause.__cause__
     return tuple(causes)

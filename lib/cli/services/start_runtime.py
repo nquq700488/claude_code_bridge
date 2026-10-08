@@ -70,7 +70,14 @@ def start_agents(
     if readiness_trace is not None:
         start_kwargs['readiness_trace'] = readiness_trace
     stage_started_ns = time.monotonic_ns()
-    payload = _start_rpc_client(handle.client, timeout_s=start_rpc_timeout_s).start(**start_kwargs)
+    try:
+        payload = _start_rpc_client(handle.client, timeout_s=start_rpc_timeout_s).start(**start_kwargs)
+    except Exception as exc:
+        # The daemon persists this same run id into its startup report, which is
+        # the only way the CLI can later tell that report apart from a previous
+        # attempt's.  Best-effort: never mask the original failure.
+        _attach_startup_run_id(exc, startup_run_id)
+        raise
     start_rpc_ms = _elapsed_ms(stage_started_ns)
     response_run_id = str(payload.get('startup_run_id') or '').strip()
     if response_run_id and response_run_id != startup_run_id:
@@ -107,6 +114,13 @@ def _start_rpc_client(client, *, timeout_s: float | None):
     if not callable(with_timeout):
         return client
     return with_timeout(timeout_s)
+
+
+def _attach_startup_run_id(exc: BaseException, startup_run_id: str) -> None:
+    try:
+        exc.startup_run_id = startup_run_id  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def _summary_from_start_payload(context, payload: dict, *, daemon_started: bool, cleanup_summary_cls) -> StartSummary:

@@ -926,6 +926,8 @@ which agy        # 若使用 Antigravity agent
 >
 > ⚠️ **MMX provider 当前不可达**：本 Fork 的 MMX 注册项（`OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC`）自 v8.5.4 合并后缺失，`lib/provider_backends/mmx/` 下的代码虽在，但 config 校验与运行时注册表均不识别 `mmx`，因此无法在 `ccb.config` 中挂载 MMX Agent。`mmx-daemon` 二进制仍会被安装，但不构成可用支持。修复方式是把这些注册项恢复到注册表与 runtime spec 中。
 
+**先看 `ccb` 自己报的原因**：`ccb` 若以 `command_status: failed` 退出，真实原因就在紧随的 `error:` 行，例如 `error: kimi executable not found in PATH`；原来的传输层症状会降级为 `error_cause: timed out`。冷启动（首次预热 provider，可能耗时 60s 以上）时该行可能延迟数秒才出现——CLI 在等 daemon 写出启动报告，等待上限由 `CCB_START_REPORT_GRACE_S` 控制（默认 90 秒，设为 `0` 可关闭等待、恢复旧的立即报 `timed out` 行为）。若不想等，也可用 `ccb doctor` 的 `ccbd_startup_last_failure_reason` 字段直接查看。
+
 如果 `ccb ps` 显示目标 Agent 为 stopped 且没有 pane，可按以下顺序恢复：
 
 ```bash

@@ -6,6 +6,11 @@ import sys
 
 from agents.config_loader import StructuredConfigValidationError
 
+from ccbd.socket_client import CcbdClientError
+from ccbd.startup_policy import START_REPORT_GRACE_S
+from ccbd.system import utc_now
+
+from cli.phase2_runtime.start_failure_report import StartOutcome, resolve_start_outcome
 from cli.services.start_foreground import attach_started_project_namespace
 
 
@@ -103,15 +108,86 @@ def handle_start(context, command, out, services) -> int:
         and _stream_is_tty(out)
     )
     terminal_size = _terminal_size_for_streams(out, sys.stdin) if interactive_attach else None
-    if terminal_size is not None:
-        summary = services.start_agents(context, command, terminal_size=terminal_size)
-    else:
-        summary = services.start_agents(context, command)
+    attempt_started_at = utc_now()
+    try:
+        summary = _start_agents(services, context, command, terminal_size=terminal_size)
+    except Exception as exc:
+        # The start RPC's client-side budget is much shorter than a cold start
+        # can take, so a failed launch often surfaces as a bare "timed out"
+        # while the daemon is still working.  Give the daemon a bounded chance
+        # to finish and publish its startup report, then report what it says.
+        outcome = _resolve_failed_start(context, exc, attempt_started_at=attempt_started_at)
+        if outcome.status == 'ok':
+            raise RuntimeError(
+                'the daemon reached its initial startup boundary, but the final start '
+                'response was not received; run `ccb ps` to verify agent readiness'
+            ) from exc
+        if outcome.status == 'failed' and outcome.reason:
+            raise RuntimeError(outcome.reason) from exc
+        raise
     if interactive_attach:
         attach_started_project_namespace(context)
         return 0
     services.write_lines(out, services.render_start(summary))
     return 0
+
+
+def _start_agents(services, context, command, *, terminal_size):
+    # Keep the conditional kwarg: existing callers/fakes accept either the bare
+    # two-argument form or the terminal_size form.
+    if terminal_size is not None:
+        return services.start_agents(context, command, terminal_size=terminal_size)
+    return services.start_agents(context, command)
+
+
+def _resolve_failed_start(context, exc, *, attempt_started_at: str):
+    # Only a response-read timeout proves that the daemon received the start
+    # request and may still publish a report.  Connection/send failures and
+    # pre-RPC exceptions must retain their immediate original error.
+    if not _is_inflight_start_timeout(exc):
+        return StartOutcome('unknown', None, '')
+    # Fast path: a daemon that answered has already published its report, so
+    # this resolves without any user-visible wait or noise.
+    outcome = resolve_start_outcome(
+        context,
+        exc,
+        attempt_started_at=attempt_started_at,
+        grace_s=0.0,
+    )
+    if outcome.status != 'unknown' or START_REPORT_GRACE_S <= 0:
+        return outcome
+    if not _is_inflight_start_timeout(exc):
+        # Failures that already have a definitive response (or happened before
+        # the RPC) never produce a later report -- waiting would only stall.
+        return outcome
+    print(
+        'ccb: the start RPC did not answer within the client timeout; waiting up to '
+        f'{START_REPORT_GRACE_S:g}s for the daemon to finish and report the outcome...',
+        file=sys.stderr,
+        flush=True,
+    )
+    return resolve_start_outcome(
+        context,
+        exc,
+        attempt_started_at=attempt_started_at,
+        grace_s=START_REPORT_GRACE_S,
+    )
+
+
+def _is_inflight_start_timeout(exc: BaseException) -> bool:
+    if not isinstance(exc, CcbdClientError):
+        return False
+    phase = getattr(exc, 'ccb_rpc_phase', None)
+    if phase is not None and phase != 'receive':
+        return False
+    cause = exc.__cause__
+    while cause is not None:
+        if isinstance(cause, TimeoutError):
+            return True
+        cause = cause.__cause__
+    # Keep direct test doubles and older clients compatible, while response
+    # errors such as "kimi executable not found" do not enter the grace wait.
+    return str(exc).strip().lower() in {'timed out', 'timeout'}
 
 
 def _ensure_project_commands_approved(context, out, services) -> None:

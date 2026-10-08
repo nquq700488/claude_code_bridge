@@ -86,6 +86,8 @@ CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot
 
 **原因**：CCB 在启动 pane 前会用 `shutil.which` 验证 provider 可执行文件是否存在。Kimi CLI 默认安装在 VS Code 扩展目录，不在 PATH 中
 
+**查看真实原因**：`ccb` 退出时若打印 `command_status: failed`，真实原因就在紧随的 `error:` 行（不再需要靠 `ccb doctor` 的 `ccbd_startup_last_failure_reason` 倒查）。冷启动时该行可能延迟数秒才出现，因为 CLI 在等 daemon 写出启动报告。
+
 **解决**：创建符号链接到 PATH 目录：
 ```bash
 ln -s "$HOME/Library/Application Support/Code/User/globalStorage/...
