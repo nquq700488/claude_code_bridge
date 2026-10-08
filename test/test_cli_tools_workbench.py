@@ -292,18 +292,6 @@ def test_standalone_neovim_tool_route_is_unsupported() -> None:
     assert 'ccb update rich' in stderr.getvalue()
 
 
-def test_standalone_neovim_tool_route_is_unsupported() -> None:
-    stdout = StringIO()
-    stderr = StringIO()
-
-    code = cmd_tools(['doctor', 'neovim'], stdout=stdout, stderr=stderr)
-
-    assert code == 2
-    assert stdout.getvalue() == ''
-    assert 'standalone Neovim tools are no longer supported' in stderr.getvalue()
-    assert 'ccb update rich' in stderr.getvalue()
-
-
 def test_update_rich_workbench_provisions_and_enables_bundle(tmp_path: Path, monkeypatch) -> None:
     _prepare_env(tmp_path, monkeypatch)
 
