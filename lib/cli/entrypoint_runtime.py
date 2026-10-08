@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TextIO
 
@@ -25,6 +26,27 @@ from cli.tools_runtime.workbench import (
     rich_auto_start_allowed,
     uninstall_workbench,
 )
+
+
+def maybe_handle_startup_release_update(
+    tokens: list[str],
+    *,
+    script_root: Path,
+    cwd: Path,
+    stdout: TextIO,
+    stderr: TextIO,
+    stdin,
+    **_ignored,
+) -> int | None:
+    """Fork: startup release updates are disabled, so this never does anything.
+
+    Both entrypoints still call it, and must keep doing so: the Windows native
+    entrypoint (`platforms/windows/herdr/cli_entrypoint.py`) compares its early
+    command order against the shared one, and a missing name would raise
+    AttributeError on every `ccb` invocation there. Fetching an upstream release
+    automatically would overwrite fork files, which is why it is disabled.
+    """
+    return None
 
 
 def _should_print_version(tokens: list[str]) -> bool:
@@ -301,18 +323,20 @@ def run_cli_entrypoint(
     if auto_rich_result is not None:
         return auto_rich_result
 
-    # Fork: disable startup release updates as well; they bypass the update handler
-    # and could replace Fork files with an official upstream release.
-    # startup_update_result = maybe_handle_startup_release_update(
-    #     tokens,
-    #     script_root=script_root,
-    #     cwd=cwd,
-    #     stdout=stdout,
-    #     stderr=stderr,
-    #     stdin=sys.stdin,
-    # )
-    # if startup_update_result is not None:
-    #     return startup_update_result
+    # Fork: this still has to run, so the Windows native entrypoint keeps the
+    # same early-command order. It resolves to the no-op above, which is where
+    # startup release updates are disabled -- they bypass the update handler and
+    # could replace Fork files with an official upstream release.
+    startup_update_result = maybe_handle_startup_release_update(
+        tokens,
+        script_root=script_root,
+        cwd=cwd,
+        stdout=stdout,
+        stderr=stderr,
+        stdin=sys.stdin,
+    )
+    if startup_update_result is not None:
+        return startup_update_result
 
     return maybe_handle_phase2(tokens, cwd=cwd, stdout=stdout, stderr=stderr)
 __all__ = ["run_cli_entrypoint"]
