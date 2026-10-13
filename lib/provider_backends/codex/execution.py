@@ -55,6 +55,14 @@ class CodexProviderAdapter:
         )
 
     def poll(self, submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
+        from .execution_runtime.start import dispatch_guarded_prompt
+        from provider_execution.draft_guard import send_unknown_result
+        if submission.runtime_state.get('draft_guard_enabled') and not submission.runtime_state.get('prompt_sent', True):
+            submission = dispatch_guarded_prompt(submission, now=now)
+            return send_unknown_result(submission, now=now) or ProviderPollResult(submission=submission)
+        unknown = send_unknown_result(submission, now=now)
+        if unknown is not None:
+            return unknown
         original_submission = submission
         submission = _refresh_reader_for_current_session_binding(submission)
         submission = _record_delivery_progress(submission, now=now)
@@ -70,11 +78,10 @@ class CodexProviderAdapter:
                 result = ProviderPollResult(
                     submission=updated_submission,
                     items=result.items,
-                    decision=result.decision,
                 )
-            reply_delivery_result = _reply_delivery_accepted_result(result, now=now)
-            if reply_delivery_result is not None:
-                return reply_delivery_result
+            # Reply deliveries no longer complete at anchor acceptance: the
+            # anchored detector runs to the exact processing turn end, so the
+            # target's execution slot stays held until the turn fence.
         if result is None and submission is not original_submission:
             return ProviderPollResult(submission=submission)
         return result
@@ -98,6 +105,10 @@ class CodexProviderAdapter:
             'session_path': submission.runtime_state.get('session_path'),
             'workspace_path': submission.runtime_state.get('workspace_path'),
             'delivery_state': submission.runtime_state.get('delivery_state'),
+            'delivery_stage': submission.runtime_state.get('delivery_stage'),
+            'delivery_mechanism': submission.runtime_state.get('delivery_mechanism'),
+            'delivery_reason': submission.runtime_state.get('delivery_reason'),
+            'delivery_error': submission.runtime_state.get('delivery_error'),
             'delivery_started_at': submission.runtime_state.get('delivery_started_at'),
             'delivery_last_progress_at': submission.runtime_state.get('delivery_last_progress_at'),
             'delivery_progress_kind': submission.runtime_state.get('delivery_progress_kind'),
@@ -483,48 +494,6 @@ def _record_delivery_progress(submission: ProviderSubmission, *, now: str) -> Pr
         updated_state.pop('delivery_session_missing_since', None)
     return replace(submission, runtime_state=updated_state)
 
-
-def _reply_delivery_accepted_result(
-    result: ProviderPollResult,
-    *,
-    now: str,
-) -> ProviderPollResult | None:
-    state = dict(result.submission.runtime_state)
-    if not bool(state.get('reply_delivery_complete_on_dispatch')):
-        return None
-    if not bool(state.get('anchor_seen')):
-        return None
-
-    request_anchor = request_anchor_from_runtime_state(state, fallback=result.submission.job_id)
-    updated = replace(
-        result.submission,
-        runtime_state={
-            **state,
-            'delivery_state': 'accepted',
-            'delivery_confirmed_at': str(state.get('delivery_confirmed_at') or now),
-        },
-    )
-    source_cursor = result.items[-1].cursor if result.items else None
-    decision = CompletionDecision(
-        terminal=True,
-        status=CompletionStatus.COMPLETED,
-        reason='reply_delivery_sent',
-        confidence=CompletionConfidence.OBSERVED,
-        reply='',
-        anchor_seen=True,
-        reply_started=False,
-        reply_stable=True,
-        provider_turn_ref=request_anchor or result.submission.job_id,
-        source_cursor=source_cursor,
-        finished_at=now,
-        diagnostics={
-            'reply_delivery': True,
-            'delivery_status': 'accepted',
-            'provider': result.submission.provider,
-            'submission_mode': str(state.get('mode') or 'active'),
-        },
-    )
-    return ProviderPollResult(submission=updated, items=result.items, decision=decision)
 
 
 def _delivery_progress_tracking_required(state: dict[str, object]) -> bool:

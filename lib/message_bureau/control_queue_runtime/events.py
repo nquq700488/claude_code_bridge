@@ -10,7 +10,7 @@ from message_bureau.reply_metadata import (
 )
 from message_bureau.reply_payloads import reply_id_from_payload
 
-from .common import preview_text
+from .common import delivery_stage_for_inbound_status, preview_text
 
 TERMINAL_EVENT_STATES = frozenset(
     {
@@ -93,6 +93,8 @@ def pending_events(service, agent_name: str) -> list[dict[str, object]]:
                 'inbound_event_id': record.inbound_event_id,
                 'event_type': record.event_type.value,
                 'status': record.status.value,
+                'delivery_stage': delivery_stage_for_inbound_status(record.status)[0],
+                'delivery_reason': delivery_stage_for_inbound_status(record.status)[1],
                 'priority': record.priority,
                 'message_id': record.message_id,
                 'message_state': message.message_state.value if message is not None else None,
@@ -117,6 +119,8 @@ def inbox_item_summary(service, event, *, position: int) -> dict[str, object]:
         'inbound_event_id': event.inbound_event_id,
         'event_type': event.event_type.value,
         'status': event.status.value,
+        'delivery_stage': delivery_stage_for_inbound_status(event.status)[0],
+        'delivery_reason': delivery_stage_for_inbound_status(event.status)[1],
         'priority': event.priority,
         'message_id': event.message_id,
         'message_state': message.message_state.value if message is not None else None,

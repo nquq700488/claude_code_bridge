@@ -6,34 +6,33 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.10-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.10-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
-  <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
+  <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
 <p>
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
-  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
-  <img src="https://img.shields.io/badge/DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness">
-  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
+  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
+  <img src="https://img.shields.io/badge/OMP-111111?style=flat-square" alt="OMP">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
+  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
+  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
   <img src="https://img.shields.io/badge/Qwen-6A5CFF?style=flat-square" alt="Qwen">
   <img src="https://img.shields.io/badge/Cursor-111111?style=flat-square" alt="Cursor">
   <img src="https://img.shields.io/badge/Copilot-111111?style=flat-square&logo=githubcopilot&logoColor=white" alt="GitHub Copilot">
   <img src="https://img.shields.io/badge/Crush-FF5A5F?style=flat-square" alt="Crush">
   <img src="https://img.shields.io/badge/Kiro-6D5EF6?style=flat-square" alt="Kiro">
-  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
-  <img src="https://img.shields.io/badge/Z.ai-111111?style=flat-square" alt="Z.ai">
-  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
   <img src="https://img.shields.io/badge/Antigravity-6D5EF6?style=flat-square&logo=google&logoColor=white" alt="Antigravity">
   <img src="https://img.shields.io/badge/Droid-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Droid">
 </p>
 
 [中文](README/zh.md) | **English** | [日本語](README/ja.md) | [Français](README/fr.md) | [Deutsch](README/de.md) | [العربية](README/ar.md) | [Español](README/es.md) | [Português](README/pt.md) | [한국어](README/ko.md) | [Русский](README/ru.md)
 
-[Quick Start](#quick-start) · [Mobile App](#mobile-app) · [Rich Mode](#rich-mode) · [Configure Agents](#configure-agents) · [User Guide](docs/manuals/user-guide/) · [Developer Guide](docs/manuals/developer-guide/)
+[Quick Start](#quick-start) · [Message Queues](#message-queues) · [Mobile App](#mobile-app) · [Rich Mode](#rich-mode) · [Configure Agents](#configure-agents) · [User Guide](docs/manuals/user-guide/) · [Developer Guide](docs/manuals/developer-guide/)
 
 <p align="center">
   <img src="assets/readme_v7/ccb-hero-en-light.png" alt="CCB visible multi-agent CLI workspace" width="960">
@@ -52,6 +51,97 @@
 - The background daemon keeps project state alive even when the foreground UI is closed.
 - Hub capability: run multiple CLI providers concurrently from one command.
 - Mobile remote controller: cross-provider voice control, file transfer, and remote terminal access.
+
+## New in 8.7.10: Faster Pi Plugin Startup
+
+Reuse verified plugin snapshots, share resolved dependencies, recover interrupted builds and honor startup timeout overrides. Verified with real Pi plugin loading and two-agent cold/warm startup. [Notes](docs/releases/v8.7.10.md).
+
+## New in 8.7.7: Codex Fullscreen Delivery Fixes
+
+Fix accepted jobs waiting behind native Codex fullscreen status/shortcut rows and ordinary replies mentioning `esc to interrupt`, while preserving human drafts, busy/menu guards and FIFO. [Notes](docs/releases/v8.7.7.md).
+
+## New in 8.7.6: Claude/Codex Delivery Reliability
+
+Recognize native Claude pasted envelopes and empty Codex composers with newer status bars; preserve draft protection. [Notes](docs/releases/v8.7.6.md).
+
+## New in 8.7.5: Safe OMP/Pi Model Selection
+
+Opening `/model` or another control-only selector no longer supersedes an
+active OMP/Pi ask. CCB now waits for a real provider turn boundary before
+classifying different user input as replacement work. See the
+[verification and upgrade guidance](docs/releases/v8.7.5.md).
+
+## New in 8.7.4: Conversation Continuity First
+
+Claude and Codex preserve usable local history across account/key/gateway
+changes. Pi follows manual session switches; OMP accepts its newer history
+header format. See [verified scope and upgrade guidance](docs/releases/v8.7.4.md).
+
+## New in 8.7.3: Model-Independent Input Protection
+
+Codex composer detection no longer matches model names. Claude suggestion,
+accepted-draft and ordered return-delivery regressions accompany real continuous
+communication verification. Experimental Claude native plugins remain disabled.
+Install/update onboarding no longer recommends the six V3 preview roles;
+explicit installation and updates for installed roles remain available.
+See [upgrade guidance and layout limitations](docs/releases/v8.7.3.md).
+
+## New in 8.7.2: Recovery and Queued Delivery Fixes
+
+Fix Codex recovery commands with duplicate resume arguments, abandoned OMP editor
+sockets, and padded Codex empty-input detection. Queue details now show input-guard
+waiting reasons. See [upgrade guidance and remaining limitations](docs/releases/v8.7.2.md).
+
+## New in 8.7.1: Open Rich Files with Your Default App
+
+Click a file or press Enter to open it with the system default application;
+folders stay inside the file browser. Both safe and rich profiles use the same
+behavior. macOS uses `open`; Linux prefers `gio open`, then `xdg-open` when GIO
+is absent; WSL uses `wslview` from `wslu` to open with the Windows default app.
+WSL requires enabled Windows interop and reports a missing bridge explicitly.
+After upgrading CCB, run `ccb update rich` and reopen the file-browser pane.
+See the [8.7.1 notes](docs/releases/v8.7.1.md) for validation and limitations.
+
+<a id="message-queues"></a>
+
+## New in 8.7.0: Humans and Agents Share the Queue
+
+### Human / agent queue mode
+
+Incoming agent messages wait while you compose a draft, avoiding interruption
+or accidental submission of your text together with a returned result. CCB first
+waits for the target agent's current turn to end, then checks the input box for
+the message at the front of the queue.
+
+- Empty input: deliver the next eligible message in queue order.
+- Nonempty input: wait up to **180 seconds**. Clearing or submitting your draft
+  releases the message once the agent is idle again.
+- Still nonempty after 180 seconds: clear the draft once, confirm the box is
+  empty, then deliver. Continuing to type does **not** reset this timer; this
+  mode does not preserve a draft indefinitely.
+- Busy, modal or unrecognized input state: keep waiting without clearing or
+  sending. Closing the modal or restoring the normal input surface allows
+  checks to continue.
+
+### Agent / agent queue mode
+
+Requests (`ask`) and returned results (`back`) share one chronological FIFO
+queue per target agent. Each message waits until the target finishes processing
+the previous one, including returned results. Later replies cannot interrupt
+an earlier reply's processing turn; different agents can still work in parallel.
+
+**We recommend testing these queue modes with Claude, Codex and OMP in managed
+tmux panes.** Input protection for other providers will follow; their existing
+delivery behavior is unchanged and should not be assumed to protect drafts.
+OMP currently requires its default Status Band input layout and the new managed
+extension. After upgrading, restart the project when idle to load the new daemon
+and provider extensions.
+
+This is a first version for testing. Codex/Claude deadline clearing uses `Ctrl-C`;
+a simultaneous user action can still cause interruption. The final screen-check,
+paste and Enter sequence is not atomic against typing at that exact instant.
+See the [8.7.0 notes](docs/releases/v8.7.0.md) for tested
+scope, upgrade guidance and the Codex remote-session recovery limitation.
 
 <a id="how-to-install"></a>
 
@@ -100,24 +190,6 @@ report-only, non-interactive update, or skip behavior. Declining prompts again
 on the next `ccb update`; skipping a version hides only that exact version.
 CCB never restarts active provider panes during this flow, so an accepted
 provider update applies when that pane next starts or is explicitly restarted.
-
-The official DeepSeek Harness integration is available as the separate
-Developer Preview provider key `dsh` (`deepseek` continues to mean the Deep
-Code CLI). Install its current npm release with a supported Node runtime, then
-select `dsh` in Config UI or use an Agent leaf such as `research:dsh`:
-
-```bash
-npm install -g @deepseek-ai/dsh
-dsh --version
-```
-
-CCB starts `dsh web` on loopback and communicates through DSH's structured
-HTTP/WebSocket carrier. The current POSIX runtime may host that service in a
-managed pane only for lifecycle/log ownership; prompts, replies, native
-completion, `ccb compact`, and restore do not depend on terminal input or
-pane-text heuristics. Configure `DEEPSEEK_API_KEY` (and
-optionally `DEEPSEEK_BASE_URL`) in user-owned DSH state or through CCB's
-provider-profile/API controls; CCB does not obtain credentials automatically.
 
 After a release change, the newly installed CCB also retires old
 project-scoped Claude/Gemini caches. Manifest-valid caches for deleted projects
@@ -261,9 +333,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.6.10 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.7.10 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.6.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
+- [Download CCB Mobile v8.7.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.10/ccb-mobile-v8.7.10.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -334,7 +406,7 @@ Supported managed Agents receive the built-in `ask`, `ccb-clear`, `ccb-compact`,
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png?v=0a86422d" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=c943ca65" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
@@ -352,6 +424,119 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 ## Release Notes
 
 <details open>
+<summary><b>v8.7.10</b> - Pi plugin snapshot and startup repair</summary>
+
+Reuse verified snapshots, deduplicate shared dependencies, recover interrupted staging and forward startup timeout settings.
+
+[Full bilingual notes](docs/releases/v8.7.10.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.9</b> - Codex ask caller identity repair</summary>
+
+Preserve Codex caller identity in native tool shells so bare `ask` results return to the correct Agent. Verified with actual Codex/OMP and Claude Sonnet 4.6 roundtrips.
+
+[Full bilingual notes](docs/releases/v8.7.9.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.8</b> - Delivery and native installation fixes</summary>
+
+Complete the Codex fullscreen delivery update and repair installed native `ccb.exe`/`ccb.cmd` entrypoints. Supersedes the interrupted v8.7.7 publication.
+
+[Full bilingual notes](docs/releases/v8.7.8.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.7</b> - Codex fullscreen delivery fixes</summary>
+
+Fix accepted jobs waiting behind native Codex fullscreen status/shortcut rows and ordinary replies mentioning `esc to interrupt`, while preserving human drafts, busy/menu guards and FIFO.
+
+[Full bilingual notes](docs/releases/v8.7.7.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.6</b> - Claude/Codex delivery reliability</summary>
+
+Recognize native Claude pasted envelopes and empty Codex composers with newer status bars; preserve draft protection.
+
+[Full bilingual notes](docs/releases/v8.7.6.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.5</b> - Safe OMP/Pi model selection</summary>
+
+[Full bilingual notes](docs/releases/v8.7.5.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.4</b> - Conversation continuity first</summary>
+
+[Full bilingual notes](docs/releases/v8.7.4.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.3</b> - Model-independent input protection</summary>
+
+[Full bilingual notes](docs/releases/v8.7.3.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.2</b> - Recovery and queued delivery fixes</summary>
+
+[Full bilingual notes](docs/releases/v8.7.2.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.1</b> - Rich system-default file opening</summary>
+
+- Click or Enter opens files with system defaults on macOS, Linux and WSL; folders stay inside Yazi.
+- Shares safe/rich configuration, preserves filenames and provides explicit WSL bridge errors.
+- [Full bilingual notes and validation scope](docs/releases/v8.7.1.md).
+- Prior changes: [v8.7.0 input protection](docs/releases/v8.7.0.md) and [v8.6.19 queues and inspection guidance](docs/releases/v8.6.19.md).
+
+</details>
+
+<details>
+<summary><b>v8.6.13</b> - Reliable visible OMP asks and focused role selection</summary>
+
+- Run OMP asks in the visible managed pane and use OMP's native completion evidence, so tool-using turns remain active until the final assistant result.
+- Keep Config V1/V2 role selection focused on general roles and `agentroles.ccb_self`; workflow-specific `ccb_*` roles remain available to V3 rather than appearing in earlier schemas.
+- Refocus current public provider guidance on the primary supported CLI families. DeepSeek CLI, Z.ai, and DeepSeek Harness remain implemented and documented in historical release notes, but are no longer presented as current headline support.
+- No project, conversation, or configuration migration is required. Native Windows x64 and Herdr remain beta and isolated from the shared Linux/macOS runtime.
+
+</details>
+
+<details>
+<summary><b>v8.6.12</b> - Provider profile inheritance and Mobile conversations</summary>
+
+- Show Pi and OMP native conversations in CCB Mobile while preserving Provider-private session paths and transcript boundaries.
+- Inherit Pi profile assets into Agent-private homes through immutable shared snapshots, and publish concurrent first-start snapshots atomically (PR #328).
+- Preserve Git author and committer identity in managed Provider homes, and return Agent control immediately after an accepted ask submission (PRs #329 and #330).
+- Refresh the WeChat community QR code. Restart managed Pi Agents to refresh projected profile assets; no project, conversation, pairing, or configuration migration is required.
+
+</details>
+
+<details>
+<summary><b>v8.6.11</b> - Provider authentication and isolated Windows reliability</summary>
+
+- Restore bearer authentication for explicit Codex CLI `0.149.0` custom providers while keeping route-only local gateways unauthenticated.
+- Add per-Agent Codex model catalog projection and model override support, preserve reconnect and custom tmux configuration behavior, and make Pi clear start a fresh context (PRs #321, #322, #325, and #326).
+- Keep Herdr lifecycle synchronization and UTF-8 native startup inside Windows-owned implementations, without adding shared-to-Windows imports (PRs #320 and #323).
+- Restart managed Codex Agents and CCB projects after upgrading. No project, conversation, pairing, or configuration migration is required.
+
+</details>
+
+<details>
 <summary><b>v8.6.10</b> - Claude OAuth re-login isolation</summary>
 
 - Refresh an existing Agent-private Claude Keychain credential after an external OAuth re-login, so a stopped managed restart does not keep using a revoked token (Issue #319).

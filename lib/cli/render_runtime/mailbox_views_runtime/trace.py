@@ -16,6 +16,8 @@ def render_trace(payload: Mapping[str, object]) -> tuple[str, ...]:
         lines.append(_reply_line(reply))
     for event in payload.get('events') or ():
         lines.append(_event_line(event))
+    for event in payload.get('delivery_events') or ():
+        lines.append(_delivery_event_line(event))
     for job in payload.get('jobs') or ():
         lines.append(_job_line(job))
     for diagnostic in payload.get('active_inbound_diagnostics') or ():
@@ -90,13 +92,30 @@ def _reply_line(reply) -> str:
 
 
 def _event_line(event) -> str:
-    return (
+    line = (
         'event: '
         f'id={event.get("inbound_event_id")} agent={event.get("agent_name")} '
         f'type={event.get("event_type")} status={event.get("status")} '
+    )
+    delivery_stage = event.get('delivery_stage')
+    delivery_reason = event.get('delivery_reason')
+    if delivery_stage or delivery_reason:
+        line += f'stage={delivery_stage} reason={delivery_reason} '
+    return line + (
         f'mailbox_state={event.get("mailbox_state")} active={str(bool(event.get("mailbox_active"))).lower()} '
         f'message={event.get("message_id")} attempt={event.get("attempt_id")} '
         f'created={event.get("created_at")} finished={event.get("finished_at")}'
+    )
+
+
+def _delivery_event_line(event) -> str:
+    payload = event.get('payload') if isinstance(event.get('payload'), Mapping) else {}
+    return (
+        'delivery_event: '
+        f'id={event.get("event_id")} job={event.get("job_id")} '
+        f'type={event.get("event_type")} stage={payload.get("delivery_stage")} '
+        f'reason={payload.get("delivery_reason")} error={payload.get("delivery_error")} '
+        f'timestamp={event.get("timestamp")}'
     )
 
 

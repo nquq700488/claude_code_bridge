@@ -84,7 +84,10 @@ def test_dual_bridge_processes_request_and_records_history(tmp_path: Path, monke
     assert '"role": "claude"' in history
     assert '"marker": "mk-1"' in history
     assert 'hello' in history
-    assert 'mk-1' in bridge.bridge_log.read_text(encoding='utf-8')
+    bridge_log = bridge.bridge_log.read_text(encoding='utf-8')
+    assert 'mk-1' in bridge_log
+    assert 'bridge_received' in bridge_log
+    assert 'pane_send_succeeded' in bridge_log
 
 
 def test_dual_bridge_handles_session_send_failure(tmp_path: Path, monkeypatch) -> None:
@@ -114,6 +117,9 @@ def test_dual_bridge_handles_session_send_failure(tmp_path: Path, monkeypatch) -
     assert first['role'] == 'claude'
     assert second['role'] == 'codex'
     assert second['content'] == 'Failed to send to Codex: boom:fail-me'
+    bridge_log = bridge.bridge_log.read_text(encoding='utf-8')
+    assert 'pane_send_failed' in bridge_log
+    assert 'RuntimeError' in bridge_log
 
 
 def test_validate_bridge_bootstrap_accepts_platform_endpoint(tmp_path: Path) -> None:

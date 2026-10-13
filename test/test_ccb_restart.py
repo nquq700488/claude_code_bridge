@@ -292,6 +292,38 @@ def test_project_restart_agent_handler_restarts_one_agent(monkeypatch) -> None:
     assert calls == [('agent1',)]
 
 
+def test_project_restart_agent_handler_recreates_missing_pane(monkeypatch) -> None:
+    app = _app(runtimes={'agent1': _runtime(pane_id=None)})
+    app.project_namespace = SimpleNamespace(load=lambda: SimpleNamespace(backend_impl='tmux'))
+    start_calls: list[dict[str, object]] = []
+
+    def _start(**options):
+        start_calls.append(options)
+        app.registry._runtimes.update({'agent1': _runtime(pane_id='%9')})
+        return SimpleNamespace(
+            agent_results=(SimpleNamespace(agent_name='agent1', action='launched', health='healthy'),)
+        )
+
+    app.runtime_supervisor = SimpleNamespace(start=_start)
+    monkeypatch.setattr(
+        project_restart,
+        '_load_agent_provider_session',
+        lambda app, agent_name, runtime: SimpleNamespace(data={}, start_cmd='reuse-session'),
+    )
+
+    payload = build_project_restart_agent_handler(app)({'agent_name': 'agent1'})
+
+    assert payload['restart_status'] == 'ok'
+    assert payload['result']['status'] == 'restarted'
+    assert payload['result']['restart_mode'] == 'recreate_missing'
+    assert payload['result']['reason'] == 'pane_recreated'
+    assert payload['result']['pane_id'] == '%9'
+    assert len(start_calls) == 1
+    assert start_calls[0]['agent_names'] == ('agent1',)
+    assert 'restart_agent_panes' not in start_calls[0]
+    assert start_calls[0]['recreate_reason'] == project_restart.RESTART_AGENT_REASON
+
+
 def test_project_restart_agent_handler_defers_herdr_namespace_without_tmux_backend(monkeypatch) -> None:
     app = _app(runtimes={'agent1': _runtime(pane_id='herdr-pane-1')})
     app.project_namespace = SimpleNamespace(

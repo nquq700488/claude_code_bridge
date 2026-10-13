@@ -1,5 +1,11 @@
 # Kimi Provider 接入 CCB 流程与踩坑记录
 
+> ⚠️ **本文为历史记录，请勿按此重新实现。**
+>
+> 上游官方现已原生支持 Kimi，且本 Fork 的 `lib/provider_backends/kimi/` 与上游**逐字节一致**（不再存在 Fork 特有的 Kimi 增强）。下文描述的接入过程是本 Fork 早期（CCB v6 时代，官方尚不支持 kimi）的做法，保留作为踩坑参考。
+>
+> 排查 Kimi 问题请看 [CCB_INSTALL_GUIDE.md](./CCB_INSTALL_GUIDE.md) 的 Q14 / Q15。
+
 ## 背景
 
 CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot）"。但 Kimi CLI（v1.43.0+）实际上具备 session 管理（`--session`/`--continue`）和结构化日志（`context.jsonl`），具备接入 CCB 的条件。
@@ -79,6 +85,8 @@ CCB v6 官方文档和 TROUBLESHOOTING 中明确标注"不支持 kimi（Moonshot
 **现象**：ccb 启动时报 "kimi executable not found in PATH"
 
 **原因**：CCB 在启动 pane 前会用 `shutil.which` 验证 provider 可执行文件是否存在。Kimi CLI 默认安装在 VS Code 扩展目录，不在 PATH 中
+
+**查看真实原因**：`ccb` 退出时若打印 `command_status: failed`，真实原因就在紧随的 `error:` 行（不再需要靠 `ccb doctor` 的 `ccbd_startup_last_failure_reason` 倒查）。冷启动时该行可能延迟数秒才出现，因为 CLI 在等 daemon 写出启动报告。
 
 **解决**：创建符号链接到 PATH 目录：
 ```bash

@@ -27,20 +27,32 @@ class CcbdClient:
         req = RpcRequest(op=op, request=payload or {})
         try:
             sock = connect_socket(self._socket_path, timeout_s=self._timeout_s)
+        except CcbdClientError as exc:
+            # connect_socket normally wraps its own OSError/TimeoutError before
+            # it returns here, so annotate that path explicitly as pre-send.
+            _set_rpc_phase(exc, 'connect')
+            raise
         except OSError as exc:
-            raise CcbdClientError(str(exc)) from exc
+            error = _client_error(str(exc), phase='connect')
+            raise error from exc
         try:
-            send_request(sock, req)
-            raw = recv_response_line(sock)
-        except OSError as exc:
-            raise CcbdClientError(str(exc)) from exc
+            try:
+                send_request(sock, req)
+            except OSError as exc:
+                error = _client_error(str(exc), phase='send')
+                raise error from exc
+            try:
+                raw = recv_response_line(sock)
+            except OSError as exc:
+                error = _client_error(str(exc), phase='receive')
+                raise error from exc
         finally:
             sock.close()
         if not raw:
-            raise CcbdClientError('empty response from ccbd')
+            raise _client_error('empty response from ccbd', phase='receive')
         response = decode_response(raw)
         if not response.ok:
-            raise CcbdClientError(response.error or 'ccbd request failed')
+            raise _client_error(response.error or 'ccbd request failed', phase='response')
         return response.payload
 
     def __getattr__(self, name: str):
@@ -50,6 +62,20 @@ class CcbdClient:
         call = bind_endpoint(self, name=name, endpoint=endpoint)
         object.__setattr__(self, name, call)
         return call
+
+
+def _client_error(message: str, *, phase: str) -> CcbdClientError:
+    error = CcbdClientError(message)
+    _set_rpc_phase(error, phase)
+    return error
+
+
+def _set_rpc_phase(error: BaseException, phase: str) -> None:
+    try:
+        if not getattr(error, 'ccb_rpc_phase', None):
+            error.ccb_rpc_phase = phase  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 def _resolve_timeout(explicit: float | None) -> float:

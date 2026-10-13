@@ -48,14 +48,39 @@ def start_running_job(
     if dispatcher._message_bureau is not None:
         dispatcher._message_bureau.mark_attempt_started(running, started_at=started_at)
     append_job(dispatcher, running)
-    append_event(dispatcher, running, 'job_started', {'status': JobStatus.RUNNING.value}, timestamp=started_at)
+    append_event(
+        dispatcher,
+        running,
+        'job_started',
+        {
+            'status': JobStatus.RUNNING.value,
+            'delivery_stage': 'claim_started',
+            'delivery_mechanism': 'dispatcher',
+        },
+        timestamp=started_at,
+    )
     write_running_snapshot(dispatcher, running, started_at=started_at)
     runtime_context = build_job_runtime_context(running, slot.runtime)
     dispatcher._state.mark_active_for(running.target_kind, running.target_name, running.job_id)
     if slot.requires_runtime_sync:
         sync_runtime(dispatcher, running.agent_name, state=AgentState.BUSY)
     submission = None
-    if dispatcher._execution_service is not None and should_start_execution(dispatcher, running, runtime_context):
+    should_start = dispatcher._execution_service is not None and should_start_execution(
+        dispatcher,
+        running,
+        runtime_context,
+    )
+    if should_start:
+        append_event(
+            dispatcher,
+            running,
+            'provider_start_attempt',
+            {
+                'delivery_stage': 'provider_start_attempt',
+                'provider': running.provider,
+            },
+            timestamp=dispatcher._clock(),
+        )
         try:
             submission = dispatcher._execution_service.start(
                 running,
@@ -63,6 +88,42 @@ def start_running_job(
             )
         except Exception as exc:
             return fail_provider_start(dispatcher, running, exc, failed_at=dispatcher._clock())
+        if submission is None:
+            append_event(
+                dispatcher,
+                running,
+                'provider_submission_missing',
+                {
+                    'delivery_stage': 'provider_submission_missing',
+                    'provider': running.provider,
+                    'delivery_reason': 'execution_service_returned_none',
+                },
+                timestamp=dispatcher._clock(),
+            )
+        else:
+            append_event(
+                dispatcher,
+                running,
+                'provider_submission_created',
+                _submission_delivery_payload(submission),
+                timestamp=dispatcher._clock(),
+            )
+    else:
+        append_event(
+            dispatcher,
+            running,
+            'provider_start_skipped',
+            {
+                'delivery_stage': 'provider_start_skipped',
+                'provider': running.provider,
+                'delivery_reason': (
+                    'execution_service_missing'
+                    if dispatcher._execution_service is None
+                    else 'runtime_binding_not_actionable'
+                ),
+            },
+            timestamp=dispatcher._clock(),
+        )
     if is_reply_delivery_job(running) and dispatcher._execution_service is not None:
         return complete_reply_delivery_after_start(
             dispatcher,
@@ -73,12 +134,45 @@ def start_running_job(
     return running
 
 
+def _submission_delivery_payload(submission) -> dict[str, object]:
+    state = dict(getattr(submission, 'runtime_state', {}) or {})
+    diagnostics = dict(getattr(submission, 'diagnostics', {}) or {})
+    fallback_stage = (
+        'provider_runtime_not_ready'
+        if diagnostics.get('reason') == 'runtime_unavailable'
+        else 'provider_submission_created'
+    )
+    stage = str(
+        state.get('delivery_stage')
+        or diagnostics.get('delivery_stage')
+        or fallback_stage
+    )
+    payload: dict[str, object] = {
+        'delivery_stage': stage,
+        'provider': str(getattr(submission, 'provider', '') or ''),
+        'delivery_state': state.get('delivery_state'),
+        'delivery_mechanism': state.get('delivery_mechanism') or diagnostics.get('mechanism'),
+        'target_pane_id': state.get('delivery_target_pane_id') or state.get('pane_id'),
+        'prompt_sent': state.get('prompt_sent'),
+    }
+    reason = diagnostics.get('reason') or state.get('delivery_reason')
+    error = diagnostics.get('error') or state.get('delivery_error')
+    if reason:
+        payload['delivery_reason'] = reason
+    if error:
+        payload['delivery_error'] = error
+    return {key: value for key, value in payload.items() if value is not None and value != ''}
+
+
 def fail_provider_start(dispatcher, running: JobRecord, exc: Exception, *, failed_at: str) -> JobRecord:
     diagnostics = {
+        'delivery_stage': 'provider_start_failed',
+        'delivery_reason': 'provider_start_exception',
         'error_type': type(exc).__name__,
         'provider': running.provider,
         'provider_start_error': str(exc),
     }
+
     append_event(
         dispatcher,
         running,

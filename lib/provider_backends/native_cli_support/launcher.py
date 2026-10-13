@@ -12,6 +12,7 @@ from provider_core.caller_env import (
     caller_context_env,
     export_env_clause,
     join_env_prefix,
+    magic_context_storage_env,
     provider_user_session_env,
 )
 from provider_core.contracts import ProviderRuntimeLauncher
@@ -140,6 +141,7 @@ def build_start_cmd(
     env_prefix = join_env_prefix(
         export_env_clause(provider_user_session_env()),
         export_env_clause(profile_env),
+        export_env_clause(magic_context_storage_env(provider)),
         export_env_clause(spec.env),
         export_env_clause(provider_model_runtime_env(spec.provider, model=spec.model)),
         export_env_clause(private_env),

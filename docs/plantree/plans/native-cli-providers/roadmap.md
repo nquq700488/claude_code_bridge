@@ -1,9 +1,21 @@
 # Native CLI Providers Roadmap
 
 Date: 2026-06-13
-Last updated: 2026-08-17
+Last updated: 2026-09-30
 
 ## Status Summary
+
+- Pi local package startup repair (2026-10-10): implemented and verified in an
+  isolated worktree, not committed/released. Zero-copy warm cache, shared
+  dependency graph, explicit exclusions, orphan staging recovery and timeout
+  propagation passed 362 tests plus real Pi cold/warm startup.
+  [Evidence](evidence/pi-snapshot-startup-20261010.md). Easyfun 401 and macOS
+  empty-response qualification remain open.
+
+- OMP exact conversation resume: implemented and verified locally (2026-09-19;
+  236 tests including isolated real OMP history loading; not installed/released).
+  [Scope and verification](topics/omp-context-resume.md). User authorized fixing
+  the observed fresh-context restart; installed sessions remain untouched.
 
 - Current status: native completion pivot has landed in source and `v7.5.0`
   has been published. Kimi, DeepSeek/DeepCode, AGY, and MiMo no longer use
@@ -20,14 +32,13 @@ Last updated: 2026-08-17
   agent-local config state, and provider-specific stream terminalization. Qoder
   CLI CN is registered separately as `qoderclicn` and reuses that corrected
   contract for `@qodercn-ai/qoderclicn` rather than the retired generic adapter.
-- Last verified: stable `v8.6.9` was published from commit `677edc72c` with all
-  seven release/test workflows successful, 10 GitHub assets, verified public
-  checksums, and `@seemseam/ccb@8.6.9` on npm `latest`. The source candidate
-  passed the complete
-  pytest gate with `7166 passed, 3 skipped, 4 subtests passed`; the focused
-  Linux/Windows release, Mobile version, and Windows PR-isolation set passed
-  with `76 passed`. The bilingual notes check, `npm pack --dry-run`, and
-  isolated source-wrapper version check also passed for `8.6.9`.
+- Last verified: stable `v8.7.5` was published from commit `8f63ff63e` with
+  all seven release/test workflows successful, ten GitHub assets, bilingual
+  release notes, and `@seemseam/ccb@8.7.5` on npm `latest`. Focused
+  OMP/Pi and dispatcher regressions passed `302` tests with `2` skips;
+  release/install/platform gates passed `95` tests. A disposable public npm
+  install reported `v8.7.5` / `8f63ff6`, and registry signature
+  verification passed. [Receipt](evidence/v8.7.5-release-20260930.md).
 - Qoder correction verification on 2026-07-22 used real `qodercli 1.1.2`
   help/version and credential-free stream output plus focused launcher,
   execution, catalog, registry, and storage tests. Authenticated completion
@@ -56,9 +67,44 @@ Last updated: 2026-08-17
   `agent_settled` completion, persisted headless-mode compatibility, an
   explicit rollback switch, and pane/trace evidence tracked in
   [topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md).
+  OMP now has the equivalent source candidate, using final
+  `agent_end(willContinue != true)` as terminal authority while preserving
+  `omp_run` jobs and `CCB_OMP_EXECUTION_MODE=headless`. Authenticated OMP
+  18.1.10 visible-pane acceptance passed in both the isolated source runtime
+  and a copied dev installation used by the original project, with exact pane,
+  sidecar, trace, and single-reply evidence. OMP managed homes now also receive
+  the four required CCB control skills independently of optional user skill
+  inheritance; the installed runtime discovered all four after rematerializing
+  and restarting both existing OMP agents.
 
 ## Done
 
+- OMP/Pi completion binding now distinguishes submitted UI/control input from
+  an actual new provider turn: `/model` preserves the active ask, while
+  `before_agent_start` for a different prompt and `session_switch` supersede it
+  explicitly. Stable `v8.7.5` publishes the repair. Focused extension replay
+  and provider regressions pass; a real OMP active-turn switch also completed
+  the same job with an exact reply. All seven release/test workflows, ten
+  GitHub assets, and the public npm package are verified.
+  [Implementation evidence](evidence/omp-pi-control-input-supersession-20260930.md);
+  [publication receipt](evidence/v8.7.5-release-20260930.md).
+
+- Implemented OMP visible-pane ask execution with owner-only lifecycle and
+  dispatch sidecars, exact prompt/request/actor/launch/runtime binding,
+  fail-closed malformed-event handling, scoped cancellation, mode-aware
+  restore, explicit headless rollback, and persisted `omp_run` compatibility.
+  Focused and expanded tests passed `70` and `231` cases respectively.
+  Authenticated job `job_f8f68d50ae6c` visibly appeared and replied in the
+  managed OMP pane, matched exact sidecar identity, and completed once with
+  `omp_run_stop`. Installed-runtime job `job_f173b0f5b0d6` then passed the same
+  visible-pane and exact-binding checks in the original project; bare `ccb`
+  used the managed copied installation and the final queue depth was zero.
+  Added required `ask`, `ccb-clear`, `ccb-compact`, and `ccb-diagnose` Agent
+  Skills for OMP using the packaged Codex-compatible skill contract. Focused
+  and expanded tests passed `29` and `225` cases. After installing the source
+  candidate and restarting `demo` and `agent3`, job `job_2f830698377f`
+  returned the exact four-skill inventory visibly in pane `%1` with one reply
+  and all queues idle.
 - Published stable `v8.6.9` from commit `677edc72c` through an annotated tag,
   bilingual GitHub Release, Linux/macOS/Windows/Mobile and Sidebar assets, and
   npm Trusted Publishing. Public checksum and fresh npm-install verification

@@ -13,6 +13,7 @@ from provider_execution.base import ProviderRuntimeContext, ProviderSubmission
 from provider_execution.common import no_wrap_requested, normalize_session_path, send_prompt_to_runtime_target
 
 from .readiness import wait_for_runtime_ready
+from provider_execution.draft_guard import initial_guard_state, allow_submission_send, guarded_send
 
 
 def start_active_submission(
@@ -50,7 +51,8 @@ def start_active_submission(
     prompt = job.request.body if no_wrap else wrap_prompt_fn(job.request.body, request_anchor)
     session_path = state_session_path(state)
     session_data = dict(getattr(prepared.session, 'data', {}) or {})
-    if not wait_for_runtime_ready(prepared.backend, prepared.pane_id):
+    guard_state = initial_guard_state('codex', prepared.backend, session_data)
+    if not guard_state['draft_guard_enabled'] and not wait_for_runtime_ready(prepared.backend, prepared.pane_id):
         return _runtime_not_ready_submission(
             job,
             provider=adapter.provider,
@@ -59,9 +61,10 @@ def start_active_submission(
             work_dir=prepared.work_dir,
             pane_id=prepared.pane_id,
         )
-    send_prompt_to_runtime_target(prepared.backend, prepared.pane_id, prompt)
+    if not guard_state['draft_guard_enabled']:
+        send_prompt_to_runtime_target(prepared.backend, prepared.pane_id, prompt)
 
-    return ProviderSubmission(
+    submission = ProviderSubmission(
         job_id=job.job_id,
         agent_name=job.agent_name,
         provider=adapter.provider,
@@ -71,6 +74,15 @@ def start_active_submission(
         reply='',
         diagnostics={'provider': adapter.provider, 'mode': 'active', 'workspace_path': str(prepared.work_dir)},
         runtime_state={
+            **guard_state,
+            'prompt_sent': not guard_state['draft_guard_enabled'],
+            'delivery_stage': (
+                'awaiting_input_guard'
+                if guard_state['draft_guard_enabled']
+                else 'pane_send_succeeded'
+            ),
+            'delivery_mechanism': 'tmux_backend',
+            'pending_prompt': prompt if guard_state['draft_guard_enabled'] else '',
             'mode': 'active',
             'reader': reader,
             'state': state,
@@ -104,6 +116,24 @@ def start_active_submission(
             ),
         },
     )
+    return dispatch_guarded_prompt(submission, now=now)
+
+
+def dispatch_guarded_prompt(submission, *, now):
+    if not submission.runtime_state.get('draft_guard_enabled') or submission.runtime_state.get('prompt_sent', True):
+        return submission
+    state = dict(submission.runtime_state)
+    if allow_submission_send('codex', state):
+        # Ignore any unrelated transcript produced while this job was deferred.
+        state['state'] = state['reader'].capture_state()
+        guarded_send(state, lambda: send_prompt_to_runtime_target(
+            state['backend'], state['pane_id'], str(state['pending_prompt'])))
+        state['delivery_stage'] = 'pane_send_succeeded'
+        state['prompt_sent_at'] = now
+        state['delivery_started_at'] = '' if state.get('no_wrap') else now
+        state['delivery_last_progress_at'] = state['delivery_started_at']
+        state.pop('pending_prompt', None)
+    return replace(submission, runtime_state=state)
 
 
 def resume_submission(
@@ -190,6 +220,8 @@ def _runtime_not_ready_submission(
     diagnostics = {
         'provider': provider,
         'mode': 'error',
+        'delivery_stage': 'provider_runtime_not_ready',
+        'delivery_reason': 'runtime_unavailable',
         'reason': 'runtime_unavailable',
         'error': 'codex_runtime_not_ready',
         'error_type': 'codex_runtime_not_ready',
@@ -209,6 +241,8 @@ def _runtime_not_ready_submission(
         diagnostics=diagnostics,
         runtime_state={
             'mode': 'error',
+            'delivery_stage': 'provider_runtime_not_ready',
+            'delivery_reason': 'runtime_unavailable',
             'reason': 'runtime_unavailable',
             'error': 'codex_runtime_not_ready',
             'diagnostics': diagnostics,

@@ -35,7 +35,8 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
                 f'phase={agent.get("execution_phase") or agent.get("mailbox_state")} '
                 f'mailbox_state={agent["mailbox_state"]} '
                 f'depth={agent["queue_depth"]} pending_replies={agent["pending_reply_count"]} '
-                f'summary_status={agent.get("summary_status")}'
+                f'summary_status={agent.get("summary_status")} '
+                f'delivery_wait={(agent.get("delivery_wait") or {}).get("reason")}'
             )
         return tuple(lines)
 
@@ -58,6 +59,13 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
             f'last_inbound_finished_at: {agent.get("last_inbound_finished_at")}',
         ]
     )
+    wait = agent.get('delivery_wait')
+    if isinstance(wait, Mapping):
+        lines.append(f'delivery_wait: job={wait.get("job_id")} reason={wait.get("reason")} '
+                     f'elapsed_seconds={wait.get("elapsed_seconds")} '
+                     f'wait_seconds={wait.get("wait_seconds")} clear_attempted={wait.get("clear_attempted")}')
+        lines.append('delivery_wait_notice: 180s applies only to observed nonempty idle input; '
+                     'unknown/busy does not authorize clearing or sending')
     if agent.get('summary_error') is not None:
         lines.append(f'summary_error: {agent.get("summary_error")}')
     if agent.get('summary_status') == 'missing':
@@ -80,11 +88,19 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
         lines.append('queue_details: omitted; rerun with `ccb pend --queue --detail <agent>` or `ccb queue --detail <agent>` for queued-event detail')
         return tuple(lines)
     for event in queued_events or ():
-        lines.append(
+        line = (
             'queue_event: '
             f'pos={event["position"]} event={event["inbound_event_id"]} type={event["event_type"]} '
-            f'status={event["status"]} priority={event["priority"]} '
-            f'message={event["message_id"]} attempt={event["attempt_id"]} job={event["job_id"]}'
+            f'status={event["status"]} '
+        )
+        delivery_stage = event.get('delivery_stage')
+        delivery_reason = event.get('delivery_reason')
+        if delivery_stage or delivery_reason:
+            line += f'stage={delivery_stage} reason={delivery_reason} '
+        lines.append(
+            line
+            + f'priority={event["priority"]} message={event["message_id"]} '
+            f'attempt={event["attempt_id"]} job={event["job_id"]}'
         )
     return tuple(lines)
 

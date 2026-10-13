@@ -471,6 +471,14 @@ and then log in that agent's managed Codex home directly. With no explicit
 agent API authority, `inherit_auth = false` means "do not inherit global
 Codex credentials"; it must preserve an existing agent-local `auth.json`.
 
+The same setting enables independent Agent login for Claude and AGY on macOS.
+CCB prepares a private Keychain under the managed Provider home; log in once in
+that managed session, and later starts reuse that Agent-owned credential. When
+changing an existing AGY profile from inherited to independent auth, move or
+remove any old managed auth files and the projected item in the Agent-private
+Keychain first; CCB blocks the transition rather than silently treating a prior
+projection as the independent login.
+
 ### 4.3 Provider Profile MCP Overlay
 
 Provider profiles may declare agent-local MCP server overrides:
@@ -513,10 +521,14 @@ Contract:
   - `gemini`
   - `opencode`
   - `mimo`
+  - `pi`
   - `deepseek`
 - `model` is user-facing sugar only. Providers with model flags compile it onto
   the existing startup-argument path. DeepSeek compiles it to
   `DEEPCODE_MODEL`, the Deep Code CLI's documented runtime override.
+- Pi model values may use the qualified `provider/model` form from the source
+  user's `.pi/agent/models.json`; CCB passes the complete value through one
+  `--model` argument and does not generate a separate `--provider` argument.
 - `model` may coexist with unrelated `startup_args`, but must not be combined
   with provider model flags already present in `startup_args`.
 - Config rendering and recovery must preserve the user-facing `model` field
@@ -540,13 +552,20 @@ Contract:
   offering model-specific levels; manual inherited-model use remains valid.
 - Codex accepts the model-specific level exposed by the installed Codex model
   catalog and compiles it to `-c model_reasoning_effort="<level>"`.
+  Astra's supported UI order is `low`, `medium`, `high`, `xhigh`, `max`;
+  the fallback catalog includes Astra when no usable cache is available.
+- Pi compiles `thinking` to `--thinking <level>` using the shared shortcut
+  compiler. Model-specific choices come from `reasoning` and
+  `thinkingLevelMap` in the source user's `.pi/agent/models.json`. Explicit
+  mappings are required for `xhigh` and `max`; `null` disables a level.
 - DeepSeek V4 Pro and V4 Flash accept `off`, `high`, or `max`. CCB compiles
   these to the Deep Code CLI's `DEEPCODE_THINKING_ENABLED` and
   `DEEPCODE_REASONING_EFFORT` environment overrides.
 - Other providers do not have a static CCB thinking mapping. Their `thinking`
   field must fail validation instead of being ignored.
 - Structured `thinking` must not be combined with an equivalent Codex
-  `startup_args` config override or Deep Code environment override.
+  `startup_args` config override, Pi `--thinking` startup override, or Deep Code
+  environment override.
 - Config rendering preserves `thinking` and removes generated provider launch
   arguments from user-facing TOML.
 

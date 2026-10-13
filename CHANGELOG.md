@@ -1,5 +1,215 @@
 # Changelog
 
+## Unreleased
+
+- Make `ccb restart <agent>` recreate a missing managed pane through the normal startup flow when the Provider session is still available, instead of silently skipping the restart.
+- Make `ccb pend --watch` (and the watch inside `ccb ask`) auto-initialize the target when it is not running: instead of failing fast on the `stopped` sentinel, the watch now mounts the project daemon and starts the target agent pane, then keeps waiting for the job. Auto-start is bounded to two attempts per watch with a 90s cold-start grace, never restarts an agent that is already healthy, and still fails fast on unfixable healths such as `provider-auth-revoked` and `session-missing`. Set `CCB_WATCH_AUTO_START=0` to restore the previous read-only fail-fast behavior. A job that has already reached a terminal state no longer connects to the daemon at all.
+- Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
+- Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
+
+## v8.7.10 (2026-10-10)
+
+- Reuse verified Pi plugin snapshots before copying, share resolved dependency nodes and recover interrupted staging.
+- Add explicit `.ccb-snapshot-exclude` paths and preserve startup timeout overrides across background processes.
+- 修复 Pi 插件重复复制与依赖膨胀，新增显式排除规则、中断清理和启动超时参数传递。
+- [Full bilingual notes](docs/releases/v8.7.10.md).
+
+## v8.7.9 (2026-10-10)
+
+- Preserve managed Codex caller identity in filtered native tool-shell environments so bare `ask` results return to the calling Agent (PR #376).
+- 保留 managed Codex 工具 shell 中的调用者身份，使裸 `ask` 结果回投到正确 Agent（PR #376）。
+- Actual Codex/OMP and Claude Sonnet 4.6 roundtrips passed; Pi full service qualification remains blocked by insufficient resources.
+- [Full bilingual notes](docs/releases/v8.7.9.md).
+
+## v8.7.8 (2026-10-08)
+
+- Complete the Codex fullscreen/interrupt-text delivery repair and restore installed native executable/script entrypoints (PR #372).
+- 完整发布 Codex 全屏底栏/中断提示投递修复，修复安装后的原生程序/脚本入口（PR #372）。
+- Supersede the incomplete v8.7.7 prerelease; its tag remains unchanged and npm 8.7.7 was not published.
+- [Full bilingual notes](docs/releases/v8.7.8.md).
+
+## v8.7.7 (2026-10-08)
+
+- Fix Codex fullscreen footer and historical interrupt-text false vetoes; preserve drafts, native busy/menu blocking and ordered delivery.
+- 修复 Codex 双行底栏和历史回复中断提示误判，保留草稿、原生活动/菜单保护与有序投递。
+- Retain earlier Claude/Codex repairs and include separately reviewed platform-specific reliability changes from PR #368.
+- [Full bilingual notes](docs/releases/v8.7.7.md).
+
+## v8.7.6 (2026-10-06)
+
+- Recognize native Claude pasted request envelopes across anchor, lifecycle and stop-hook paths (#354).
+- Release empty Codex composers with newer custom/context status bars while preserving draft, busy and menu guards.
+- The post-paste symptom in #356 remains unconfirmed; experimental PR #366 is excluded.
+- 修复 Claude 原生粘贴包装与 Codex 空输入状态栏识别，保留草稿保护；#356 未复现部分继续跟进，未包含 PR #366。
+- [Full bilingual notes](docs/releases/v8.7.6.md).
+
+## v8.7.5 (2026-09-30)
+
+- Keep OMP/Pi asks bound when `/model` or another control-only input event opens a native selector.
+- Move replacement-turn detection to the actual `before_agent_start` lifecycle boundary while preserving explicit session-switch and real new-turn supersession.
+- Pass 302 focused regressions and a real OMP 18.3.5 active-turn model switch with one exact non-empty reply and no `request_superseded` event.
+- Pi shares the repaired generated extension and passes Bun lifecycle replay; a separate authenticated Pi TUI model-switch run remains unqualified. [Full bilingual notes](docs/releases/v8.7.5.md).
+
+## v8.7.4 (2026-09-29)
+
+- Prefer Claude/Codex local conversation restoration across account, key and gateway changes; retain explicit fresh behavior and ownership checks.
+- Preserve continuity metadata, Pi manual-session observations and OMP title-slot history compatibility.
+- Verify native cross-route replay and repeat reopening with synthetic credentials; 402 combined checks passed.
+- Refresh the WeChat QR image. [Full bilingual notes and limitations](docs/releases/v8.7.4.md).
+
+## v8.7.3 (2026-09-28)
+
+- Stop recommending six V3 preview roles during install/update onboarding, while preserving explicit installs, installed-role updates and missing-source diagnostics.
+
+- Remove model-name and capitalization dependencies from supported Codex composer footer recognition (#361).
+- Add Claude dynamic-suggestion, accepted-draft, deferred-send and return-before-ask FIFO regressions; preserve the fixed 180-second policy.
+- Record 322 focused passing tests and 19 completed real Claude jobs. Experimental native composer plugins remain disabled.
+- English and Chinese notes, upgrade guidance and layout limitations: [v8.7.3](docs/releases/v8.7.3.md).
+
+## v8.7.2 (2026-09-26)
+
+- Fix Codex recovery commands accumulating duplicate resume arguments (#356).
+- Recover abandoned OMP editor sockets under Bun and expose input-guard queue reasons.
+- Recognize right-padded Codex empty placeholders while retaining unknown-input protection and FIFO.
+- English and Chinese notes, upgrade guidance and remaining issue scope: [v8.7.2](docs/releases/v8.7.2.md).
+
+## v8.7.1 (2026-09-21)
+
+- Rich files open with the system default application on click or Enter; folders stay in Yazi.
+- Unified safe/rich profiles with macOS `open`, Linux GIO/xdg-open and WSL `wslview` routing.
+- Preserve special-character filenames and multiple selections; report missing WSL interop tooling.
+- Added README badge/download version consistency checks to catch stale public-facing metadata before publication.
+- English and Chinese notes: [v8.7.1](docs/releases/v8.7.1.md).
+
+## v8.7.0 (2026-09-21)
+
+- Added human/agent input-draft protection on top of chronological agent/agent ask/back queues.
+- Wait for the current turn and queue head, then wait up to 180 seconds for a nonempty composer before one confirmed clear and delivery.
+- Recommend testing with Claude, Codex and OMP managed tmux panes; other providers' input protection follows in later updates.
+- Fixed historical interrupt text and ordinary draft keywords falsely blocking delivery, and Claude busy animation without an interrupt hint being missed.
+- Verified real model tasks, ask/back ordering, draft waiting, modal recovery and narrow panes; retained the explicit Codex remote-session recovery limitation.
+- English and Chinese notes: [v8.7.0](docs/releases/v8.7.0.md).
+
+## v8.6.19 (2026-09-19)
+
+- Unified per-agent chronological ask/reply queues, held until provider processing turns end.
+- Added read-only `ccb screen <agent>` with bounded scrollback and JSON output.
+- Added English caller inspection guidance for empty and abnormal replies without automatic empty-result retries.
+- Restored the exact observed OMP native conversation on relaunch and pane recovery.
+- Full English and Chinese notes: [v8.6.19](docs/releases/v8.6.19.md).
+
+## v8.6.18 (2026-09-17)
+
+- Clarified Mobile Agent activity/unread states and tightened chat layout.
+- Added offline background presets and refined settings while preserving custom images.
+- Integrated PR #350 private Keychain inheritance with local auth qualification.
+- Fixed PR #353 key binding without breaking unauthenticated Codex endpoints.
+- Corrected Claude explicit API-key approval without external Provider writes.
+- Full English and Chinese notes: [v8.6.18](docs/releases/v8.6.18.md).
+
+## v8.6.17 (2026-09-14)
+
+- Fixed Codex `task_complete.error` handling so safety and provider failures
+  remain failed terminal results with their error category preserved (#347).
+- Prevented incompatible remote Codex resume permission flags and made
+  `ccb clear` report dead panes and input delivery honestly (#346).
+- Fenced Codex app-server generations, readiness checks, and shutdown cleanup
+  against socket/PID races during restart (#345).
+- Preserved `CCB_KIMI_NATIVE_TURN_TIMEOUT_S` through the daemon environment
+  while keeping the default 300-second policy unchanged (#348).
+- Preserved one-way Provider inheritance and Windows/Herdr isolation.
+
+## v8.6.16 (2026-09-09)
+
+- Made Mobile host aggregation depend on reachable hosts, preserving offline
+  pairings and supporting initial fallback to the sole reachable host.
+- Replaced stale same-path project registrations and validated daemon identity.
+- Corrected Claude recovery credential ordering (#340), Codex fork parsing
+  (#341), and tmux startup atomicity (#343); included transcript preamble
+  handling (#342) and smoke cleanup failure evidence.
+- Reverted #344 to preserve the existing external Keychain boundary.
+- Recorded Provider one-way inheritance and Windows/Herdr isolation as core
+  PR maintenance requirements. Full bilingual notes: docs/releases/v8.6.16.md.
+
+## v8.6.15 (2026-09-06)
+
+- Fixed blank CCB Mobile conversations for OMP Agents by routing OMP through
+  the provider-native transcript authority and cache fingerprint path.
+- Made the shared Pi/OMP transcript reader resolve sessions through
+  `PathLayout.runtime_state_root`, supporting both V2 in-project state and V3
+  external runtime state.
+- Accepted a title record before the native session header, retained
+  `session_id` on projected messages, and merged consecutive assistant
+  segments into one conversation bubble while excluding hidden thinking.
+- Upgrade the CCB host and CCB Mobile APK, then restart the Mobile gateway. No
+  project, pairing, conversation, or configuration migration is required.
+
+## v8.6.14 (2026-09-06)
+
+- Published the current merged `main` line for the first time, including PRs
+  #320, #321, #322, #323, #325, #326, #328, #329, #330, #331, #332, #333,
+  #334, #335, #336, #337, and #339.
+- Added direct pane drag, swap, and resize editing, Pi local-model selection,
+  Codex Astra support, and Pi thinking-level controls in Config UI.
+- Added CCB Mobile multi-host aggregation and host display names.
+- Hardened Herdr lifecycle reporting, Codex reconnect and model projection,
+  managed Git identity, tmux environment inheritance, Pi clear/profile assets,
+  shared Magic Context storage, Windows UTF-8 handling, and Windows PR
+  isolation.
+- Includes the visible OMP ask/completion and Config V1/V2 role filtering fixes
+  from v8.6.13. Restart managed Agents and CCB projects after upgrading; no
+  project, conversation, pairing, or configuration migration is required.
+
+## v8.6.13 (2026-09-06)
+
+- Ran OMP asks in the visible managed pane with native completion evidence,
+  and kept multi-tool turns active until their final assistant result instead
+  of treating an intermediate `tool_use` as terminal.
+- Limited Config V1/V2 role selection to general roles and
+  `agentroles.ccb_self`; other workflow-specific `ccb_*` roles remain reserved
+  for V3.
+- Refocused current public provider guidance on the primary supported CLI
+  families. DeepSeek CLI, Z.ai, and DeepSeek Harness remain implemented and
+  retain their historical release notes, but are no longer advertised as
+  current headline support.
+- No project, conversation, or configuration migration is required. Native
+  Windows x64 and Herdr remain beta and isolated from shared Linux/macOS
+  runtime dependencies.
+
+## v8.6.12 (2026-09-02)
+
+- Exposed Pi and OMP native conversations in CCB Mobile while preserving
+  Provider-private session paths, transcript boundaries, and token-aware
+  projection.
+- Added Pi profile-asset inheritance through immutable shared snapshots into
+  Agent-private homes (PR #328), and made concurrent first-start snapshot
+  publication atomic.
+- Preserved Git author and committer identity in managed Provider homes
+  (PR #330), and returned Agent control immediately after an accepted ask
+  submission (PR #329).
+- Refreshed the WeChat community QR code. Restart managed Pi Agents to refresh
+  projected profile assets; no project, conversation, pairing, or
+  configuration migration is required. Native Windows x64 remains beta.
+
+## v8.6.11 (2026-08-27)
+
+- Restored bearer authentication for explicit Codex CLI `0.149.0` custom
+  providers by declaring the Agent-local `OPENAI_API_KEY` source, while
+  preserving unauthenticated route-only gateways.
+- Added per-Agent Codex `model_catalog_json` projection and model overrides,
+  preserved reconnect startup/history behavior, and retained
+  `CCB_TMUX_CONFIG` across the keeper control-plane environment (PRs #321,
+  #322, and #326).
+- Changed Pi clear to `/new`, so a clear starts a fresh native context instead
+  of relying on the previous reset command (PR #325).
+- Reworked Herdr lifecycle synchronization as an optional generic terminal
+  capability implemented only by the Windows backend, with monotonic state
+  reporting and no new shared-to-Windows imports (PR #320).
+- Enforced UTF-8 mode at the native Windows launcher boundary instead of
+  changing shared subprocess call sites (PR #323). Windows x64 and Herdr
+  remain beta.
+- Restart managed Codex Agents and CCB projects after upgrading. No project,
+  conversation, pairing, or configuration migration is required.
 ## v8.6.10 (2026-08-18)
 
 - Fixed Issue #319: after an external Claude OAuth re-login, a stopped managed

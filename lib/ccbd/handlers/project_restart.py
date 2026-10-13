@@ -395,8 +395,10 @@ def _restart_agent_pane(app, *, agent_name: str) -> dict[str, object]:
     role_restart_block = _role_restart_blocked(session=session)
     if role_restart_block is not None:
         return {'agent': agent_name, **role_restart_block}
-    if not pane_id:
-        return {'agent': agent_name, 'status': 'skipped', 'reason': 'pane_missing'}
+    return _start_agent_pane(app, agent_name=agent_name, pane_id=pane_id)
+
+
+def _start_agent_pane(app, *, agent_name: str, pane_id: str | None) -> dict[str, object]:
     supervisor = getattr(app, 'runtime_supervisor', None)
     start = getattr(supervisor, 'start', None)
     if not callable(start):
@@ -407,16 +409,18 @@ def _restart_agent_pane(app, *, agent_name: str) -> dict[str, object]:
             'pane_id': pane_id,
         }
     restore, auto_permission = _restart_start_options(app)
+    start_options = {
+        'agent_names': (agent_name,),
+        'restore': restore,
+        'auto_permission': auto_permission,
+        'cleanup_tmux_orphans': False,
+        'interactive_tmux_layout': True,
+        'recreate_reason': RESTART_AGENT_REASON,
+    }
+    if pane_id:
+        start_options['restart_agent_panes'] = {agent_name: pane_id}
     try:
-        summary = start(
-            agent_names=(agent_name,),
-            restore=restore,
-            auto_permission=auto_permission,
-            cleanup_tmux_orphans=False,
-            interactive_tmux_layout=True,
-            restart_agent_panes={agent_name: pane_id},
-            recreate_reason=RESTART_AGENT_REASON,
-        )
+        summary = start(**start_options)
     except Exception as exc:
         return {
             'agent': agent_name,
@@ -442,12 +446,15 @@ def _restart_agent_pane(app, *, agent_name: str) -> dict[str, object]:
             'pane_id': pane_id,
         }
     refreshed = app.registry.get(agent_name)
-    return {
+    restarted: dict[str, object] = {
         'agent': agent_name,
         'status': 'restarted',
-        'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id),
+        'pane_id': str(getattr(refreshed, 'pane_id', None) or pane_id or ''),
         'action': str(getattr(result, 'action', '') or '').strip() or 'relaunched',
     }
+    if not pane_id:
+        restarted.update({'restart_mode': 'recreate_missing', 'reason': 'pane_recreated'})
+    return restarted
 
 
 def _restart_start_options(app) -> tuple[bool, bool]:

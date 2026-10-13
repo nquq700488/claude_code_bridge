@@ -1117,7 +1117,7 @@ def test_watch_ask_job_reconnects_and_preserves_cursor(monkeypatch: pytest.Monke
     assert flaky.calls == [0, 2]
     assert stable.calls == [2]
     assert rendered == [('job_1:2:False',), ('job_1:4:True',)]
-    assert seen == [False, False]
+    assert seen == [True, True]
 
 
 def test_watch_ask_job_times_out_after_reconnect_failures(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -1151,7 +1151,7 @@ def test_watch_ask_job_times_out_after_reconnect_failures(monkeypatch: pytest.Mo
         ask_service.watch_ask_job(context, 'job_1', StringIO(), timeout=None, emit_output=False)
 
     assert str(exc_info.value) == 'watch timed out for job_1'
-    assert seen == [False, False]
+    assert seen == [True, True]
 
 
 def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
@@ -1218,7 +1218,68 @@ def test_watch_ask_job_retries_when_reconnect_attempt_temporarily_fails(
     assert batch.reply == 'done'
     assert flaky.calls == [0]
     assert stable.calls == [0]
-    assert seen == [False, False, False]
+    assert seen == [True, True, True]
+
+
+def test_watch_ask_job_auto_starts_stopped_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-ask-auto-start'
+    project_root.mkdir()
+    context = _build_context(project_root)
+
+    class _StoppedAgentClient:
+        def __init__(self) -> None:
+            self.watch_calls = 0
+            self.queue_calls = 0
+
+        def watch(self, job_id: str, *, cursor: int = 0) -> dict:
+            del job_id
+            self.watch_calls += 1
+            terminal = self.watch_calls >= 2
+            return {
+                'job_id': 'job_1',
+                'agent_name': 'agent1',
+                'target_name': 'agent1',
+                'cursor': cursor,
+                'generation': 1,
+                'terminal': terminal,
+                'status': 'completed' if terminal else 'running',
+                'reply': 'done' if terminal else '',
+                'events': [],
+            }
+
+        def queue(self, agent_name: str) -> dict:
+            assert agent_name == 'agent1'
+            self.queue_calls += 1
+            return {
+                'agent': {
+                    'agent_name': agent_name,
+                    'runtime_state': 'stopped',
+                    'runtime_health': 'stopped',
+                }
+            }
+
+    client = _StoppedAgentClient()
+    started: list[str] = []
+
+    monkeypatch.setattr(
+        ask_service,
+        'connect_mounted_daemon',
+        lambda _context, allow_restart_stale: SimpleNamespace(client=client),
+    )
+    monkeypatch.setattr(
+        ask_service,
+        'ensure_agent_running',
+        lambda _client, name, **_kwargs: started.append(name),
+    )
+    monkeypatch.setattr(ask_service, 'watch_timeout_seconds', lambda: 600.0)
+    monkeypatch.setattr(ask_service, 'watch_poll_interval_seconds', lambda: 0.0)
+    monkeypatch.setattr(ask_service.time, 'sleep', lambda seconds: None)
+
+    batch = ask_service.watch_ask_job(context, 'job_1', StringIO(), timeout=None, emit_output=False)
+
+    assert batch.terminal is True
+    assert batch.reply == 'done'
+    assert started == ['agent1']
 
 
 def test_persisted_watch_fallback_resolves_callback_root_final_reply(tmp_path: Path) -> None:

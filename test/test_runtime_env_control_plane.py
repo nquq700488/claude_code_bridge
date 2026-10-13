@@ -47,6 +47,22 @@ def test_control_plane_env_keeps_claude_keychain_override(monkeypatch) -> None:
     assert env['CCB_KEYCHAIN_SERVICE_OVERRIDE'] == 'Claude Code-credentials-account-a'
 
 
+def test_control_plane_env_keeps_tmux_config_override(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_TMUX_CONFIG', '/home/demo/.config/ccb/tmux.conf')
+
+    env = control_plane_env()
+
+    assert env['CCB_TMUX_CONFIG'] == '/home/demo/.config/ccb/tmux.conf'
+
+
+def test_control_plane_env_does_not_inject_tmux_config_override(monkeypatch) -> None:
+    monkeypatch.delenv('CCB_TMUX_CONFIG', raising=False)
+
+    env = control_plane_env()
+
+    assert 'CCB_TMUX_CONFIG' not in env
+
+
 def test_control_plane_env_keeps_agent_roles_store_pin(monkeypatch) -> None:
     monkeypatch.setenv('AGENT_ROLES_STORE', '/home/demo/.roles')
 
@@ -107,6 +123,13 @@ def test_control_plane_env_keeps_managed_provider_no_terminal_timeouts(monkeypat
     assert env['CCB_CLAUDE_NO_TERMINAL_TIMEOUT_S'] == '1800'
     assert env['CCB_CODEX_NO_TERMINAL_TIMEOUT_S'] == '1800'
     assert env['CCB_GEMINI_NO_TERMINAL_TIMEOUT_S'] == '1800'
+
+def test_control_plane_env_keeps_kimi_native_turn_timeout(monkeypatch) -> None:
+    monkeypatch.setenv('CCB_KIMI_NATIVE_TURN_TIMEOUT_S', '900')
+
+    env = control_plane_env()
+
+    assert env['CCB_KIMI_NATIVE_TURN_TIMEOUT_S'] == '900'
 
 
 def test_control_plane_env_keeps_mobile_host_state_override(monkeypatch) -> None:
@@ -351,3 +374,20 @@ def test_control_plane_restores_source_home_for_nonstandard_managed_home(
 
     assert env['HOME'] == str(account_home)
     assert 'CCB_CALLER_ACTOR' not in env
+
+
+def test_startup_transaction_timeout_survives_both_background_hops():
+    import json
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    for raw, expected in [('90', 90.0), ('120', 120.0), ('invalid', 30.0), ('', 30.0)]:
+        keeper = control_plane_env(environ={'CCB_STARTUP_TRANSACTION_TIMEOUT_S': raw})
+        daemon = control_plane_env(environ=keeper)
+        assert daemon['CCB_STARTUP_TRANSACTION_TIMEOUT_S'] == raw
+        result = subprocess.check_output(
+            [sys.executable, '-c', 'import json; from ccbd.startup_policy import STARTUP_TRANSACTION_TIMEOUT_S; print(json.dumps(STARTUP_TRANSACTION_TIMEOUT_S))'],
+            env={**daemon, 'PYTHONPATH': str(Path(__file__).resolve().parents[1] / 'lib')}, text=True,
+        )
+        assert json.loads(result) == expected

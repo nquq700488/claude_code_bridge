@@ -1,9 +1,35 @@
 # Native CLI Providers Implementation Status
 
 Date: 2026-07-21
-Last updated: 2026-08-17
+Last updated: 2026-09-30
 
 ## Current Phase
+
+2026-09-30 published release: stable `v8.7.5` ships the OMP/Pi repair so
+`/model` and other
+control-only input events as replacements for an active CCB ask. Supersession
+moves to the actual `before_agent_start` boundary; native session switches
+remain explicit. The shared extension passed Bun event replay and focused
+regressions, and a real OMP 18.3.5 active-turn model switch preserved the same
+job through an exact non-empty reply. All seven release/test workflows, all
+ten GitHub assets, npm `latest`, registry signature verification, and an
+isolated exact-version installation are verified. Real Pi TUI model switching
+remains an explicit post-release qualification limit.
+[Implementation evidence](evidence/omp-pi-control-input-supersession-20260930.md);
+[publication receipt](evidence/v8.7.5-release-20260930.md).
+
+2026-09-29 continuity release: OMP title-slot validation and Pi manual
+session observation/restore policy fixes are published in `v8.7.4`.
+Both real CLIs preserve native identity and replay user
+and assistant history after switching loopback route/key, then reopening again.
+Published assets and an isolated npm installation are verified; working panes
+were not upgraded. [Native evidence and limits](../provider-auth-authority/evidence/codex-omp-pi-continuity-20260929.md);
+[release receipt and CI qualification](../provider-auth-authority/evidence/v8.7.4-release-20260929.md).
+
+2026-09-19 local candidate: [OMP exact context resume](topics/omp-context-resume.md)
+implemented in OMP launcher/session/extension with 236 passing tests including
+isolated real OMP RPC history loading. Not installed or released. Next: review
+and controlled CCB-managed restart qualification; original demo remains untouched.
 
 Native completion pivot is implemented in source and `v7.5.0` has been
 published. Kimi, DeepSeek/DeepCode, AGY, and MiMo now use provider-native
@@ -32,6 +58,34 @@ Authenticated Pi 0.82.1 visible-pane, clear/reuse, and headless rollback
 acceptance passed; the slice is awaiting commit. Topic:
 [topics/pi-visible-pane-completion.md](topics/pi-visible-pane-completion.md).
 The other next-wave providers retain their previously landed paths.
+
+OMP visible-pane execution is implemented in the current source worktree.
+New asks now enter the managed OMP pane by default and bind lifecycle evidence
+to the exact prompt digest, request id, actor, launch session, and runtime
+instance. OMP 18.1.10 final `agent_end` events are normalized to the shared
+settled event only when `willContinue` is not true. Persisted `omp_run` jobs and
+the explicit `CCB_OMP_EXECUTION_MODE=headless` rollback retain the previous
+subprocess path. Focused pane/headless tests passed `70` tests and the expanded
+launcher/catalog/execution/restore set passed `231` tests. Authenticated OMP
+18.1.10 source-runtime acceptance passed with visible request/reply pane
+evidence and one exact `omp_run_stop` reply. A copied dev installation then
+passed the same contract in the original project: bare `ccb` resolved through
+the managed install, generation 6 loaded the mode-aware OMP adapter, and job
+`job_f173b0f5b0d6` visibly completed once in the `demo` pane. Topic:
+[topics/omp-visible-pane-completion.md](topics/omp-visible-pane-completion.md).
+OMP managed homes now also receive the required `ask`, `ccb-clear`,
+`ccb-compact`, and `ccb-diagnose` Agent Skills independently of optional user
+skill inheritance. The installed dev runtime materialized those four skills
+for both `demo` and `agent3`; after restart, job `job_2f830698377f` visibly
+returned the exact four-skill inventory from the `demo` pane.
+
+A later release workflow exposed that OMP can emit
+`agent_end(willContinue=false)` with assistant `stop_reason=tool_use` and then
+continue executing tools. CCB prematurely terminalized that sequence and
+cleared request attribution. The source repair now keeps `tool_use` pending in
+both the generated extension and the Python pane adapter. Focused automated
+verification and installed-runtime multi-tool requalification are the current
+gate before release publication.
 
 Kimi follow-up receipt and diagnostics hardening has landed in source. This work
 is explicitly Kimi-only: it does not change default provider behavior for Codex,
@@ -85,6 +139,25 @@ rollback. Interrupted in-flight Cursor jobs remain resubmit-required.
 
 ## Last Landed
 
+- Stable `v8.7.5` was published from commit `8f63ff63e` with annotated tag
+  `v8.7.5`, a bilingual GitHub Release, ten platform/helper assets, and
+  `@seemseam/ccb@8.7.5` on npm `latest`. All seven release/test workflows
+  completed successfully, and a disposable public npm installation reported
+  the same version and commit. [Receipt](evidence/v8.7.5-release-20260930.md).
+- OMP visible-pane source candidate: managed extension/dispatch sidecars,
+  exact request binding, final `agent_end` completion, cancellation, restore,
+  manifest alignment, and explicit headless compatibility are implemented and
+  covered by focused and expanded tests. Authenticated job
+  `job_f8f68d50ae6c` showed both request and reply in the managed OMP pane,
+  matched the sidecar dispatch/lifecycle identity, and completed exactly once
+  with `omp_run_stop`. Installed-runtime job `job_f173b0f5b0d6` repeated that
+  result in the original project after a copied dev install: the pane showed
+  the exact request and reply, the dispatch matched, trace reported one reply,
+  and the queue returned to zero. The same installed runtime now projects the
+  four required CCB control skills into every OMP managed home regardless of
+  optional inheritance settings. Both existing OMP agents were rematerialized
+  and restarted; `job_2f830698377f` returned exactly
+  `ask,ccb-clear,ccb-compact,ccb-diagnose` with one `omp_run_stop` reply.
 - Stable `v8.6.9` was published from commit `677edc72c` with annotated tag
   `v8.6.9`, a bilingual GitHub Release, 10 platform/helper assets, and
   `@seemseam/ccb@8.6.9` on npm `latest`.
@@ -231,6 +304,36 @@ Kimi hardening source work is unblocked. Remaining Kimi prompt-mode and auth
 diagnostic ideas stay deferred/open until real usage needs them.
 
 ## Last Verified
+
+`v8.7.5` release verification, 2026-09-30:
+
+- Focused control-input and provider regressions: `302 passed, 2 skipped`;
+  release/install/platform gates: `95 passed`.
+- Real OMP 18.3.5 switched models during an active tool call and completed the
+  same job once with exact reply `CCB_RELEASE_875_MODEL_SWITCH_OK` and no
+  `request_superseded` event.
+- All seven release/test workflows succeeded; the GitHub Release exposes ten
+  expected assets and complete English/Chinese notes.
+- `@seemseam/ccb@8.7.5` is public on npm `latest`; an isolated install
+  reported `v8.7.5` / `8f63ff6`, and `npm audit signatures` verified the
+  registry signature. [Receipt](evidence/v8.7.5-release-20260930.md).
+
+OMP required CCB skill projection, 2026-09-05:
+
+- Focused OMP and required-skill tests passed `29` cases; the expanded related
+  regression set passed `225` cases.
+- The managed dev install completed as `8.6.12`, and both `demo` and `agent3`
+  contained ownership-marked projections for `ask`, `ccb-clear`,
+  `ccb-compact`, and `ccb-diagnose` after restart.
+- Installed-runtime job `job_2f830698377f` showed the request and exact
+  four-skill reply in pane `%1`; trace reported one attempt, one reply,
+  `status=completed`, and `completion_reason=omp_run_stop`. All agent queues
+  returned to zero.
+- Bidirectional chained asks passed between `demo` and `agent3`. Each agent
+  visibly loaded its own projected `ask` skill and submitted a real child job
+  to the other. Child jobs `job_fe44cacefdec` and `job_d2ffc57b276c`, plus
+  continuations `job_59bcca8f4157` and `job_1aca6c4f562d`, each completed with
+  one attempt, one reply, and `omp_run_stop`; all queues returned to zero.
 
 `v8.6.9` release verification, 2026-08-17:
 

@@ -22,6 +22,10 @@ FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S = min(
     STARTUP_TRANSACTION_TIMEOUT_S,
     max(0.1, _float_env('CCB_FOREGROUND_ATTACH_TARGET_READY_TIMEOUT_S', 10.0)),
 )
+# After the start RPC times out the daemon is usually still working and has not
+# written its startup report yet.  Wait this long for a report belonging to the
+# failed attempt so the CLI can name the real cause instead of "timed out".
+START_REPORT_GRACE_S = max(0.0, _float_env('CCB_START_REPORT_GRACE_S', 90.0))
 
 
 __all__ = [
@@ -31,4 +35,5 @@ __all__ = [
     'KEEPER_READY_TIMEOUT_S',
     'STARTUP_PROGRESS_STALL_TIMEOUT_S',
     'STARTUP_TRANSACTION_TIMEOUT_S',
+    'START_REPORT_GRACE_S',
 ]

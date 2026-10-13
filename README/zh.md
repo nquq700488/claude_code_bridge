@@ -6,34 +6,33 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.6.10-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.10-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
-  <img src="https://img.shields.io/badge/providers-17%20CLI%20families-0B7285.svg" alt="providers">
+  <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
 
 <p>
   <img src="https://img.shields.io/badge/Codex-111111?style=flat-square&logo=openai&logoColor=white" alt="Codex">
   <img src="https://img.shields.io/badge/Claude-D97757?style=flat-square&logo=anthropic&logoColor=white" alt="Claude">
-  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
-  <img src="https://img.shields.io/badge/DeepSeek%20Harness-4D6BFE?style=flat-square" alt="DeepSeek Harness">
-  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
+  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
+  <img src="https://img.shields.io/badge/OMP-111111?style=flat-square" alt="OMP">
   <img src="https://img.shields.io/badge/Kimi-111111?style=flat-square&logo=moonshotai&logoColor=white" alt="Kimi">
+  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
+  <img src="https://img.shields.io/badge/Gemini-4285F4?style=flat-square&logo=googlegemini&logoColor=white" alt="Gemini">
+  <img src="https://img.shields.io/badge/Grok-000000?style=flat-square&logo=x&logoColor=white" alt="Grok CLI">
   <img src="https://img.shields.io/badge/MiMo-FF6900?style=flat-square&logo=xiaomi&logoColor=white" alt="MiMo">
   <img src="https://img.shields.io/badge/Qwen-6A5CFF?style=flat-square" alt="Qwen">
   <img src="https://img.shields.io/badge/Cursor-111111?style=flat-square" alt="Cursor">
   <img src="https://img.shields.io/badge/Copilot-111111?style=flat-square&logo=githubcopilot&logoColor=white" alt="GitHub Copilot">
   <img src="https://img.shields.io/badge/Crush-FF5A5F?style=flat-square" alt="Crush">
   <img src="https://img.shields.io/badge/Kiro-6D5EF6?style=flat-square" alt="Kiro">
-  <img src="https://img.shields.io/badge/Pi-111111?style=flat-square" alt="Pi">
-  <img src="https://img.shields.io/badge/Z.ai-111111?style=flat-square" alt="Z.ai">
-  <img src="https://img.shields.io/badge/OpenCode-111111?style=flat-square" alt="OpenCode">
   <img src="https://img.shields.io/badge/Antigravity-6D5EF6?style=flat-square&logo=google&logoColor=white" alt="Antigravity">
   <img src="https://img.shields.io/badge/Droid-3DDC84?style=flat-square&logo=android&logoColor=white" alt="Droid">
 </p>
 
 **中文** | [English](../README.md) | [日本語](ja.md) | [Français](fr.md) | [Deutsch](de.md) | [العربية](ar.md) | [Español](es.md) | [Português](pt.md) | [한국어](ko.md) | [Русский](ru.md)
 
-[快速开始](#quick-start) · [Mobile App](#mobile-app) · [Rich 模式](#rich-mode) · [配置团队](#configure-agents) · [使用文档](../docs/manuals/user-guide/) · [开发文档](../docs/manuals/developer-guide/)
+[快速开始](#quick-start) · [消息排队](#message-queues) · [Mobile App](#mobile-app) · [Rich 模式](#rich-mode) · [配置团队](#configure-agents) · [使用文档](../docs/manuals/user-guide/) · [开发文档](../docs/manuals/developer-guide/)
 
 <p align="center">
   <img src="../assets/readme_v7/ccb-hero-zh-light.png" alt="CCB 可见多 Agent CLI 工作台" width="960">
@@ -51,6 +50,84 @@
 - 后台 daemon 持续运行，可以脱离前台界面保持项目状态。
 - Hub 能力：一个命令同时并发运行多家 CLI provider。
 - 手机远程控制器：跨 provider 语音操控、文件传输和远程终端访问。
+
+## 8.7.10 修复：Pi 插件启动与快照复用
+
+复用已验证的插件快照、共享依赖、回收中断残留，并使启动超时设置生效。已通过真实 Pi 插件加载及双 Agent 冷启动、缓存复用启动测试。[版本说明](../docs/releases/v8.7.10.md)。
+
+## 8.7.7 修复：Codex 双行底栏与队列投递
+
+修复 Codex 原生双行底栏与回复正文中的 `esc to interrupt` 导致消息持续排队的问题，保留人工草稿、忙碌/菜单保护和 FIFO 顺序。 [Notes](../docs/releases/v8.7.7.md).
+
+## 8.7.6 修复：Claude/Codex 投递稳定性
+
+Claude 原生粘贴包装识别与 Codex 空输入状态栏兼容修复；保留草稿保护。 [Notes](../docs/releases/v8.7.6.md).
+
+## 8.7.5 修复：OMP/Pi 切换模型不再导致 ask 空返回
+
+打开 `/model` 或其他仅控制界面的选择器时，不再把当前 OMP/Pi ask
+误判为已被新任务替换。CCB 只在真正进入新的 provider 回合时才执行
+supersede。见 [验证结果与升级说明](../docs/releases/v8.7.5.md)。
+
+## 8.7.4 修复：优先恢复对话上下文
+
+Claude、Codex 在账号、key 或中转变化后优先保留可用本地历史；Pi 跟随手动
+会话切换，OMP 兼容新版历史文件头。见 [验证范围与升级说明](../docs/releases/v8.7.4.md)。
+
+## 8.7.3 修复：不依赖模型名称的输入保护
+
+Codex 输入框识别不再匹配模型名称，补充 Claude 建议文字、接受后的草稿和
+有序返回投递回归测试，并完成真实连续通信验证。Claude 原生插件仍只用于实验。
+安装/更新引导不再推荐那六个 V3 预览角色，仍保留显式安装和已安装角色更新。
+见 [升级说明与布局限制](../docs/releases/v8.7.3.md)。
+
+## 8.7.2 修复：会话恢复与排队投递
+
+修复 Codex 恢复命令重复追加参数、OMP 废弃编辑器 socket 无法恢复、Codex
+空输入提示填充空格误判，并显示输入保护的具体等待原因。
+见 [升级说明与剩余限制](../docs/releases/v8.7.2.md)。
+
+## 8.7.1 新功能：Rich 文件使用系统默认应用打开
+
+点击文件或按 Enter，使用系统默认应用打开；目录仍在文件面板内进入。
+safe 和 rich 两套配置行为一致。macOS 使用 `open`；Linux 优先使用
+`gio open`，没有 GIO 时使用 `xdg-open`；WSL 通过 `wslu` 提供的
+`wslview` 调用 Windows 默认应用，需要开启 Windows 互操作，缺少桥接工具
+时会明确报错。升级 CCB 后运行 `ccb update rich`，再重新打开文件面板。
+验证范围和限制见 [8.7.1 说明](../docs/releases/v8.7.1.md)。
+
+<a id="message-queues"></a>
+
+## 8.7.0 新功能：人与 Agent 有序排队
+
+### 人 / Agent 排队模式
+
+当你正在编辑草稿时，Agent 消息会先等待，避免直接打断输入，或把你的草稿
+和返回消息一起发送。CCB 先等待目标 Agent 的当前回合结束，再为队首消息
+检查输入框。
+
+- 输入框为空：按原有队列顺序投递下一条可执行消息。
+- 输入框非空：最多等待 **180 秒**。期间你清空或提交草稿后，待 Agent 空闲
+  即可继续投递。
+- 满 180 秒仍非空：清空草稿一次，确认输入框为空后再投递。继续键入**不会
+  重置计时**，这个模式不会无限期保留草稿。
+- 正在执行、弹窗打开或无法判断输入状态：继续等待，不清空、不发送。
+  关闭弹窗或恢复正常输入界面后，会继续检查。
+
+### Agent / Agent 排队模式
+
+任务请求（`ask`）与结果返回（`back`）在每个目标 Agent 上共用按时间先后
+排列的 FIFO 队列。前一条消息处理完整个回合后，才投递下一条，包括返回
+消息的处理回合；后到的结果不会打断正在处理的结果。不同 Agent 仍可并行工作。
+
+**推荐大家先在受管 tmux 环境下的 Claude、Codex 和 OMP 上测试使用。**
+其他 provider 的输入保护将在后续更新中适配；目前保留原有投递行为，不能
+视为已经具备草稿保护。OMP 当前需要默认 Status Band 输入布局和新版受管
+扩展。升级后请在空闲时重启项目，加载新 daemon 和 provider 扩展。
+
+这是首版测试功能。Codex/Claude 到期清空使用 `Ctrl-C`，与人工操作同时发生时
+仍可能造成中断；最终抓屏、粘贴、Enter 与人工输入还不能做到原子互斥。
+已测范围、升级方法和 Codex 远程会话恢复限制见 [8.7.0 说明](../docs/releases/v8.7.0.md)。
 
 <a id="how-to-install"></a>
 
@@ -77,23 +154,6 @@ CLI，并只提示一次可安全管理的更新。可使用 `--providers check`
 本次跳过。选择“暂不更新”后，下次 `ccb update` 会再次提示；选择“跳过此
 版本”只会静默当前检测到的准确版本。该流程不会自动重启正在运行的
 provider pane；已接受的新版本会在 pane 下次启动或显式重启后生效。
-
-官方 DeepSeek Harness 以独立的 Developer Preview provider key `dsh`
-接入（`deepseek` 仍表示 Deep Code CLI）。使用受支持的 Node runtime 安装其
-npm 包，然后在 Config UI 选择 `dsh`，或使用 `research:dsh` 这样的 Agent
-leaf：
-
-```bash
-npm install -g @deepseek-ai/dsh
-dsh --version
-```
-
-CCB 会在 loopback 上启动 `dsh web`，并通过 DSH 的结构化
-HTTP/WebSocket carrier 通信。当前 POSIX 运行时可以把该服务放在受管 pane
-中，但 pane 仅承担 lifecycle/log 所有权；prompt、reply、原生结束判定、
-`ccb compact` 和恢复都不依赖终端输入或 pane 文本启发式。请在用户自有 DSH
-状态或 CCB provider profile/API 控制中配置
-`DEEPSEEK_API_KEY`，并按需配置 `DEEPSEEK_BASE_URL`；CCB 不会自动获取凭据。
 
 版本发生更新后，新安装的 CCB 还会迁移旧的项目级 Claude/Gemini 缓存：
 manifest 校验通过且项目已经删除的缓存会立即清理；当前项目已经停止时会
@@ -230,9 +290,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.6.10 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.7.10 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.6.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.6.10/ccb-mobile-v8.6.10.apk)
+- [下载 CCB Mobile v8.7.10 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.10/ccb-mobile-v8.7.10.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -303,7 +363,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=0a86422d" alt="CCB 微信技术群 2" width="240">
+  <img src="../assets/weixin.png?v=c943ca65" alt="CCB 微信技术群 2" width="240">
 </p>
 
 > 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
@@ -321,6 +381,119 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 ## 新版本记录
 
 <details open>
+<summary><b>v8.7.10</b> - Pi 插件快照与启动修复</summary>
+
+复用已验证快照、共享依赖、回收中断残留并传递启动超时设置。
+
+[Full bilingual notes](../docs/releases/v8.7.10.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.9</b> - Codex ask 调用者身份修复</summary>
+
+保留 Codex 工具 shell 中的调用者身份，使裸 `ask` 结果能够回投到正确 Agent。已通过真实 Codex/OMP 与 Claude Sonnet 4.6 往返。
+
+[Full bilingual notes](../docs/releases/v8.7.9.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.8</b> - 投递与原生安装修复</summary>
+
+完整发布 Codex 全屏界面投递修复，并修复原生 `ccb.exe`/`ccb.cmd` 安装入口。替代中断的 v8.7.7 发布。
+
+[Full bilingual notes](../docs/releases/v8.7.8.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.7</b> - Codex 双行底栏与队列投递修复</summary>
+
+修复 Codex 原生双行底栏与回复正文中的 `esc to interrupt` 导致消息持续排队的问题，保留人工草稿、忙碌/菜单保护和 FIFO 顺序。
+
+[Full bilingual notes](../docs/releases/v8.7.7.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.6</b> - Claude/Codex 投递稳定性</summary>
+
+Claude 原生粘贴包装识别与 Codex 空输入状态栏兼容修复；保留草稿保护。
+
+[Full bilingual notes](../docs/releases/v8.7.6.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.5</b> - OMP/Pi 安全切换模型</summary>
+
+[完整中英文说明](../docs/releases/v8.7.5.md)。
+
+</details>
+
+<details>
+<summary><b>v8.7.4</b> - 优先恢复对话上下文</summary>
+
+[完整中英文说明](../docs/releases/v8.7.4.md).
+
+</details>
+
+<details>
+<summary><b>v8.7.3</b> - 不依赖模型名称的输入保护</summary>
+
+[完整中英文说明](../docs/releases/v8.7.3.md)。
+
+</details>
+
+<details>
+<summary><b>v8.7.2</b> - 会话恢复与排队投递修复</summary>
+
+[完整中英文说明](../docs/releases/v8.7.2.md)。
+
+</details>
+
+<details>
+<summary><b>v8.7.1</b> - Rich 文件使用系统默认应用打开</summary>
+
+- macOS、Linux、WSL 点击文件或按 Enter，使用系统默认应用打开；目录仍在 Yazi 内进入。
+- safe/rich 配置统一，保留完整文件名，缺少 WSL 桥接工具时明确报错。
+- [完整中英文说明及验证范围](../docs/releases/v8.7.1.md)。
+- 先前变更：[v8.7.0 输入保护](../docs/releases/v8.7.0.md)、[v8.6.19 排队与查询提示](../docs/releases/v8.6.19.md)。
+
+</details>
+
+<details>
+<summary><b>v8.6.13</b> - 可靠的可见 OMP ask 与聚焦的角色选择</summary>
+
+- OMP ask 现在会在可见受管 pane 中运行，并使用 OMP 原生 completion 证据；包含工具调用的 turn 会保持活跃，直到出现最终 assistant 结果。
+- Config V1/V2 角色选择仅显示通用角色和 `agentroles.ccb_self`；workflow 专用 `ccb_*` 角色保留给 V3，不再出现在早期 schema 中。
+- 当前公开 Provider 指引聚焦主要支持的 CLI 系列。DeepSeek CLI、Z.ai 和 DeepSeek Harness 的实现及历史 release notes 保留，但不再作为当前重点支持宣传。
+- 无需迁移项目、对话或配置。原生 Windows x64 与 Herdr 仍为 beta，并继续与 Linux/macOS 共享运行时隔离。
+
+</details>
+
+<details>
+<summary><b>v8.6.12</b> - Provider profile 继承与 Mobile 会话</summary>
+
+- 在 CCB Mobile 中显示 Pi 和 OMP 原生会话，同时保持 Provider 私有 session 路径与 transcript 边界。
+- 通过不可变共享快照将 Pi profile 资产继承到 Agent 私有 HOME，并以原子方式发布并发首次启动生成的快照（PR #328）。
+- 在受管 Provider HOME 中保留 Git author/committer 身份，并在 ask 提交被接受后立即把控制权交还 Agent（PRs #329、#330）。
+- 刷新微信社区群二维码。请重启受管 Pi Agent 以更新投影的 profile 资产；无需迁移项目、对话、配对或配置。
+
+</details>
+
+<details>
+<summary><b>v8.6.11</b> - Provider 认证与隔离的 Windows 稳定性修复</summary>
+
+- 恢复 Codex CLI `0.149.0` 显式自定义 provider 的 bearer 认证，同时让只有 route 的本地 gateway 继续保持无认证模式。
+- 支持按 Agent 投影 Codex model catalog 并覆盖全局 model，保留 reconnect 与自定义 tmux 配置行为，并让 Pi clear 创建新上下文（PRs #321、#322、#325、#326）。
+- 将 Herdr 生命周期同步和原生 UTF-8 启动限制在 Windows-owned 实现中，不新增共享层到 Windows 实现的 import（PRs #320、#323）。
+- 升级后请重启受管 Codex Agent 与 CCB 项目。无需迁移项目、对话、配对或配置。
+
+</details>
+
+<details>
 <summary><b>v8.6.10</b> - Claude OAuth 重登录隔离</summary>
 
 - 外部 OAuth 重新登录后，受管重启会刷新 Agent 私有 Claude Keychain 凭据，避免继续使用已撤销 token（Issue #319）。

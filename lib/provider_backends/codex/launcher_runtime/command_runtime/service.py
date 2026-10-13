@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shlex
 from pathlib import Path
@@ -39,6 +40,7 @@ def build_start_cmd(
     profile = load_resolved_provider_profile_fn(runtime_dir)
     launch_context = prepared_state if isinstance(prepared_state, dict) else {}
     launch_context.pop('ccb_continuation_launch_mode', None)
+    launch_context['ccb_codex_auto_restore'] = False
     project_root = _path_or_none(launch_context.get('project_root'))
     if project_root is None:
         raise RuntimeError('Codex launch requires prepare_launch_context before build_start_cmd')
@@ -51,6 +53,14 @@ def build_start_cmd(
         workspace_path=_path_or_none(launch_context.get('workspace_path')),
     )
     provider_start_parts = provider_start_parts_fn('codex')
+    env_map = _env_map(
+        runtime_dir,
+        launch_session_id,
+        spec=spec,
+        profile=profile,
+        codex_home_overrides=codex_home_overrides,
+    )
+    caller_config_args = _caller_shell_config_args(env_map)
     codex_args = _codex_args(
         command,
         spec,
@@ -61,13 +71,7 @@ def build_start_cmd(
         load_linked_continuation_session_id_fn=load_linked_continuation_session_id_fn,
         supports_session_fork_fn=supports_session_fork_fn,
         launch_context=launch_context,
-    )
-    env_map = _env_map(
-        runtime_dir,
-        launch_session_id,
-        spec=spec,
-        profile=profile,
-        codex_home_overrides=codex_home_overrides,
+        caller_config_args=caller_config_args,
     )
     # herdr backend 适配：CODEX_TERMINAL 按实际后端设置
     backend_impl = str(prepared_state.get('ccb_backend_impl', '')).strip()
@@ -85,12 +89,22 @@ def build_start_cmd(
         # a native fork continuation.  Keep authority-changing forks on the
         # native local CLI until the remote surface proves fork semantics.
         and str(launch_context.get('ccb_continuation_launch_mode') or '').strip() != 'fork'
+        # The Codex CLI rejects permission overrides combined with a remote
+        # resume ("Permission overrides are not supported when resuming a
+        # remote task"). Keep the requested permission policy effective by
+        # resuming on the native local CLI instead (#346).
+        and not _remote_resume_blocked_by_permission_overrides(codex_args)
         and supports_managed_app_server_fn is not None
         and build_managed_app_server_command_fn is not None
         and supports_managed_app_server_fn(tuple(provider_start_parts))
     )
     if managed_enabled:
         cmd, managed_state = build_managed_app_server_command_fn(codex_args, runtime_dir=runtime_dir)
+        # Remote tools execute in the server, whose command does not inherit
+        # the UI's CLI overrides. Apply the same narrow identity projection.
+        managed_state['codex_app_server_command'] = [
+            *managed_state['codex_app_server_command'], *caller_config_args,
+        ]
         launch_context.update(managed_state)
         launch_context['codex_app_server_env'] = dict(env_map)
         launch_context['codex_app_server_unset_env'] = [
@@ -107,6 +121,27 @@ def build_start_cmd(
     return cmd
 
 
+def _caller_shell_config_args(env_map: dict[str, str]) -> list[str]:
+    """Keep CCB routing identity under restrictive Codex shell policies.
+
+    Launch-only leaf overrides preserve inherit/include_only/exclude and all
+    unrelated user set entries without writing external provider config.
+    Never project the full provider environment (which may contain secrets).
+    """
+    args: list[str] = []
+    for key in (
+        'CCB_CALLER_ACTOR',
+        'CCB_CALLER_RUNTIME_DIR',
+        'CCB_SESSION_ID',
+        'CCB_CALLER_PROJECT_ROOT',
+        'CCB_CALLER_PROJECT_ID',
+        'CODEX_RUNTIME_DIR',
+    ):
+        if key in env_map:
+            args.extend(['-c', f'shell_environment_policy.set.{key}={json.dumps(str(env_map[key]), ensure_ascii=False)}'])
+    return args
+
+
 def build_codex_shell_prefix(*, profile, provider_api_env_keys_fn: Callable[[str], list[str]]) -> list[str]:
     if profile is None:
         return []
@@ -115,6 +150,79 @@ def build_codex_shell_prefix(*, profile, provider_api_env_keys_fn: Callable[[str
     else:
         cleared = _explicit_api_owned_names(profile)
     return [f'unset {key}' for key in sorted(cleared)]
+
+
+# Long flags and short aliases of the Codex CLI permission overrides, in all
+# supported spellings. Each maps to the value arity it consumes.
+_CODEX_PERMISSION_OVERRIDE_FLAGS: dict[str, int] = {
+    '--ask-for-approval': 1,  # also --ask-for-approval=never
+    '-a': 1,
+    '--sandbox': 1,  # also --sandbox=read-only
+    '-s': 1,
+    '--dangerously-bypass-hook-trust': 0,
+    '--dangerously-bypass-approvals-and-sandbox': 0,
+    '--approve-for-me': 0,
+}
+
+# Config override keys that change permission behavior via `-c key=value`.
+_CODEX_PERMISSION_OVERRIDE_CONFIG_KEYS = {
+    'sandbox_mode',
+    'approval_policy',
+}
+
+
+def _codex_permission_overrides_present(tokens: list[str]) -> bool:
+    """True when any permission override appears in [tokens].
+
+    Handles space-separated values (`--sandbox read-only`), attached values
+    (`--sandbox=read-only`), short aliases (`-s`, `-a`), the standalone
+    permission switches, and `-c sandbox_mode=... / approval_policy=...`
+    config overrides in both `-c key=value` and `-c=key=value` spellings.
+    Option values are never mistaken for subcommands.
+    """
+    expecting_config_value = False
+    for token in tokens:
+        if expecting_config_value:
+            expecting_config_value = False
+            if _is_permission_config_key(token):
+                return True
+            continue
+        name, _, attached_value = token.partition('=')
+        if name == '-c' or name == '--config':
+            if attached_value:
+                if _is_permission_config_key(attached_value):
+                    return True
+            else:
+                expecting_config_value = True
+            continue
+        if _CODEX_PERMISSION_OVERRIDE_FLAGS.get(name) is not None:
+            return True
+    return False
+
+
+def _is_permission_config_key(value: str) -> bool:
+    key = str(value or '').partition('=')[0].strip().lower()
+    return key in _CODEX_PERMISSION_OVERRIDE_CONFIG_KEYS
+    return False
+
+
+def _remote_resume_blocked_by_permission_overrides(codex_args: list[str]) -> bool:
+    """True when a resume is requested together with permission overrides.
+
+    The Codex CLI refuses `resume <id>` under `--remote` whenever permission
+    override flags are present ("Permission overrides are not supported when
+    resuming a remote task"). CCB must not silently strip the requested
+    policy to force the remote path; instead the resume runs on the native
+    local CLI where the policy stays effective (#346).
+    """
+    for index, token in enumerate(codex_args):
+        if token != 'resume':
+            continue
+        # Terminal `resume <id>` (single argument continuation), as produced
+        # by _codex_args; ignore unrelated occurrences.
+        if index + 2 == len(codex_args):
+            return _codex_permission_overrides_present(codex_args[:index])
+    return False
 
 
 def _path_or_none(value: object) -> Path | None:
@@ -138,6 +246,7 @@ def _codex_args(
     load_linked_continuation_session_id_fn=None,
     supports_session_fork_fn=None,
     launch_context: dict[str, object] | None = None,
+    caller_config_args: list[str] | None = None,
 ) -> list[str]:
     codex_args = list(provider_start_parts)
     codex_args.extend(['-c', 'disable_paste_burst=true'])
@@ -154,6 +263,9 @@ def _codex_args(
             ]
         )
     codex_args.extend(spec.startup_args)
+    # Current launch identity wins over inherited/stale startup values, and
+    # options must precede the terminal resume/fork subcommand.
+    codex_args.extend(caller_config_args or [])
     if should_restore_provider_history(spec.restore_default, cli_restore=command.restore):
         session_id = load_resume_session_id_fn(
             spec,
@@ -164,6 +276,8 @@ def _codex_args(
         )
         if session_id:
             codex_args.extend(['resume', session_id])
+            if launch_context is not None:
+                launch_context['ccb_codex_auto_restore'] = True
         elif load_linked_continuation_session_id_fn is not None:
             continuation_id = load_linked_continuation_session_id_fn(
                 spec,
@@ -181,6 +295,7 @@ def _codex_args(
                 codex_args.extend(['fork', continuation_id])
                 if launch_context is not None:
                     launch_context['ccb_continuation_launch_mode'] = 'fork'
+                    launch_context['ccb_codex_auto_restore'] = True
     return codex_args
 
 
@@ -191,6 +306,7 @@ def _env_map(runtime_dir: Path, launch_session_id: str, *, spec, profile, codex_
     if profile is not None:
         explicit_env.update(profile.env)
     explicit_env.update(spec.env)
+    explicit_env.pop('model_catalog_json', None)
     if codex_api_authority(profile) is not None:
         explicit_env.pop('OPENAI_BASE_URL', None)
         explicit_env.pop('OPENAI_API_BASE', None)

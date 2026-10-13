@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from ccbd.api_models import TargetKind
+from jobs.store import JobEventStore
+
 from .summaries import (
     attempt_summary,
     event_summary,
@@ -83,6 +86,37 @@ def submission_summary_by_id(service, submission_id: str | None) -> dict[str, ob
     return submission_summary(submission)
 
 
+def delivery_event_summaries_for_job(
+    service,
+    job_id: str | None,
+    agent_name: str | None,
+) -> tuple[dict[str, object], ...]:
+    if not job_id or not agent_name:
+        return ()
+    _cursor, events = JobEventStore(service._layout).read_since_target(
+        TargetKind.AGENT,
+        agent_name,
+        0,
+    )
+    summaries: list[dict[str, object]] = []
+    for event in events:
+        if event.job_id != job_id:
+            continue
+        payload = dict(event.payload or {})
+        if not payload.get('delivery_stage'):
+            continue
+        summaries.append(
+            {
+                'event_id': event.event_id,
+                'job_id': event.job_id,
+                'event_type': event.type,
+                'timestamp': event.timestamp,
+                'payload': payload,
+            }
+        )
+    return tuple(summaries)
+
+
 def trace_payload(
     service,
     *,
@@ -105,6 +139,13 @@ def trace_payload(
     event_items = _summary_items(events, summary_fn=lambda item: event_summary(service, item))
     job_items = [item for item in jobs if item is not None]
     message_id = _selected_message_id(message, message_items)
+    selected_job = job or (job_items[0] if job_items else None)
+    selected_attempt = attempt or (attempt_items[0] if attempt_items else None)
+    delivery_events = delivery_event_summaries_for_job(
+        service,
+        str((selected_job or {}).get('job_id') or (selected_attempt or {}).get('job_id') or ''),
+        str((selected_job or {}).get('agent_name') or (selected_attempt or {}).get('agent_name') or ''),
+    )
     return {
         'target': target,
         'resolved_kind': resolved_kind,
@@ -127,6 +168,7 @@ def trace_payload(
         'attempts': attempt_items,
         'replies': reply_items,
         'events': event_items,
+        'delivery_events': list(delivery_events),
         'jobs': job_items,
     }
 

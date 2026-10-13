@@ -58,6 +58,7 @@ _CODEX_AUTH_SIDECAR_FILENAMES = (
     'company-codex-api-key',
     'company-codex.config.toml',
 )
+_CODEX_MODEL_CATALOG_JSON_KEY = 'model_catalog_json'
 _CODEX_AUTH_SIDECAR_REF_RE = re.compile(
     r'(?:'
     r'\$\{CODEX_HOME(?::-[^}]*)?\}'
@@ -135,6 +136,8 @@ def materialize_codex_home_config(
     command_policy=None,
     memory_projection_event_path: Path | None = None,
     memory_projection_marker_path: Path | None = None,
+    model: str | None = None,
+    model_catalog_json: str | None = None,
 ) -> Path:
     target_home = Path(target_home).expanduser()
     source_home = Path(source_home).expanduser() if source_home is not None else _system_codex_home()
@@ -195,6 +198,27 @@ def materialize_codex_home_config(
         agent_name=agent_name,
         runtime_dir=runtime_dir,
     )
+    configured_model_catalog = (
+        model_catalog_json
+        if model_catalog_json is not None
+        else _profile_env(profile).get(_CODEX_MODEL_CATALOG_JSON_KEY)
+    )
+    model_catalog_name = _codex_model_catalog_sidecar_name(
+        configured_model_catalog or _read_source_config_payload(target_config).get(_CODEX_MODEL_CATALOG_JSON_KEY)
+    )
+    if configured_model_catalog and model_catalog_name is None:
+        raise RuntimeError(
+            f'Codex {_CODEX_MODEL_CATALOG_JSON_KEY} must reference a safe .json file name'
+        )
+    if model_catalog_name is not None:
+        _set_codex_model_catalog_json(target_config, model_catalog_name)
+        _materialize_config_sidecars(
+            source_home,
+            target_home,
+            required_names=(model_catalog_name,),
+        )
+    if model is not None:
+        _set_codex_model(target_config, model)
 
     previous_auth_projection = _read_auth_projection_manifest(target_home)
     _materialize_auth_file(
@@ -560,7 +584,7 @@ def _write_codex_api_authority_config(
     workspace_path: Path | None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
-    payload = _managed_codex_config_payload(source_config, authority=authority)
+    payload = _managed_codex_config_payload(source_config, authority=authority, profile=profile)
     _merge_codex_plugin_overrides(payload, profile=profile)
     _merge_codex_mcp_server_overrides(payload, profile=profile)
     _trust_managed_codex_project_paths(payload, project_root=project_root, workspace_path=workspace_path)
@@ -767,7 +791,7 @@ def _toml_key_name(line: str) -> str | None:
     return raw_key if _BARE_TOML_KEY_RE.match(raw_key) else None
 
 
-def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority) -> dict[str, object]:
+def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAuthority, profile=None) -> dict[str, object]:
     payload = {'model_provider': authority.provider_id}
     inherited_payload = _strip_route_authority(_read_source_config_payload(source_config))
     for key, value in inherited_payload.items():
@@ -780,6 +804,13 @@ def _managed_codex_config_payload(source_config: Path, *, authority: CodexApiAut
             'base_url': authority.base_url,
         }
     }
+    # env_key is a required environment lookup in Codex, not an optional hint.
+    # Mirror the launcher's explicit / allowed inherited API environment so
+    # unauthenticated local endpoints do not acquire a new key requirement.
+    if _explicit_api_key(profile) or (
+        _inherits_api(profile) and str(os.environ.get('OPENAI_API_KEY') or '').strip()
+    ):
+        payload['model_providers'][authority.provider_id]['env_key'] = 'OPENAI_API_KEY'
     return _disable_interactive_migration_features(payload)
 
 
@@ -1163,6 +1194,70 @@ def _codex_auth_sidecar_names(source_home: Path, source_config: Path) -> set[str
         if _is_safe_codex_auth_sidecar_name(name):
             names.add(name)
     return names
+
+
+def _materialize_config_sidecars(
+    source_home: Path,
+    target_home: Path,
+    *,
+    required_names: tuple[str, ...],
+) -> None:
+    for name in sorted(set(required_names)):
+        source = Path(source_home).expanduser() / name
+        target = Path(target_home).expanduser() / name
+        if _probe_regular_source_file(source):
+            try:
+                copied = copy_regular_file(source, target)
+            except OSError as exc:
+                raise RuntimeError(
+                    f'cannot copy inherited Codex config sidecar: {source}: {exc}'
+                ) from exc
+            if not copied:
+                raise RuntimeError(f'cannot copy inherited Codex config sidecar: {source}')
+        if not target.is_file():
+            raise RuntimeError(
+                f'Codex model catalog file is missing: {source} '
+                f'(expected managed file: {target})'
+            )
+
+
+def _set_codex_model_catalog_json(target_config: Path, name: str) -> None:
+    payload = _read_source_config_payload(target_config)
+    payload[_CODEX_MODEL_CATALOG_JSON_KEY] = name
+    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _set_codex_model(target_config: Path, model: str) -> None:
+    normalized = str(model or '').strip()
+    if not normalized:
+        return
+    payload = _read_source_config_payload(target_config)
+    payload['model'] = normalized
+    target_config.write_text(_render_toml_document(payload), encoding='utf-8')
+
+
+def _codex_model_catalog_sidecar_name(value: object) -> str | None:
+    raw = str(value or '').strip() if isinstance(value, str) else ''
+    if not raw:
+        return None
+    normalized = raw.replace('\\', '/')
+    if '/' in normalized:
+        match = _CODEX_AUTH_SIDECAR_REF_RE.fullmatch(normalized)
+        if not match:
+            return None
+        raw = str(match.group('name') or '').strip()
+    if _is_safe_codex_model_catalog_sidecar_name(raw):
+        return raw
+    return None
+
+
+def _is_safe_codex_model_catalog_sidecar_name(name: str) -> bool:
+    if not name or '/' in name or '\\' in name or name in {'.', '..'} or name.startswith('.'):
+        return False
+    lower = name.lower()
+    if lower in {'auth.json', 'config.toml'}:
+        return False
+    return lower.endswith('.json')
 
 
 def _is_safe_codex_auth_sidecar_name(name: str) -> bool:

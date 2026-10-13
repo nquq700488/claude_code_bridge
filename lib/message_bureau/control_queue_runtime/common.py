@@ -12,6 +12,19 @@ def derive_mailbox_state(has_active: bool, queue_depth: int) -> str:
     return MailboxState.IDLE.value
 
 
+def delivery_stage_for_inbound_status(status: object) -> tuple[str, str]:
+    token = str(getattr(status, 'value', status) or '').strip().lower()
+    if token == 'queued':
+        return 'queued_waiting_for_dispatch', 'dispatcher_claim_pending'
+    if token == 'delivering':
+        return 'claim_started', 'provider_start_pending'
+    if token == 'consumed':
+        return 'delivery_complete', 'inbound_consumed'
+    if token in {'abandoned', 'superseded'}:
+        return 'delivery_terminal', token
+    return 'delivery_unknown', token or 'unknown'
+
+
 def require_mailbox_target(service, agent_name: str) -> str:
     normalized = normalize_mailbox_target(agent_name, known_targets=service._known_mailboxes)
     if normalized is None:
@@ -42,6 +55,7 @@ def preview_text(value: str, *, limit: int = 120) -> str:
 
 
 __all__ = [
+    'delivery_stage_for_inbound_status',
     'derive_mailbox_state',
     'mailbox_has_activity',
     'preview_text',
