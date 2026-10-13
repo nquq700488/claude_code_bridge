@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import sys
 import time
+from functools import partial
 from pathlib import Path
 from typing import TextIO
 import os
@@ -10,10 +12,12 @@ from ccbd.socket_client import CcbdClientError
 from cli.ask_sender import resolve_ask_sender
 from cli.render import render_watch_batch, write_lines
 
+from .agent_health import ensure_agent_running
 from .ask_runtime import AskSummary, exit_code_for_ask_status, write_ask_output
 from .ask_runtime.submission import submit_ask as _submit_ask_impl
 from .ask_runtime.watch import watch_ask_job as _watch_ask_job_impl
 from .daemon import CcbdServiceError, connect_mounted_daemon, invoke_mounted_daemon
+from .watch import watch_auto_start_enabled
 
 
 def watch_timeout_seconds() -> float:
@@ -64,6 +68,9 @@ def watch_ask_job(
         timeout_seconds_fn=watch_timeout_seconds,
         render_watch_batch_fn=render_watch_batch,
         write_lines_fn=write_lines,
+        ensure_agent_running_fn=partial(ensure_agent_running, context=context),
+        notice_fn=lambda message: print(message, file=sys.stderr, flush=True),
+        auto_start_enabled=watch_auto_start_enabled(),
     )
 
 

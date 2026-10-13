@@ -3,7 +3,7 @@
 ## Unreleased
 
 - Make `ccb restart <agent>` recreate a missing managed pane through the normal startup flow when the Provider session is still available, instead of silently skipping the restart.
-- Make `ccb pend --watch` stop early with the agent health or pane failure when the target cannot proceed, while preserving transient reconnects and the configured timeout as a final bound.
+- Make `ccb pend --watch` (and the watch inside `ccb ask`) auto-initialize the target when it is not running: instead of failing fast on the `stopped` sentinel, the watch now mounts the project daemon and starts the target agent pane, then keeps waiting for the job. Auto-start is bounded to two attempts per watch with a 90s cold-start grace, never restarts an agent that is already healthy, and still fails fast on unfixable healths such as `provider-auth-revoked` and `session-missing`. Set `CCB_WATCH_AUTO_START=0` to restore the previous read-only fail-fast behavior. A job that has already reached a terminal state no longer connects to the daemon at all.
 - Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
 - Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
 

@@ -122,7 +122,7 @@ ccb restart <agent>
 ccb ping <agent>
 ```
 
-`ccb restart <agent>` 会在 Provider session 仍可用时通过正常启动流程重建缺失 pane。若返回 `session_missing`，先确认没有未完成任务，再运行 `ccb` 启动项目的 managed agent 栈；静态配置 Agent 不使用 `ccb agent resume`。使用 `ccb queue <agent> --detail` 和 `ccb trace <job_id>` 可查看排队、claim、Provider 启动及 pane 投递阶段和错误原因；`ccb pend --watch <job_id>` 会在目标 Agent 健康失败时提前返回，不必等满超时时间。
+`ccb restart <agent>` 会在 Provider session 仍可用时通过正常启动流程重建缺失 pane。若返回 `session_missing`，先确认没有未完成任务，再运行 `ccb` 启动项目的 managed agent 栈；静态配置 Agent 不使用 `ccb agent resume`。使用 `ccb queue <agent> --detail` 和 `ccb trace <job_id>` 可查看排队、claim、Provider 启动及 pane 投递阶段和错误原因；`ccb pend --watch <job_id>` 在目标 Agent 未运行时会自动 mount daemon 并启动该 Agent，然后继续等待任务；只有在无法自动拉起（如 `provider-auth-revoked`、`session-missing`）或超过有界重试后才提前返回。设 `CCB_WATCH_AUTO_START=0` 可恢复旧的只读快速失败行为。
 
 ### 2.4 使用 `ccb ask` 向指定 agent 发送消息
 

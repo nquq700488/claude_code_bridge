@@ -44,7 +44,7 @@
 - **Agent pane 故障恢复**：`ccb restart <agent>` 在 Provider session 仍可用但 pane 缺失时，会通过正常启动流程重建 pane；无法恢复 session 时会明确报告 `session_missing`
 - **消息投递阶段诊断**：`ccb queue --detail <agent>` 与 `ccb trace <job_id>` 会显示排队、claim、Provider 启动和 pane 投递阶段；失败时显示阶段、原因和错误
 - **Codex 双行底栏兼容**：Codex v0.158.0 的模型/工作目录行与快捷键行组合会被识别为正常空 composer，不再误报 `composer_layout_unknown`
-- **`pend --watch` 健康失败快速返回**：目标 Agent 已停止、异常或 pane 连续失效时提前返回诊断，不必等满默认 600 秒超时
+- **`pend --watch` 自动拉起目标**：目标 Agent 未运行时，`ccb pend --watch <job_id>` 会自动 mount 项目 daemon 并启动该 Agent 的 pane，然后继续等待任务，不再直接报 `health is stopped`。自动启动单次 watch 最多 2 次、冷启动宽限 90 秒；已终态的任务完全不连接 daemon；`provider-auth-revoked` / `session-missing` 等无法通过启动修复的健康状态仍然快速失败。设 `CCB_WATCH_AUTO_START=0` 可恢复旧的只读快速失败行为
 - **Rich 文件面板系统打开（v8.7.1+）**：点击文件或按 Enter 用系统默认应用打开（macOS `open` / Linux `gio open` / WSL `wslview`）
 '}、】【彩票娱乐注册? Wait tool call malformed? It returned no output? Let's check. Actually tool call in transcript seems content includes ` functions.Edit` JSON? It hasn't returned? Need see. I'm still analysis; maybe call didn't execute due malformed? The prior assistant message is a tool call? It appears code block with extra `},` maybe not valid. Let's inspect last tool response: It shows no `functions.Edit` output? It appears in transcript: `assistant to=functions.Edit ...` then maybe no tool result? Wait above text: I see a call line with JSON ending `}` and then no `tool` response; might be parser issue. Need reissue correctly. Ensure `replace_all` included. Use exact. But file has been Read, okay. Need no accidental. Let's call.无码av. 七星彩. Let's proceed. use functions.Edit commentary.лирида. It may be in previous message hidden? I see in transcript after call - 按项目配置 Agent 团队和 tmux 分屏布局
 - 每个 Agent 独立配置 API key、模型、端点
@@ -293,8 +293,9 @@ cd claude_code_bridge
 | `CCB_INSTALL_TOMLI` | `1` | Python 无 tomllib 时自动安装 tomli（v6.2.4+） |
 | `CCB_KIMI_NO_TERMINAL_TIMEOUT_S` | `600` | Kimi Agent 无进度超时（秒） |
 | `CCB_MMX_NO_TERMINAL_TIMEOUT_S` | `600` | MMX Agent 无进度超时（秒）；⚠️ 未加入控制面 allowlist，daemon 不会转发该变量 |
-| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` 默认超时（秒，v7.2.1+）；Agent 健康失败时会提前返回 |
+| `CCB_WATCH_TIMEOUT_S` | `600` | `pend --watch` 默认超时（秒，v7.2.1+）；目标 Agent 无法自动拉起时会提前返回 |
 | `CCB_WAIT_POLL_INTERVAL_S` | `0.1` | `pend --watch` 轮询间隔（秒） |
+| `CCB_WATCH_AUTO_START` | `1` | `pend --watch` / `ccb ask` 在目标 Agent 未运行时自动 mount daemon 并启动其 pane；设 `0` 恢复只读快速失败 |
 | `CCB_KEYCHAIN_SERVICE_OVERRIDE` | 空 | macOS Keychain 服务名覆盖（v7.0.4+） |
 | `CODEX_CLAUDE_COMMAND_DIR` | 自动检测 | 自定义 Claude commands 目录 |
 

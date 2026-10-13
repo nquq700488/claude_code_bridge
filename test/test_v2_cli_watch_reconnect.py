@@ -306,7 +306,7 @@ def test_watch_target_reconnects_after_socket_error(monkeypatch: pytest.MonkeyPa
     assert batches[0].generation == 2
     assert flaky.calls == [0]
     assert stable.calls == [0]
-    assert seen == [False, False]
+    assert seen == [True, True]
 
 
 def test_watch_target_preserves_cursor_across_reconnect(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -365,7 +365,7 @@ def test_watch_target_preserves_cursor_across_reconnect(monkeypatch: pytest.Monk
     assert [batch.terminal for batch in batches] == [False, True]
     assert first.calls == [0, 2]
     assert second.calls == [2]
-    assert seen == [False, False]
+    assert seen == [True, True]
 
 
 def test_watch_target_without_explicit_timeout_waits_until_terminal(
@@ -417,7 +417,7 @@ def test_watch_target_without_explicit_timeout_waits_until_terminal(
     assert batches[0].terminal is True
     assert batches[0].reply == 'done'
     assert stream.calls == [0, 1]
-    assert seen == [False]
+    assert seen == [True]
 
 
 def test_watch_target_honors_explicit_timeout(
@@ -457,7 +457,7 @@ def test_watch_target_honors_explicit_timeout(
         list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
 
     assert stream.calls == [0]
-    assert seen == [False]
+    assert seen == [True]
 
 
 def test_watch_target_retries_when_reconnect_attempt_temporarily_fails(
@@ -493,10 +493,10 @@ def test_watch_target_retries_when_reconnect_attempt_temporarily_fails(
     assert batches[0].reply == 'done'
     assert flaky.calls == [0]
     assert stable.calls == [0]
-    assert seen == [False, False, False]
+    assert seen == [True, True, True]
 
 
-def test_watch_target_falls_back_to_persisted_terminal_job_when_daemon_stays_unreachable(
+def test_watch_target_falls_back_to_persisted_terminal_job_without_connecting_at_all(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
@@ -523,7 +523,9 @@ def test_watch_target_falls_back_to_persisted_terminal_job_when_daemon_stays_unr
     assert batches[0].status == 'completed'
     assert batches[0].reply == 'persisted reply'
     assert [event['event_id'] for event in batches[0].events] == ['evt1']
-    assert seen == [False]
+    # A job that already finished must not connect at all: with auto-start on,
+    # that connect can mount a daemon the user deliberately stopped.
+    assert seen == []
 
 
 def test_watch_target_initial_connect_error_still_raises_without_persisted_terminal_state(
@@ -545,7 +547,7 @@ def test_watch_target_initial_connect_error_still_raises_without_persisted_termi
 
     with pytest.raises(CcbdServiceError, match='project ccbd is unmounted'):
         list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
-    assert seen == [False]
+    assert seen == [True]
 
 
 def test_ack_reply_uses_non_mutating_probe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -921,60 +923,358 @@ def test_inbox_target_passes_detail_flag(monkeypatch: pytest.MonkeyPatch, tmp_pa
     assert detail_seen == [True]
 
 
-def test_watch_target_fails_fast_when_agent_health_is_stopped(
+class _HealthProbeClient:
+    """Watch client whose `watch` never terminates and whose `queue` reports a
+    scripted sequence of agent health payloads (the last one repeats)."""
+
+    def __init__(
+        self,
+        healths: list[dict],
+        *,
+        terminal_after: int | None = None,
+        cycle: bool = False,
+    ) -> None:
+        self._healths = healths
+        self._terminal_after = terminal_after
+        self._cycle = cycle
+        self.watch_calls = 0
+        self.queue_calls = 0
+
+    def watch(self, target: str, *, cursor: int = 0) -> dict:
+        del target
+        self.watch_calls += 1
+        terminal = self._terminal_after is not None and self.watch_calls >= self._terminal_after
+        return {
+            'job_id': 'job_demo',
+            'agent_name': 'reviewer',
+            'cursor': cursor,
+            'generation': 1,
+            'terminal': terminal,
+            'status': 'completed' if terminal else 'running',
+            'reply': 'recovered reply' if terminal else '',
+            'events': [],
+        }
+
+    def queue(self, agent_name: str) -> dict:
+        assert agent_name == 'reviewer'
+        if self._cycle:
+            index = self.queue_calls % len(self._healths)
+        else:
+            index = min(self.queue_calls, len(self._healths) - 1)
+        self.queue_calls += 1
+        payload = dict(self._healths[index])
+        payload.setdefault('agent_name', agent_name)
+        return {'agent': payload}
+
+
+class _AdvancingClock:
+    def __init__(self, step: float = 5.0) -> None:
+        self.value = 0.0
+        self._step = step
+
+    def __call__(self) -> float:
+        self.value += self._step
+        return self.value
+
+
+def _install_health_watch(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    project_root = tmp_path / 'repo-watch-health-stopped'
-    project_root.mkdir()
-    context = _context(project_root)
-
-    class _StoppedHealthClient:
-        def __init__(self) -> None:
-            self.watch_calls = 0
-            self.queue_calls = 0
-
-        def watch(self, target: str, *, cursor: int = 0) -> dict:
-            del target, cursor
-            self.watch_calls += 1
-            return {
-                'job_id': 'job_demo',
-                'agent_name': 'reviewer',
-                'cursor': 0,
-                'generation': 1,
-                'terminal': False,
-                'status': 'running',
-                'reply': '',
-                'events': [],
-            }
-
-        def queue(self, agent_name: str) -> dict:
-            assert agent_name == 'reviewer'
-            self.queue_calls += 1
-            return {
-                'agent': {
-                    'agent_name': agent_name,
-                    'runtime_state': 'stopped',
-                    'runtime_health': 'stopped',
-                    'pane_state': 'dead',
-                }
-            }
-
-    client = _StoppedHealthClient()
+    client: _HealthProbeClient,
+    *,
+    clock=None,
+    timeout: str = '600',
+) -> list[str]:
+    started: list[str] = []
     monkeypatch.setattr(
         watch_service,
         'connect_mounted_daemon',
         lambda _context, allow_restart_stale: SimpleNamespace(client=client),
     )
+    monkeypatch.setattr(
+        watch_service,
+        'ensure_agent_running',
+        lambda _client, name, **_kwargs: started.append(name),
+    )
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', timeout)
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+    monkeypatch.delenv('CCB_WATCH_AUTO_START', raising=False)
+    if clock is not None:
+        monkeypatch.setattr(watch_service.time, 'time', clock)
+    return started
+
+
+def test_watch_target_auto_starts_stopped_agent_then_returns_reply(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-auto-start'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient(
+        [{'runtime_state': 'stopped', 'runtime_health': 'stopped', 'pane_state': 'dead'}],
+        terminal_after=2,
+    )
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    batches = list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert [batch.terminal for batch in batches] == [True]
+    assert batches[0].reply == 'recovered reply'
+    assert started == ['reviewer']
+
+
+def test_watch_target_auto_mounts_with_restart_stale(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-auto-mount'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient([{'runtime_state': 'busy', 'runtime_health': 'healthy'}], terminal_after=1)
+    seen: list[bool] = []
+
+    def _connect(context, allow_restart_stale):
+        del context
+        seen.append(allow_restart_stale)
+        return SimpleNamespace(client=client)
+
+    monkeypatch.setattr(watch_service, 'connect_mounted_daemon', _connect)
     monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '600')
     monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
-    monkeypatch.setattr(watch_service.time, 'time', lambda: 0.0)
+    monkeypatch.delenv('CCB_WATCH_AUTO_START', raising=False)
+
+    list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert seen == [True]
+
+
+def test_watch_target_auto_start_is_not_called_when_job_terminal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-terminal'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient(
+        [{'runtime_state': 'stopped', 'runtime_health': 'stopped', 'pane_state': 'dead'}],
+        terminal_after=1,
+    )
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    batches = list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert [batch.terminal for batch in batches] == [True]
+    assert started == []
+    assert client.queue_calls == 0
+
+
+def test_watch_target_bounded_auto_start_then_clear_error(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-auto-start-bounded'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient(
+        [{'runtime_state': 'stopped', 'runtime_health': 'stopped', 'pane_state': 'dead'}]
+    )
+    started = _install_health_watch(monkeypatch, client, clock=_AdvancingClock())
+
+    with pytest.raises(RuntimeError, match='could not be auto-started after 2 attempt'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert started == ['reviewer', 'reviewer']
+
+
+def test_watch_target_auto_start_budget_not_reset_by_flapping_state(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-auto-start-flap'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    # Alternating stopped/starting used to reset the budget on every `ok`
+    # reading, which let a flapping agent be restarted without bound.
+    client = _HealthProbeClient(
+        [
+            {'runtime_state': 'stopped', 'runtime_health': 'stopped'},
+            {'runtime_state': 'starting', 'runtime_health': 'healthy'},
+        ],
+        cycle=True,
+    )
+    started = _install_health_watch(monkeypatch, client, clock=_AdvancingClock())
+
+    with pytest.raises(RuntimeError, match='could not be auto-started'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert started == ['reviewer', 'reviewer']
+
+
+def test_watch_target_pane_dead_never_fires_during_auto_start_grace(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-pane-dead-grace'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    # The pane is necessarily not `alive` while it is being recreated; the old
+    # 2-confirm rule would abort ~10s in, far ahead of the auto-start grace.
+    client = _HealthProbeClient(
+        [{'runtime_state': 'stopped', 'runtime_health': 'stopped', 'pane_state': 'dead'}]
+    )
+    started = _install_health_watch(monkeypatch, client, clock=_AdvancingClock())
+
+    with pytest.raises(RuntimeError) as excinfo:
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert 'pane is dead' not in str(excinfo.value)
+    assert 'could not be auto-started' in str(excinfo.value)
+    assert len(started) == 2
+
+
+def test_watch_target_waits_when_degraded_with_recoverable_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-degraded-recoverable'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    # ccbd drives recovery for a DEGRADED agent; the watch must not race it and
+    # must not let the pane probe abort the wait.
+    client = _HealthProbeClient(
+        [{'runtime_state': 'degraded', 'runtime_health': 'pane-dead', 'pane_state': 'dead'}]
+    )
+    started = _install_health_watch(monkeypatch, client, clock=_AdvancingClock(), timeout='50')
+
+    with pytest.raises(RuntimeError) as excinfo:
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert 'watch timed out' in str(excinfo.value)
+    assert 'pane is dead' not in str(excinfo.value)
+    assert started == []
+
+
+def test_watch_target_degraded_with_unactionable_health_stays_fatal(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-degraded-fatal'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient([{'runtime_state': 'degraded', 'runtime_health': 'degraded'}])
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match='Agent reviewer health is degraded'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert started == []
+
+
+def test_watch_target_does_not_auto_start_for_hard_blocked_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-hard-blocked'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient([{'runtime_state': 'idle', 'runtime_health': 'provider-auth-revoked'}])
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    with pytest.raises(RuntimeError, match='health is provider-auth-revoked'):
+        list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert started == []
+
+
+def test_watch_target_auto_starts_when_state_stopped_but_health_healthy(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-stopped-healthy'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    # The live repro: a mounted-but-never-started agent reports state=stopped
+    # alongside health=healthy. Keying on health alone would wait forever.
+    client = _HealthProbeClient(
+        [{'runtime_state': 'stopped', 'runtime_health': 'healthy'}], terminal_after=2
+    )
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert started == ['reviewer']
+
+
+def test_watch_target_auto_starts_when_state_failed_with_healthy_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-failed-healthy'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient(
+        [{'runtime_state': 'failed', 'runtime_health': 'healthy'}], terminal_after=2
+    )
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert started == ['reviewer']
+
+
+def test_watch_target_auto_start_disabled_restores_fail_fast(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-auto-start-off'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    client = _HealthProbeClient([{'runtime_state': 'stopped', 'runtime_health': 'stopped'}])
+    started = _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+    monkeypatch.setenv('CCB_WATCH_AUTO_START', '0')
 
     with pytest.raises(RuntimeError, match='Agent reviewer health is stopped'):
         list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
 
-    assert client.watch_calls == 1
-    assert client.queue_calls == 1
+    assert started == []
+
+
+def test_watch_target_persisted_terminal_fallback_precedes_fatal_health(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-fatal-fallback'
+    project_root.mkdir()
+    context = _context(project_root)
+
+    class _CompletesThenBreaksClient(_HealthProbeClient):
+        def queue(self, agent_name: str) -> dict:
+            # The job lands on disk while the watch is running, so the entry
+            # short-circuit could not have seen it.
+            _persist_terminal_job(project_root)
+            return super().queue(agent_name)
+
+    client = _CompletesThenBreaksClient(
+        [{'runtime_state': 'idle', 'runtime_health': 'provider-auth-revoked'}]
+    )
+    _install_health_watch(monkeypatch, client, clock=lambda: 0.0)
+
+    batches = list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert [batch.terminal for batch in batches] == [True]
+    assert batches[0].reply == 'persisted reply'
 
 
 def test_watch_target_requires_two_consecutive_dead_pane_health_checks(
