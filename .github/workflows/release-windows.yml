@@ -6,7 +6,7 @@ on:
       tag:
         description: "Windows release tag to build and publish"
         required: true
-        default: "v8.7.10"
+        default: "v8.7.11"
       source_ref:
         description: "Candidate ref to validate without publishing (optional)"
         required: false
@@ -84,6 +84,12 @@ jobs:
             test/test_herdr_bootstrap.py `
             test/test_herdr_config_import.py `
             test/test_herdr_surface_projection.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q `
+            test/test_windows_config_protection.py `
+            test/test_windows_terminal_health.py `
+            test/test_windows_maintenance.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --locked --manifest-path platforms/windows/launcher/Cargo.toml
 
       - name: Build isolated Windows artifact

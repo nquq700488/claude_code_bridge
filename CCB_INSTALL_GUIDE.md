@@ -169,6 +169,8 @@ cd claude_code_bridge
 ```
 
 > **Windows 用户**：`install.ps1` 仅支持基础安装（不含 tmux 主题、`mmx-daemon`、Codex/Droid/Kimi skills），**推荐在 WSL 中使用 `install.sh` 获得完整功能**。
+>
+> 自 v8.7.11 起，原生 Windows 的**归档升级**（`install.ps1 -SourceArchive ...`）必须同时传入 `-ExpectedSha256`，且会走 `platforms/windows/tools/manage_install.py update` 的事务化流程（先在临时目录校验、失败即回滚，不再就地覆盖安装目录）。只做全新安装时无需该参数。
 
 ### 安装脚本会做什么（v7.0.x）
 
