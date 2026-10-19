@@ -46,7 +46,7 @@
 - **Codex 双行底栏兼容**：Codex v0.158.0 的模型/工作目录行与快捷键行组合会被识别为正常空 composer，不再误报 `composer_layout_unknown`
 - **`pend --watch` 自动拉起目标**：目标 Agent 未运行时，`ccb pend --watch <job_id>` 会自动 mount 项目 daemon 并启动该 Agent 的 pane，然后继续等待任务，不再直接报 `health is stopped`。自动启动单次 watch 最多 2 次、冷启动宽限 90 秒；已终态的任务完全不连接 daemon；`provider-auth-revoked` / `session-missing` 等无法通过启动修复的健康状态仍然快速失败。设 `CCB_WATCH_AUTO_START=0` 可恢复旧的只读快速失败行为
 - **Rich 文件面板系统打开（v8.7.1+）**：点击文件或按 Enter 用系统默认应用打开（macOS `open` / Linux `gio open` / WSL `wslview`）
-'}、】【彩票娱乐注册? Wait tool call malformed? It returned no output? Let's check. Actually tool call in transcript seems content includes ` functions.Edit` JSON? It hasn't returned? Need see. I'm still analysis; maybe call didn't execute due malformed? The prior assistant message is a tool call? It appears code block with extra `},` maybe not valid. Let's inspect last tool response: It shows no `functions.Edit` output? It appears in transcript: `assistant to=functions.Edit ...` then maybe no tool result? Wait above text: I see a call line with JSON ending `}` and then no `tool` response; might be parser issue. Need reissue correctly. Ensure `replace_all` included. Use exact. But file has been Read, okay. Need no accidental. Let's call.无码av. 七星彩. Let's proceed. use functions.Edit commentary.лирида. It may be in previous message hidden? I see in transcript after call - 按项目配置 Agent 团队和 tmux 分屏布局
+- 按项目配置 Agent 团队和 tmux 分屏布局
 - 每个 Agent 独立配置 API key、模型、端点
 - 可选 git worktree 隔离
 - 会话持久化和恢复
