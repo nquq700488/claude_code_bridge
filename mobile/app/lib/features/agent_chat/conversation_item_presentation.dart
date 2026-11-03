@@ -1,11 +1,12 @@
 import 'package:flutter/material.dart';
-import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 
 import '../../l10n/ccb_mobile_localizations.dart';
 import '../../models/ccb_conversation_item.dart';
+import '../../native_session/native_session.dart';
 import '../../platform/external_url_opener.dart';
 import 'agent_chat_state_helpers.dart';
 import 'content_text_styles.dart';
+import 'agent_execution_status.dart';
 
 class ConversationPreview extends StatelessWidget {
   const ConversationPreview({required this.item, super.key});
@@ -28,51 +29,132 @@ class ConversationBody extends StatelessWidget {
   const ConversationBody({
     required this.item,
     this.onOpenArtifactActions,
+    this.contentLoader,
     super.key,
   });
 
   final CcbConversationItem item;
   final ValueChanged<String>? onOpenArtifactActions;
+  final Future<NativeContentPage> Function(String cursor)? contentLoader;
 
   @override
   Widget build(BuildContext context) {
+    if (item.readCursor != null) {
+      final chinese = CcbMobileLocalizations.of(context).isChinese;
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          _buildText(context, item.body),
+          TextButton(
+            key: const ValueKey('conversation-read-original'),
+            onPressed:
+                contentLoader == null
+                    ? null
+                    : () => showNativeOriginalReader(
+                      context,
+                      cursor: item.readCursor!,
+                      loader: contentLoader!,
+                      textBuilder: _buildText,
+                      labels: _readerLabels(context),
+                    ),
+            child: Text(chinese ? '查看完整内容' : 'Complete content'),
+          ),
+        ],
+      );
+    }
+    final turn = item.nativeTurn;
+    if (turn != null &&
+        (item.kind == CcbConversationItemKind.agentReply ||
+            turn.readCursor != null)) {
+      return NativeTurnBody(
+        turn: turn,
+        textBuilder: _buildText,
+        contentLoader: contentLoader,
+        previewText: item.body,
+        labels: _readerLabels(context),
+      );
+    }
+    return _buildText(context, item.body);
+  }
+
+  NativeTurnLabels _readerLabels(BuildContext context) =>
+      CcbMobileLocalizations.of(context).isChinese
+          ? const NativeTurnLabels(
+            reasoning: '思考',
+            toolCall: '工具调用',
+            toolResult: '工具结果',
+            running: '运行中',
+            completed: '已完成',
+            failed: '失败',
+            aborted: '已中止',
+            unknown: '状态未知',
+            noAnswer: '本轮尚无正文回复',
+            message: '中间回复',
+            readOriginal: '查看完整内容',
+            preview: '仅为预览 — 内容超出内联大小限制',
+            latestWindow: '仅显示近期内容；较早内容或较长段落已省略',
+            previous: '上一页',
+            next: '下一页',
+            close: '关闭',
+            retry: '重试',
+            page: '页码',
+            continuedBefore: '接续上一页',
+            continuedAfter: '下一页继续',
+            loadFailed: '无法加载完整内容，内容可能已变更。请关闭后刷新会话。',
+          )
+          : const NativeTurnLabels();
+
+  Widget _buildText(BuildContext context, String text) {
     if (shouldRenderConversationMarkdown(item)) {
-      return MarkdownBody(
+      return CcbMarkdown(
         key: ValueKey('markdown-body-conversation-${item.id}'),
-        data: item.body,
-        selectable: true,
-        styleSheet: ccbMarkdownStyleSheet(context),
-        onTapLink: (text, href, title) {
-          if (href != null && href.startsWith('ccb-artifact://')) {
+        data: text,
+        onLinkTap: (href, label) {
+          if (href.startsWith('ccb-artifact://')) {
             final fileId = href.replaceFirst('ccb-artifact://', '');
             if (onOpenArtifactActions != null) {
               onOpenArtifactActions!(fileId);
             }
           } else if (isOpenableExternalUrl(href)) {
-            confirmAndOpenExternalUrl(context, href!);
+            confirmAndOpenExternalUrl(context, href);
           } else {
-            showBlockedConversationLink(context, href ?? text);
+            showBlockedConversationLink(context, href);
           }
         },
       );
     }
-    return SelectableText(
-      item.body,
-      key: ValueKey('conversation-body-${item.id}'),
-    );
+    return SelectableText(text, key: ValueKey('conversation-body-${item.id}'));
   }
 }
 
 class ConversationStateChip extends StatelessWidget {
-  const ConversationStateChip({required super.key, required this.state});
+  const ConversationStateChip({
+    required super.key,
+    required this.state,
+    this.collab = false,
+    this.needsReview = false,
+  });
 
   final CcbConversationDeliveryState state;
+  final bool collab;
+  final bool needsReview;
 
   @override
   Widget build(BuildContext context) {
     return Chip(
       visualDensity: VisualDensity.compact,
-      label: Text(conversationStateLabel(state)),
+      label: Text(
+        needsReview
+            ? (CcbMobileLocalizations.of(context).isChinese
+                ? '需要复核'
+                : 'Needs review')
+            : collab && state == CcbConversationDeliveryState.unconfirmed
+            ? (CcbMobileLocalizations.of(context).isChinese
+                ? '原生准入未确认'
+                : 'Admission unconfirmed')
+            : conversationStateLabel(state),
+      ),
     );
   }
 }
@@ -81,6 +163,10 @@ bool conversationShouldCollapse(
   CcbConversationItem item, {
   required bool hasCustomChild,
 }) {
+  if (item.nativeTurn != null &&
+      item.kind == CcbConversationItemKind.agentReply) {
+    return false;
+  }
   if (hasCustomChild) {
     return true;
   }
@@ -276,6 +362,7 @@ IconData conversationIcon(CcbConversationItemKind kind) {
 String conversationStateLabel(CcbConversationDeliveryState state) {
   return switch (state) {
     CcbConversationDeliveryState.pending => 'Pending',
+    CcbConversationDeliveryState.queued => 'Queued',
     CcbConversationDeliveryState.sent => 'Sent',
     CcbConversationDeliveryState.failed => 'Failed',
     CcbConversationDeliveryState.unconfirmed => 'Check pane',
@@ -335,6 +422,75 @@ Future<void> confirmAndOpenExternalUrl(BuildContext context, String url) async {
     }
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('${strings.couldNotOpenUrl}: $error')),
+    );
+  }
+}
+
+/// A failed request is not evidence that the native agent socket disconnected.
+/// Only explicit host-unavailable responses use the disconnected presentation.
+class OmpConversationErrorBanner extends StatelessWidget {
+  const OmpConversationErrorBanner({
+    super.key,
+    required this.error,
+    required this.onRetry,
+  });
+
+  final String error;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final chinese = CcbMobileLocalizations.of(context).isChinese;
+    final hostUnavailable = isOmpHostUnavailable(error);
+    final explanation =
+        hostUnavailable
+            ? (chinese
+                ? 'OMP 主机尚未就绪。保留的消息可能已过期，请重新连接后再发送。'
+                : 'OMP Collab disconnected. Retained messages may be stale; reconnect before sending.')
+            : (chinese
+                ? 'OMP 会话无法加载。请求失败并不代表原生连接已断开；保留的消息可能已过期。'
+                : 'OMP conversation could not load. A failed request does not mean the native socket disconnected; retained messages may be stale.');
+    return MaterialBanner(
+      key: ValueKey(
+        hostUnavailable
+            ? 'omp-collab-disconnected'
+            : 'omp-conversation-load-failed',
+      ),
+      content: Text(
+        hostUnavailable
+            ? explanation
+            : (chinese
+                ? 'OMP 会话无法加载。保留的消息可能已过期。'
+                : 'OMP conversation could not load. Retained messages may be stale.'),
+      ),
+      actions: [
+        TextButton(
+          onPressed:
+              () => showDialog<void>(
+                context: context,
+                builder:
+                    (context) => AlertDialog(
+                      title: Text(chinese ? '会话请求' : 'Conversation request'),
+                      content: Text(explanation),
+                      actions: [
+                        TextButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          child: Text(chinese ? '关闭' : 'Close'),
+                        ),
+                      ],
+                    ),
+              ),
+          child: Text(chinese ? '查看详情' : 'Details'),
+        ),
+        TextButton(
+          onPressed: onRetry,
+          child: Text(
+            hostUnavailable
+                ? (chinese ? '重新连接' : 'Reconnect')
+                : (chinese ? '重试' : 'Retry'),
+          ),
+        ),
+      ],
     );
   }
 }

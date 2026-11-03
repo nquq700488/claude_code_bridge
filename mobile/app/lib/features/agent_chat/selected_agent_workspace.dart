@@ -18,6 +18,7 @@ import '../../models/ccb_project_view.dart';
 import '../../repository/mobile_ccb_repository.dart';
 import '../../transport/terminal_transport.dart';
 import 'agent_chat_controller.dart';
+import 'agent_chat_state_helpers.dart';
 import 'agent_chat_ui_controller_store.dart';
 import 'agent_conversation_refresh_coordinator.dart';
 import 'agent_local_message_store.dart';
@@ -27,13 +28,13 @@ import 'agent_pane_message_submitter.dart';
 import 'agent_submission_semantics.dart';
 import 'agent_turn_sync_tracker.dart';
 import 'pane_chat_controller.dart';
+import 'conversation_item_presentation.dart';
 import 'selected_agent_workspace_model.dart';
 import 'selected_agent_workspace_view.dart';
 
 const agentMessageMaxAttachments = 5;
 const agentMessageMaxAttachmentBytes = 25 * 1024 * 1024;
 const agentMessageMaxDownloadBytes = 128 * 1024 * 1024;
-const selectedAgentTabKeyBytes = [9];
 const selectedAgentEscapeKeyBytes = [27];
 const selectedAgentExpandScrollDuration = Duration(milliseconds: 220);
 
@@ -147,6 +148,37 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   FocusNode? _observedDraftFocusNode;
   String? _observedDraftFocusAgentName;
   var _nextDraftAttachmentIndex = 0;
+  Timer? _ompCollabRefreshTimer;
+  bool _ompCollabRefreshInFlight = false;
+  bool _appResumed = true;
+
+  void _scheduleOmpCollabRefresh() {
+    _ompCollabRefreshTimer?.cancel();
+    final agent = widget.agent;
+    if (!mounted || !_appResumed || !isOmpCollabAgent(agent)) return;
+    final delay =
+        _chatController.conversationErrorFor(agent!.name) != null
+            ? const Duration(seconds: 5)
+            : const Duration(seconds: 1);
+    _ompCollabRefreshTimer = Timer(delay, () async {
+      if (!mounted || !_appResumed || !isOmpCollabAgent(widget.agent)) return;
+      if (!_ompCollabRefreshInFlight) {
+        _ompCollabRefreshInFlight = true;
+        try {
+          await _loadConversation(widget.agent!.name);
+        } finally {
+          _ompCollabRefreshInFlight = false;
+        }
+      }
+      if (mounted) _scheduleOmpCollabRefresh();
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _appResumed = state == AppLifecycleState.resumed;
+    _scheduleOmpCollabRefresh();
+  }
 
   @override
   void initState() {
@@ -156,11 +188,20 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     _restoreLocalMessagesForSelectedAgent();
     _restoreConversationSnapshot();
     _loadSelectedAgentConversation();
+    _scheduleOmpCollabRefresh();
   }
 
   @override
   void didUpdateWidget(covariant SelectedAgentWorkspace oldWidget) {
     super.didUpdateWidget(oldWidget);
+    if (oldWidget.agent?.name != widget.agent?.name ||
+        oldWidget.agent?.provider != widget.agent?.provider ||
+        isOmpCollabAgent(oldWidget.agent) != isOmpCollabAgent(widget.agent) ||
+        oldWidget.view.project.id != widget.view.project.id ||
+        oldWidget.view.namespaceEpoch != widget.view.namespaceEpoch ||
+        oldWidget.repository != widget.repository) {
+      _scheduleOmpCollabRefresh();
+    }
     if (oldWidget.controller != widget.controller) {
       oldWidget.controller?._detachRefreshLatest();
       widget.controller?._attachRefreshLatest(_refreshSelectedAgentLatest);
@@ -172,6 +213,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         oldWidget.terminalTransport != widget.terminalTransport ||
         oldWidget.view.project.id != widget.view.project.id ||
         oldWidget.view.namespaceEpoch != widget.view.namespaceEpoch ||
+        isOmpCollabAgent(oldWidget.agent) != isOmpCollabAgent(widget.agent) ||
         oldWidget.agent?.name != widget.agent?.name) {
       if (oldWidget.terminalTransport != widget.terminalTransport ||
           oldWidget.view.project.id != widget.view.project.id ||
@@ -213,6 +255,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _ompCollabRefreshTimer?.cancel();
     _observedDraftFocusNode?.removeListener(_handleDraftFocusChanged);
     widget.controller?._detachRefreshLatest();
     for (final timer in _startObservationTimers.values) {
@@ -603,6 +646,12 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     required List<int> bytes,
     required String label,
   }) async {
+    if (isOmpCollabAgent(agent)) {
+      _showSnack(
+        'OMP Collab does not accept terminal keys. Use Open Terminal for TUI controls.',
+      );
+      return;
+    }
     final outcome = await _paneMessageSubmitter.sendKey(
       transport: widget.terminalTransport,
       agent: agent,
@@ -620,18 +669,12 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     _refreshLatest(agent.name);
   }
 
-  Future<void> _sendDraftThenPaneKey(
-    CcbAgent agent, {
-    required List<int> bytes,
-    required String label,
-  }) async {
+  Future<void> _queueDraft(CcbAgent agent) async {
+    if (agent.provider != 'codex') return;
     final controller = _draftController(agent.name);
     final body = controller.text;
     final attachments = _draftAttachments(agent.name);
-    if (body.trim().isEmpty && attachments.isEmpty) {
-      await _sendPaneKey(agent, bytes: bytes, label: label);
-      return;
-    }
+    if (body.trim().isEmpty && attachments.isEmpty) return;
     if (!widget.sendEnabled || widget.view.namespaceEpoch == null) {
       _showSnack(widget.sendDisabledReason ?? 'Refresh target before sending');
       return;
@@ -644,7 +687,7 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
       repository: widget.repository,
       terminalTransport: widget.terminalTransport,
       usePaneInput: true,
-      paneSubmitBytes: bytes,
+      queueMessage: true,
       refreshView: widget.onRefreshView,
       onAccepted: () {
         controller.clear();
@@ -1092,6 +1135,12 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
     required CcbConversationItem replacement,
   }) {
     final agentName = agent.name;
+    // Queue admission is not a new running turn and must not clear the turn
+    // already being observed while OMP drains its server-side FIFO.
+    if (isOmpCollabAgent(agent) &&
+        replacement.state != CcbConversationDeliveryState.sent) {
+      return;
+    }
     if (replacement.state == CcbConversationDeliveryState.sent) {
       _updateAwaitingForSubmission(
         agent: agent,
@@ -1331,15 +1380,55 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
         selectedAgent.name,
       ),
     );
+    final uiConversation = _chatController.remoteConversationFor(selectedAgent.name);
+    final uiSession = uiConversation?.ompSessionId;
+    final uiGeneration = uiConversation?.ompGeneration;
+    final uiEpoch = widget.view.namespaceEpoch;
+    final uiProject = widget.view.project.id;
+    final uiRepository = widget.repository;
     final draftFocusNode = _draftFocusNode(selectedAgent.name);
     _observeDraftFocusNode(selectedAgent.name, draftFocusNode);
     return Column(
       children: [
+        if (isOmpCollabAgent(selectedAgent) &&
+            _chatController.conversationErrorFor(selectedAgent.name) != null)
+          OmpConversationErrorBanner(
+            error: _chatController.conversationErrorFor(selectedAgent.name)!,
+            onRetry: () => _loadConversation(selectedAgent.name),
+          ),
         Expanded(
           child: SelectedAgentWorkspaceView(
             repository: widget.repository,
             view: widget.view,
             model: model,
+            onUiResponse: (value) async {
+              final conversation = _chatController.remoteConversationFor(selectedAgent.name);
+              final session = uiSession;
+              final generation = uiGeneration;
+              final epoch = uiEpoch;
+              final request = model.pendingUiRequest;
+              final currentAgent = widget.agent;
+              if (currentAgent == null || widget.repository != uiRepository) throw StateError('Stale UI request');
+              final currentModel = selectedAgentWorkspaceModel(view: widget.view, agent: currentAgent, chatController: _chatController, isAwaitingAgentResponse: false);
+              final repository = uiRepository;
+              if (!widget.sendEnabled || widget.agent?.name != selectedAgent.name ||
+                  widget.view.project.id != uiProject || widget.view.namespaceEpoch != epoch ||
+                  conversation?.ompSessionId != session || conversation?.ompGeneration != generation ||
+                  request == null || currentModel.pendingUiRequest?.reqId != request.reqId ||
+                  !currentModel.uiRequestAvailable ||
+                  conversation?.projectId != widget.view.project.id || conversation?.namespaceEpoch != epoch ||
+                  session == null || generation == null || epoch == null ||
+                  selectedAgent.providerControl?.sessionId != null && selectedAgent.providerControl?.sessionId != session ||
+                  repository is! MobileCcbUiResponseRepository) {
+                throw StateError('Stale or disconnected UI request');
+              }
+              await (repository as MobileCcbUiResponseRepository).uiResponse(
+                projectId: widget.view.project.id, agent: selectedAgent.name, namespaceEpoch: epoch,
+                expectedOmpSessionId: session, expectedOmpGeneration: generation,
+                reqId: request.reqId, value: value,
+              );
+              if (mounted) await _loadConversation(selectedAgent.name);
+            },
             timelineController: _scrollController(selectedAgent.name),
             draftController: _draftController(selectedAgent.name),
             draftFocusNode: draftFocusNode,
@@ -1404,12 +1493,8 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
             onSend: () {
               _sendMessage(selectedAgent);
             },
-            onSendTab: () {
-              _sendDraftThenPaneKey(
-                selectedAgent,
-                bytes: selectedAgentTabKeyBytes,
-                label: 'Tab',
-              );
+            onQueue: () {
+              _queueDraft(selectedAgent);
             },
             onSendEscape: () {
               _sendPaneKey(
@@ -1420,7 +1505,15 @@ class _SelectedAgentWorkspaceState extends State<SelectedAgentWorkspace>
             },
             expandedItemKeyBuilder: _expandedTimelineItemKey,
             sendEnabled:
-                widget.sendEnabled && widget.view.namespaceEpoch != null,
+                widget.sendEnabled &&
+                widget.view.namespaceEpoch != null &&
+                (!isOmpCollabAgent(selectedAgent) ||
+                    (_chatController.conversationErrorFor(selectedAgent.name) ==
+                            null &&
+                        _chatController
+                                .remoteConversationFor(selectedAgent.name)
+                                ?.ompGeneration !=
+                            null)),
             sendDisabledReason: widget.sendDisabledReason,
           ),
         ),

@@ -2,7 +2,24 @@
 
 Date: 2026-06-14
 
-Last updated: 2026-10-10
+Last updated: 2026-10-22
+
+## OMP Python ask identity — Local repair verified
+
+2026-10-22: [evidence](evidence/omp-python-ask-identity-20261022.md) records the
+lost-caller root cause, exact managed-directory fallback, native OMP environment
+filter probe and related regressions. Local source repair is complete; rollout
+and release qualification remain separate. No live task recovery was performed.
+
+## PR #395 local repair — Done
+
+v8.7.12 is published. [Publication verification](evidence/release-8712-verification-20261019.md)
+records passed candidate/platform gates, registry identity and installed-source checks.
+
+2026-10-19: integrated PR #395 and repaired its pending watchdog and Claude
+border-padding regression. [Evidence](evidence/pr395-local-repair-20261019.md)
+records 634 passed / 28 skipped, trusted-base isolation checks, and the local
+commit boundary. Next: native platform qualification before a later release.
 
 ## Current Slice: Unified FIFO And Empty-Result Notices
 

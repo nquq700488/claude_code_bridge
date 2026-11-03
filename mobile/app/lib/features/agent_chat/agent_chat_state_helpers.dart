@@ -1,8 +1,15 @@
+import 'dart:convert';
+
+import '../../models/ccb_agent.dart';
 import '../../models/ccb_agent_conversation.dart';
 import '../../models/ccb_conversation_item.dart';
 import '../../models/readable_terminal_history.dart';
 import '../../transport/http_gateway_transport.dart';
 import 'pane_chat_controller.dart';
+
+bool isOmpCollabAgent(CcbAgent? agent) =>
+    agent?.provider == 'omp' &&
+    agent?.providerControl?.runtimeSource == 'collab';
 
 String messageBodyKey(String body) => body.trim();
 
@@ -18,10 +25,16 @@ CcbConversationDeliveryState paneFailureDeliveryState(Object error) {
 
 String conversationSignature(CcbAgentConversation? conversation) {
   final items = conversation?.items;
-  if (items == null || items.isEmpty) {
+  if (items == null || (items.isEmpty && conversation?.ompRuntime == null)) {
     return '';
   }
   return [
+    conversation?.ompSessionId ?? '',
+    conversation?.ompGeneration ?? '',
+    conversation?.namespaceEpoch.toString() ?? '',
+    conversation?.branchId ?? '',
+    if (conversation?.ompRuntime != null)
+      jsonEncode(conversation!.ompRuntime!.stableSnapshot()),
     for (final item in items)
       [
         item.id,
@@ -32,6 +45,7 @@ String conversationSignature(CcbAgentConversation? conversation) {
         item.completedAt?.toUtc().toIso8601String() ?? '',
         item.durationMs?.toString() ?? '',
         item.body.hashCode,
+        if (item.nativeTurn != null) jsonEncode(item.nativeTurn!.toJson()),
       ].join(':'),
   ].join('|');
 }
@@ -172,6 +186,11 @@ bool remoteUserMessageCoversLocalMessage({
   }
   if (remote.id == local.id) {
     return true;
+  }
+  if (remote.source == 'mobile/collab' ||
+      remote.source == 'provider_native/omp' ||
+      local.source == 'mobile/collab') {
+    return false;
   }
   final bodyKey = messageBodyKey(local.body);
   if (bodyKey.isNotEmpty && messageBodyKey(remote.body) == bodyKey) {

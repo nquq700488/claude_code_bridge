@@ -6,7 +6,7 @@
 **让 Codex、Claude、Gemini 等 CLI Agent 可见、可控、可接管地协同工作**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.7.11-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.21-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -51,9 +51,37 @@
 - Hub 能力：一个命令同时并发运行多家 CLI provider。
 - 手机远程控制器：跨 provider 语音操控、文件传输和远程终端访问。
 
-## 8.7.11 修复：V2 兼容性与 Pi 完成状态
+## New in 8.7.19: OMP native questions and runtime status / OMP 原生交互与运行状态
 
-隔离 V3 工作流对普通 V2 项目的限制，保留图片转换后的 Pi 请求归属，并将取消操作限定到当前活动请求。[版本说明](../docs/releases/v8.7.11.md)。
+Native select/editor cards use fenced replies over HTTP or encrypted Relay. Mobile shows native elapsed time, current step and Todo progress. Update gateway and app together; restart only idle OMP agents.
+
+[Full bilingual notes](../docs/releases/v8.7.19.md).
+
+## 8.7.18 新功能：OMP Mobile 稳定长历史与有界最新气泡
+
+OMP Mobile 通过有界原生父链分页稳定读取长历史；历史查询失败不再重置健康的 WebSocket 或清除已加载内容。超长回复在气泡中保留结构化最新内容，最多 24 KiB、8 条记录、24 个块；完整原文仍可通过次级阅读入口查看。请同时升级服务端与 App，已有 OMP 进程在空闲时正常重启加载；不要中断忙碌 Agent 或清空历史。
+
+[Full bilingual notes](../docs/releases/v8.7.18.md).
+
+## 8.7.17 新功能：OMP 回复收据与业务处理分离
+
+OMP 回复通过有界、绑定归属的原生 `reply_deliver` / `reply_status` 投递；`ccb-reply` 在安全步骤边界作为 aside 接收。只有已持久化的原生 `custom_message` 才算收据并释放邮箱，不代表后续业务处理完成。保留草稿与活跃 ask 锚点，不启动并发回合；发送结果不明时查询状态，不重放。 [Notes](../docs/releases/v8.7.17.md).
+
+## 8.7.16 新功能：恢复 OMP Python ask 发送者身份
+
+当 CCB 环境变量被过滤时，OMP Python `ask` 现在会从精确匹配已配置托管目录的 `PI_CODING_AGENT_DIR` 恢复发送者身份，保留现有身份优先级，且不会重放历史任务。微信技术群 2 二维码也已更新，有效期至 10 月 29 日。[版本说明](../docs/releases/v8.7.16.md)。
+
+## 8.7.15 新功能：可靠的 OMP Mobile 回合
+
+Linux OMP Mobile 现在会在同一会话的增量更新中保留此前回复正文，并就地折叠工具推理。运行中发送通过持久化 FIFO 串行处理；排队消息保持可见，但不会 steer 活跃回合；断线结果未知时会先 held，不再盲目重放。本版同时包含 8.7.14 的 Relay 与大型历史修复，Mac legacy 路由保持不变。[版本说明](../docs/releases/v8.7.15.md)。
+
+## 8.7.13 新功能：Linux OMP Mobile Collab
+
+Linux OMP 现在通过私有本机 Collab Relay 将 Mobile 接入现有原生 TUI，实时正文、推理、工具调用和结果按用户回合聚合为对话气泡；手机端还可在同一宿主、同一会话中选择当前原生模型及支持的思考等级。新路由仅在 Linux 启用：Mac 保留原 OMP 终端输入和原生历史路由，其他 Provider 不变。[版本说明](../docs/releases/v8.7.13.md)。
+
+## 8.7.12 修复：回复队列恢复与输入框兼容
+
+安全恢复失效投递租约，避免重复排队任务；修正静默与 callback 完成状态，并兼容新版 Claude/Codex 输入框。[版本说明](../docs/releases/v8.7.12.md)。
 
 ## 8.7.10 修复：Pi 插件启动与快照复用
 
@@ -294,9 +322,9 @@ ccb update mobile
 <details>
 <summary><b>Mobile App 详情、安全边界和源码</b></summary>
 
-CCB 8.7.11 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
+CCB 8.7.16 已把 Flutter 版 CCB Mobile 源码放入 [`mobile/`](../mobile/)，并在 GitHub Release 中发布 Android APK：
 
-- [下载 CCB Mobile v8.7.11 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.11/ccb-mobile-v8.7.11.apk)
+- [下载 CCB Mobile v8.7.21 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.21/ccb-mobile-v8.7.21.apk)
 - App 源码：[`mobile/app`](../mobile/app)
 - 服务端 gateway 源码：[`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -367,7 +395,7 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 - 微信: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=583d37f5" alt="CCB 微信技术群 2" width="240">
+  <img src="../assets/weixin.png?v=a9f2d800" alt="CCB 微信技术群 2" width="240">
 </p>
 
 > 微信群二维码有效期为 7 天。如果二维码已过期，请添加微信 `seemseam-com` 获取最新入群邀请。
@@ -384,7 +412,74 @@ CCB 支持 [Agent Roles Spec](https://github.com/SeemSeam/agent-roles-spec)：�
 
 ## 新版本记录
 
+<details>
+<summary><b>v8.7.21</b> - OpenCode v2 native support / OpenCode v2 原生适配</summary>
+
+Native OpenCode 2.2.x task ingress and idle completion; private legacy database snapshots; OMP native task delivery. OpenCode 2.2.x 原生入队与 idle 完成判定、旧版数据库私有快照和 OMP 原生投递。 [Release notes / 版本说明](../docs/releases/v8.7.21.md).
+
+</details>
+
 <details open>
+<summary><b>v8.7.18</b> - Stable OMP Mobile history / 稳定长历史</summary>
+
+OMP Mobile now paginates stable long history through bounded native parent-chain pages. History-query errors preserve a healthy WebSocket and already-loaded content. Oversized replies keep a structured latest-content bubble capped at 24 KiB, 8 entries and 24 blocks; complete originals remain available as a secondary reader. Upgrade both the server and app, then restart existing OMP processes normally when idle; do not interrupt busy agents or discard history.
+
+OMP Mobile 通过有界原生父链分页稳定读取长历史；历史查询失败不再重置健康的 WebSocket 或清除已加载内容。超长回复在气泡中保留结构化最新内容，最多 24 KiB、8 条记录、24 个块；完整原文仍可通过次级阅读入口查看。请同时升级服务端与 App，已有 OMP 进程在空闲时正常重启加载；不要中断忙碌 Agent 或清空历史。
+
+[Full bilingual notes](../docs/releases/v8.7.18.md).
+</details>
+
+<details open>
+<summary><b>v8.7.17</b> - OMP reply receipts / OMP 回复收据</summary>
+
+OMP replies use bounded, owner-bound native `reply_deliver` / `reply_status` delivery. A `ccb-reply` is received as an aside at a safe step boundary; only a persisted native `custom_message` counts as a receipt and releases the mailbox. Receipt does not mean subsequent business processing is finished. Drafts and active ask anchors remain intact, no concurrent turn is started, and ambiguous sends are queried rather than replayed.
+
+OMP 回复通过有界、绑定归属的原生 `reply_deliver` / `reply_status` 投递；`ccb-reply` 在安全步骤边界作为 aside 接收。只有已持久化的原生 `custom_message` 才算收据并释放邮箱，不代表后续业务处理完成。保留草稿与活跃 ask 锚点，不启动并发回合；发送结果不明时查询状态，不重放。
+
+[Full bilingual notes](../docs/releases/v8.7.17.md).
+</details>
+
+<details open>
+<summary><b>v8.7.16</b> - OMP Python ask 发送者身份恢复</summary>
+
+当 CCB 环境变量被过滤时，从精确匹配已配置托管目录的 `PI_CODING_AGENT_DIR` 恢复 OMP Python `ask` 发送者身份，保留现有身份优先级，且不会重放历史任务。微信技术群 2 二维码已更新，有效期至 10 月 29 日。
+
+[完整中英文说明](../docs/releases/v8.7.16.md)。
+</details>
+
+<details>
+<summary><b>v8.7.15</b> - 可靠的 OMP Mobile 回合</summary>
+
+同一会话增量更新会保留此前回复正文并就地折叠工具推理；运行中发送通过持久化 FIFO 串行处理。排队消息保持可见但不会 steer 活跃回合；断线结果未知时先 held，不再盲目重放。本版包含 8.7.14 的 Linux Relay 与大型历史修复，Mac legacy 路由保持不变。
+
+[完整中英文说明](../docs/releases/v8.7.15.md)。
+</details>
+
+<details>
+<summary><b>v8.7.14</b> - 未完成的预发布版（Android 发布取消）</summary>
+
+此未完成预发布版包含的 Linux OMP 历史分页与 Relay 修复现已并入 8.7.15；未发布 Android 版本。
+
+[完整中英文说明](../docs/releases/v8.7.14.md)。
+</details>
+
+<details>
+<summary><b>v8.7.13</b> - Linux OMP Mobile Collab</summary>
+
+Linux OMP Mobile 通过 Collab 接入原生 TUI，按用户回合聚合回复气泡，并支持同会话选择模型和思考等级。Mac 保留原终端输入和原生历史路由，其他 Provider 不变。
+
+[完整中英文说明](../docs/releases/v8.7.13.md)。
+</details>
+
+<details>
+<summary><b>v8.7.12</b> - 回复队列恢复与输入框兼容</summary>
+
+恢复失效回复投递、修正通信状态，并保留草稿与有效租约保护。
+
+[Full bilingual notes](../docs/releases/v8.7.12.md).
+</details>
+
+<details>
 <summary><b>v8.7.11</b> - V2 工作流兼容性与 Pi 完成修复</summary>
 
 隔离 V3 工作流限制，修复 Pi 图片转换后的请求归属与活动请求取消，并更新微信群二维码。

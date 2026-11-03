@@ -119,6 +119,15 @@ Date: 2026-07-21
   auth/session/permission/plugin-data boundary, and relinquishes locally
   diverged state.
 
+## Native provider follow-up (2026-11-02)
+
+Local implementation and validation are recorded in
+[native provider ingress and observation](topics/native-provider-ingress.md).
+OMP native task transport and safe OpenCode/v1 state reads are implemented in
+this working tree; the [local preview installation](evidence/native-provider-installed-20261102.md)
+passed source and installed acceptance. Stable rollout and full OpenCode v2
+causal/completion support remain open. This does not reopen or change the completed R slices.
+
 ## In Progress
 
 None. Current main remains an ancestor of the qualified stack. PR258, PR259,
@@ -147,3 +156,14 @@ advance only after the current row has a verified atomic commit and linked
 durable evidence; defer/block does not count as completion. A PR's own tests
 passing is necessary but not sufficient: its negative counterexample, contract
 update, current-main tests, and applicable real runtime test must also pass.
+
+
+## Supplemental OpenCode v2 native slice (2026-11-02)
+
+The user-authorized follow-up to the v1/OMP native transport is implemented and
+locally qualified: exact 2.2.x native session binding, one-shot queued admission,
+paginated observation, explicit idle completion and bounded queued cancellation.
+See [scope and limits](topics/opencode-v2-native.md) and
+[installation evidence](evidence/opencode-v2-installed-20261102.md). Existing
+reviewed repair rows retain their recorded state. No stable rollout or release
+is included in this supplemental slice.

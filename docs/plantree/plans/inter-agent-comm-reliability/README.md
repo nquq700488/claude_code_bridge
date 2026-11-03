@@ -2,7 +2,25 @@
 
 Date: 2026-06-14
 
-Last updated: 2026-10-10
+Last updated: 2026-10-22
+
+## OMP Python ask caller identity
+
+2026-10-22: [local source repair and verification](evidence/omp-python-ask-identity-20261022.md)
+recovers the configured Agent from its exact managed OMP directory after the
+Python environment filter removes CCB caller fields. Sender precedence and
+project boundaries are covered; existing live tasks and sessions are untouched.
+
+## PR #395 local integration and repair
+
+Published as v8.7.12: [publication verification](evidence/release-8712-verification-20261019.md)
+records exact-candidate gates, public artifacts and fresh npm installation.
+
+2026-10-19: [pending delivery and composer repair](evidence/pr395-local-repair-20261019.md)
+retains the original pending job while releasing only proven orphaned leases,
+preserves uncertain execution and live lease ownership, and restores Claude
+plain-border padding compatibility. Related regressions pass locally; publication
+and native platform acceptance remain separate.
 
 ## Codex ask caller identity
 

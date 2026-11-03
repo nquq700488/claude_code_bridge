@@ -44,6 +44,8 @@ from provider_control import (
 from provider_pane_status.control_messages import (
     clean_provider_local_control_message,
 )
+from provider_backends.omp.collab import OmpCollabClient, OmpCollabError
+from provider_backends.omp.platform import collab_enabled
 from .activity_watch import (
     MobileAgentActivityProbe,
     probe_mobile_agent_activity,
@@ -54,6 +56,10 @@ from .notifications import (
     MobileNotificationStore,
     encode_sse_event,
 )
+from .omp_conversation import (
+    project_omp_snapshot, load_omp_turn_window, history_cursor, parse_history_cursor,
+)
+from .omp_content import OmpContentError, OmpContentPager
 from .pairing import MobileGatewayPairingError, MobileGatewayPairingStore
 from .push import MobilePushDispatcher, PushSender
 from .project_activity import MobileGatewayProjectActivityStore
@@ -561,6 +567,8 @@ class MobileGatewayService:
         ] = OrderedDict()
         self._conversation_page_cache_bytes = 0
         self._conversation_page_cache_lock = threading.Lock()
+        self._omp_collab = OmpCollabClient() if collab_enabled() else None
+        self._omp_content_pager = OmpContentPager()
         self._provider_settings_store = ProviderSettingsStore()
         self._provider_quota_service = provider_quota_service or ProviderQuotaService()
         self._provider_mutation_lock = threading.Lock()
@@ -710,9 +718,11 @@ class MobileGatewayService:
     def project_view_payload(self, project_id: str) -> dict[str, object]:
         project = self._require_project(project_id)
         payload = self._request_project_view(project)
+        payload = self._with_omp_runtime(project, payload)
         self._observe_project_view_for_notifications(project, payload)
         self._record_project_opened(project.project_id)
-        return _redact_project_view_payload(payload)
+        payload = _redact_project_view_payload(payload)
+        return payload
 
     def agent_provider_control_payload(
         self,
@@ -736,6 +746,15 @@ class MobileGatewayService:
         if agent_record is None:
             raise MobileGatewayError('unknown agent', status_code=404)
         provider = str(agent_record.get('provider') or '').strip().lower()
+        if provider == 'omp' and collab_enabled():
+            native = self._omp_model_snapshot(project.project_root, str(agent))
+            return {
+                'schema_version': 1, 'status': 'ok', 'project_id': project.project_id,
+                'agent': str(agent), 'namespace_epoch': _map(view.get('namespace')).get('epoch'),
+                'provider_control': _omp_model_control(native),
+                'provider_catalog': _omp_model_catalog(native),
+                'config_revision': project_config_revision(project.project_root),
+            }
         catalog = config_ui_provider_capabilities(
             project_root=project.project_root,
             cli_models=None if provider in {'opencode', 'mimo'} else {},
@@ -906,6 +925,17 @@ class MobileGatewayService:
             expected_provider = str(payload.get('expected_provider') or '').strip().lower()
             if not expected_provider or expected_provider != provider:
                 raise MobileGatewayError('stale provider identity; refresh before saving', status_code=409)
+            if provider == 'omp' and collab_enabled():
+                if 'expected_runtime_revision' not in payload:
+                    raise MobileGatewayError('expected_runtime_revision is required', status_code=400)
+                record = self._update_omp_model(project, str(agent), payload)
+                record.update(idempotency_key=idempotency_key, namespace_epoch=current_epoch)
+                self._provider_mutation_results[cache_key] = (fingerprint, dict(record))
+                self._provider_mutation_results.move_to_end(cache_key)
+                while len(self._provider_mutation_results) > _PROVIDER_MUTATION_CACHE_MAX_ENTRIES:
+                    self._provider_mutation_results.popitem(last=False)
+                self._record_project_activity(project.project_id)
+                return record
             provider_control = (
                 dict(agent_record.get('provider_control') or {})
                 if isinstance(agent_record.get('provider_control'), dict)
@@ -973,6 +1003,55 @@ class MobileGatewayService:
                 self._provider_mutation_results.popitem(last=False)
             self._record_project_activity(project.project_id)
             return record
+
+    def _omp_model_snapshot(self, root: Path, agent: str) -> dict:
+        try:
+            return self._omp_collab.get_models(root, agent)
+        except Exception as exc:
+            raise _omp_collab_gateway_error(exc) from exc
+
+    def _update_omp_model(self, project, agent: str, payload: Mapping[str, object]) -> dict:
+        native = self._omp_model_snapshot(project.project_root, agent)
+        prior = _omp_model_revision(native)
+        if payload.get('expected_runtime_revision') != prior:
+            raise MobileGatewayError('stale OMP runtime; refresh before saving', status_code=409)
+        config_revision = project_config_revision(project.project_root)
+        if payload.get('expected_revision') != config_revision:
+            raise MobileGatewayError('project config changed; refresh before saving', status_code=409)
+        selected = next((row for row in _omp_model_catalog(native)['models']
+                         if row['id'] == payload.get('model')), None)
+        if selected is None:
+            raise MobileGatewayError('model is not selectable for this provider', status_code=422)
+        thinking = _optional_text(payload.get('thinking'))
+        if thinking is not None and thinking not in selected['reasoning_levels']:
+            raise MobileGatewayError('thinking option is not valid for this model', status_code=422)
+        raw_model = next(row for row in native['models']
+                         if f"{row['provider']}/{row['id']}" == selected['id'])
+        model = {'provider': raw_model['provider'], 'id': raw_model['id']}
+        try:
+            updated = self._omp_collab.set_model(
+                project.project_root, agent, model, thinking,
+                expected_session_id=native['session_id'], expected_generation=native['generation'],
+                expected_model=native.get('model'), expected_thinking=native.get('thinking_level'),
+                expected_model_revision=native.get('model_revision'),
+                idempotency_key=str(payload['idempotency_key']),
+            )
+        except Exception as exc:
+            raise _omp_collab_gateway_error(exc) from exc
+        if (updated.get('session_id') != native['session_id']
+                or updated.get('generation') != native['generation']
+                or updated.get('model') != model
+                or thinking is not None and updated.get('thinking_level') != thinking):
+            raise MobileGatewayError('OMP model change is not confirmed. Refresh before retrying.', status_code=502)
+        control = _omp_model_control(updated)
+        return {
+            'schema_version': 1, 'status': 'applied', 'agent': agent, 'provider': 'omp',
+            'configured_model': control['active_model'], 'configured_thinking': control['active_thinking'],
+            'active_model': control['active_model'], 'active_thinking': control['active_thinking'],
+            'prior_revision': config_revision, 'config_revision': config_revision,
+            'runtime_revision': control['runtime_revision'], 'mutation_mode': 'native',
+            'changed': _omp_model_revision(updated) != prior, 'restart_required': False,
+        }
 
     def invalidation_audit_payload(self) -> dict[str, int]:
         """Test/diagnostic-only counters for proving idle stream cost."""
@@ -1278,6 +1357,90 @@ class MobileGatewayService:
         cursor = _query_text(query, 'cursor')
         agent_record = _map(target.get('agent_record'))
         provider_key = (_optional_text(agent_record.get('provider')) or '').strip().lower()
+        if provider_key == 'omp' and collab_enabled():
+            if 'cursor' in query and cursor is None:
+                raise MobileGatewayError('cursor must not be empty', status_code=400)
+            snapshot = _omp_collab_snapshot(self._omp_collab, project.project_root, str(target['agent']))
+            # The live replica is bounded and supplies only state/stream metadata.
+            # Historical records come from the native parent-chain page API.
+            scope = (project.project_id, str(target['agent']), int(target['namespace_epoch']),
+                     snapshot['session_id'], snapshot['generation'], snapshot.get('branch_id'))
+            try:
+                position, end, original = (parse_history_cursor(cursor, scope)
+                                           if cursor is not None else (None, None, None))
+
+                def fetch(native_cursor):
+                    try:
+                        return self._omp_collab.get_history_page(
+                            project.project_root, str(target['agent']), cursor=native_cursor,
+                            limit=128, max_bytes=262144,
+                            expected_session_id=snapshot['session_id'],
+                            expected_generation=snapshot['generation'],
+                        )
+                    except Exception as exc:
+                        raise _omp_collab_gateway_error(exc) from exc
+
+                native, records, replay, older = load_omp_turn_window(
+                    fetch, position, turns=max(1, limit // 2),
+                )
+                if native.get('branch_id') != snapshot.get('branch_id'):
+                    raise OmpContentError('stale history cursor', 409)
+                window = {**snapshot, 'entries': records, 'parent_links': [],
+                          'state': {**_map(snapshot.get('state')),
+                                    'leafId': records[-1]['id'] if records else None}}
+                live_leaf = _map(snapshot.get('state')).get('leafId')
+                latest = native.get('anchor_leaf_id') == live_leaf
+                # Even an initial history request can race a newer native leaf.
+                # Never graft stale streams or queued bodies onto that history.
+                if cursor is not None:
+                    latest = latest and bool(records) and records[-1]['id'] == live_leaf
+                if not latest:
+                    # Exact receipt-to-entry bindings remain valid across appends;
+                    # retain those identities without rendering stale pending rows.
+                    window['input_bindings'] = [
+                        *snapshot.get('input_bindings', []),
+                        *(row for row in snapshot.get('pending_inputs', [])
+                          if isinstance(row, dict) and row.get('entry_id')),
+                    ]
+                    window.update(streaming_message=None, stream_id=None, pending_inputs=[])
+                    window['state'].update(isStreaming=False, isAborting=False, queuedMessageCount=0)
+                items = _omp_native_conversation_items(
+                    project.project_root, project_id=project.project_id, agent=str(target['agent']),
+                    mobile_files_dir=self._mobile_files_dir(), snapshot=window,
+                )
+                if original is not None:
+                    content = self._omp_content_pager.content(
+                        items, scope=scope, revision=snapshot['revision'], cursor=original,
+                    )
+                    if content.get('next_cursor'):
+                        content['next_cursor'] = history_cursor(
+                            scope, replay, content=content['next_cursor'])
+                    page = {'items': [], 'native_content': content}
+                else:
+                    page = self._omp_content_pager.page(
+                        items, scope=scope, revision=snapshot['revision'], limit=limit,
+                        cursor=str(end) if end is not None else None,
+                        wrap_content_cursor=lambda value: history_cursor(scope, replay, content=value),
+                    )
+                    page['next_cursor'] = (
+                        history_cursor(scope, replay, end=int(page['next_cursor']))
+                        if page['next_cursor'] is not None else
+                        history_cursor(scope, older) if older is not None else None)
+            except OmpContentError as exc:
+                raise MobileGatewayError(str(exc), status_code=exc.status_code) from exc
+            response = self._agent_conversation_response(
+                project_id=project.project_id, agent=str(target['agent']),
+                namespace_epoch=int(target['namespace_epoch']), page=page,
+            )
+            response['conversation'].update({
+                'transport': 'collab', 'session_id': snapshot['session_id'],
+                'generation': snapshot['generation'], 'revision': snapshot['revision'],
+                'branch_id': snapshot.get('branch_id'),
+                'is_streaming': _map(snapshot.get('state')).get('isStreaming'),
+                'connected': True, 'ready': True,
+                'omp_runtime': _omp_runtime(snapshot, observed_at=self._clock()),
+            })
+            return response
         cache_key = _ConversationPageCacheKey(
             project_id=project.project_id,
             agent=str(target['agent']),
@@ -1346,6 +1509,8 @@ class MobileGatewayService:
         }
         if page.get('next_cursor') is not None:
             conversation['next_cursor'] = page['next_cursor']
+        if 'native_content' in page:
+            conversation['native_content'] = page['native_content']
         return {
             'schema_version': _SCHEMA_VERSION,
             'status': 'ok',
@@ -1576,6 +1741,10 @@ class MobileGatewayService:
                     payload=payload,
                     headers=headers,
                 )
+        ui_route = _parse_project_agent_route(route, suffix='ui-response')
+        if ui_route is not None:
+            project_id, agent = ui_route
+            return 200, self._respond_agent_ui(project_id=project_id, agent=agent, payload=payload, headers=headers)
         message_route = _parse_project_agent_route(route, suffix='messages')
         if message_route is not None:
             project_id, agent = message_route
@@ -1640,6 +1809,35 @@ class MobileGatewayService:
         self._require_pairing_store().delete_push_token(device_id=device.device_id)
         return 200, {'schema_version': _SCHEMA_VERSION, 'status': 'ok'}
 
+    def _respond_agent_ui(self, *, project_id: str, agent: str,
+                          payload: Mapping[str, object], headers: Mapping[str, object] | None) -> dict:
+        self._authenticate_any_scope(headers, allowed_scopes=('message_submit',))
+        project = self._require_project(project_id)
+        for key, expected in (('project_id', project.project_id), ('agent', agent)):
+            if payload.get(key) is not None and payload.get(key) != expected:
+                raise MobileGatewayError('request target does not match route', status_code=400)
+        target = _validate_agent_conversation_target(
+            project_id=project.project_id, view_payload=self._request_project_view(project),
+            agent=agent, namespace_epoch=_optional_int(payload.get('namespace_epoch')))
+        if not collab_enabled() or _normalized_text(_map(target.get('agent_record')).get('provider')) != 'omp':
+            raise MobileGatewayError('Interactive UI responses require managed OMP Collab.', status_code=409)
+        session, generation = payload.get('expected_omp_session_id'), payload.get('expected_omp_generation')
+        req_id, value = payload.get('req_id'), payload.get('value')
+        if (type(req_id) is not int or not 0 <= req_id <= 9007199254740991
+                or (value is not None and (not isinstance(value, str) or len(value) > 512))
+                or not isinstance(session, str) or not session
+                or not isinstance(generation, str) or not generation):
+            raise MobileGatewayError('Invalid UI response or missing conversation fence.', status_code=409)
+        try:
+            result = self._omp_collab.ui_response(project.project_root, str(target['agent']), req_id, value,
+                                                 expected_session_id=session, expected_generation=generation)
+        except Exception as exc:
+            raise _omp_collab_gateway_error(exc) from exc
+        if not isinstance(result, dict) or result.get('req_id') != req_id:
+            raise MobileGatewayError('OMP UI response outcome is unknown; refresh without replay.', status_code=502)
+        return {'schema_version': _SCHEMA_VERSION, 'status': 'accepted',
+                'project_id': project.project_id, 'agent': target['agent'], 'ui_response': {'req_id': req_id}}
+
     def _submit_agent_message(
         self,
         *,
@@ -1672,6 +1870,46 @@ class MobileGatewayService:
             agent=agent,
             namespace_epoch=_optional_int(payload.get('namespace_epoch')),
         )
+        if collab_enabled() and str(_map(target.get('agent_record')).get('provider') or '').strip().lower() == 'omp':
+            expected_session = payload.get('expected_omp_session_id')
+            expected_generation = payload.get('expected_omp_generation')
+            if (not isinstance(expected_session, str) or not expected_session.strip()
+                    or not isinstance(expected_generation, str) or not expected_generation.strip()):
+                raise MobileGatewayError('Refresh the OMP conversation before submitting; expected session and generation are required.', status_code=409)
+            snapshot = _omp_collab_snapshot(self._omp_collab, project.project_root, str(target['agent']))
+            if (snapshot.get('session_id') != expected_session
+                    or snapshot.get('generation') != expected_generation):
+                raise MobileGatewayError('OMP Collab session changed. Refresh the conversation before submitting again.', status_code=409)
+            if _map(snapshot.get('runtime')).get('pending_ui_request') is not None:
+                raise MobileGatewayError('Respond to the active OMP prompt before submitting a message.', status_code=409)
+            try:
+                receipt = self._omp_collab.submit(
+                    project.project_root, str(target['agent']), submit_body, idempotency_key,
+                    expected_session_id=expected_session, expected_generation=expected_generation,
+                )
+            except Exception as exc:
+                raise _omp_collab_gateway_error(exc) from exc
+            state = receipt.get('state')
+            if state not in {'queued', 'sent', 'unconfirmed'}:
+                raise MobileGatewayError('OMP Collab returned an unknown submission result; refresh before retrying.', status_code=502)
+            created_at = self._clock()
+            self._record_project_activity(project.project_id, activity_at=created_at)
+            return {
+                'schema_version': _SCHEMA_VERSION, 'status': 'ok',
+                'project_id': project.project_id, 'agent': target['agent'],
+                'message_submit': {
+                    'accepted': True, 'idempotency_key': idempotency_key,
+                    'message_id': idempotency_key, 'job_id': None, 'state': state,
+                    'request_id': receipt.get('request_id'), 'created_at': created_at,
+                    'queue_position': receipt.get('queue_position', receipt.get('position')),
+                    'message': {
+                        'id': idempotency_key, 'agent': target['agent'], 'kind': 'user_message',
+                        'title': 'You', 'body': body, 'format': message_format,
+                        'state': state, 'source': 'mobile/collab', 'attachments': attachments,
+                        'queue_position': receipt.get('queue_position', receipt.get('position')),
+                    },
+                },
+            }
         if str(target['agent']) == 'frontdesk':
             receipt = self._submit_frontdesk_message(
                 project=project,
@@ -1984,7 +2222,8 @@ class MobileGatewayService:
                 effect='already_running' if action == 'wake' else 'opened',
                 ccb_authority=True,
             )
-            response = _redact_project_view_payload(self._request_project_view(project))
+            response = _redact_project_view_payload(
+                self._with_omp_runtime(project, self._request_project_view(project)))
             response.update({
                 'schema_version': _SCHEMA_VERSION,
                 'status': 'ok',
@@ -2167,6 +2406,7 @@ class MobileGatewayService:
         focus: dict[str, object],
     ) -> dict[str, object]:
         payload = self._request_project_view(project)
+        payload = self._with_omp_runtime(project, payload)
         redacted = _redact_project_view_payload(payload)
         redacted['focus'] = dict(focus or {}) if isinstance(focus, dict) else {}
         return redacted
@@ -2178,6 +2418,8 @@ class MobileGatewayService:
             self._closed = True
             terminal_sessions = tuple(self._terminal_sessions.values())
             self._terminal_sessions.clear()
+        if self._omp_collab is not None:
+            self._omp_collab.close_all()
         for session in terminal_sessions:
             close = getattr(session, 'close', None)
             if callable(close):
@@ -2328,29 +2570,33 @@ class MobileGatewayService:
             project = self._project_registry.get(target.project_id)
             if project is None:
                 continue
-            activity_state = 'unknown'
-            try:
-                probe = self._agent_activity_probe(
-                    project_root=project.project_root,
-                    project_id=target.project_id,
-                    agent=target.agent,
-                    provider=target.provider,
-                    namespace_epoch=target.namespace_epoch,
-                    now=self._clock(),
+            if _normalized_text(target.provider) == 'omp' and collab_enabled():
+                runtime, native = self._omp_runtime_observation(project.project_root, target.agent)
+                activity_state, _ = _omp_runtime_activity(runtime)
+                fingerprint = _omp_runtime_fingerprint(runtime, native)
+            else:
+                activity_state = 'unknown'
+                try:
+                    probe = self._agent_activity_probe(
+                        project_root=project.project_root,
+                        project_id=target.project_id,
+                        agent=target.agent,
+                        provider=target.provider,
+                        namespace_epoch=target.namespace_epoch,
+                        now=self._clock(),
+                    )
+                    activity_state = str(
+                        getattr(probe, 'activity_state', '') or 'unknown'
+                    ).strip().lower()
+                    with self._invalidation_watch_lock:
+                        self._invalidation_audit['watch_activity_probes'] += 1
+                except Exception:
+                    with self._invalidation_watch_lock:
+                        self._invalidation_audit['watch_activity_probe_failures'] += 1
+                # No ccbd project_view or conversation requests in this loop.
+                fingerprint = _agent_native_conversation_cache_fingerprint(
+                    project.project_root, agent=target.agent, provider=target.provider
                 )
-                activity_state = str(
-                    getattr(probe, 'activity_state', '') or 'unknown'
-                ).strip().lower()
-                with self._invalidation_watch_lock:
-                    self._invalidation_audit['watch_activity_probes'] += 1
-            except Exception:
-                with self._invalidation_watch_lock:
-                    self._invalidation_audit['watch_activity_probe_failures'] += 1
-            # Native fingerprints use stat/read of provider-owned local files;
-            # no ccbd project_view or mobile conversation HTTP/RPC occurs here.
-            fingerprint = _agent_native_conversation_cache_fingerprint(
-                project.project_root, agent=target.agent, provider=target.provider
-            )
             digest = hashlib.sha256(repr(fingerprint).encode('utf-8')).hexdigest()[:24]
             snapshots.append(MobileInvalidationSnapshot(
                 project_id=target.project_id,
@@ -2485,6 +2731,7 @@ class MobileGatewayService:
             return summary, attempted_refresh
         except Exception:
             return summary, attempted_refresh
+        view_payload = self._with_omp_runtime(project, view_payload)
         fresh_summary = _project_activity_summary_from_view(view_payload)
         checked_at = self._clock()
         if self._project_activity_store is not None:
@@ -2497,6 +2744,10 @@ class MobileGatewayService:
             except Exception:
                 pass
         merged = dict(summary)
+        # An idle/unknown fresh summary omits working fields; do not preserve
+        # yesterday's active count from the cached project record.
+        merged.pop('has_working_agents', None)
+        merged.pop('working_agent_count', None)
         merged.update(fresh_summary)
         return merged, attempted_refresh
 
@@ -2530,6 +2781,7 @@ class MobileGatewayService:
     def _refresh_server_project_activity(self, project: MobileGatewayProject) -> None:
         try:
             view_payload = self._request_project_view(project)
+            view_payload = self._with_omp_runtime(project, view_payload)
             fresh_summary = _project_activity_summary_from_view(view_payload)
             if self._project_activity_store is not None:
                 self._project_activity_store.record_summary(
@@ -2564,6 +2816,32 @@ class MobileGatewayService:
             )
         except Exception:
             pass
+
+    def _with_omp_runtime(self, project: MobileGatewayProject, payload: dict) -> dict:
+        if not collab_enabled():
+            return payload
+        # Do not mutate a cached ccbd view or let one disconnected agent hide
+        # the rest of the project during view/activity discovery.
+        payload = json.loads(json.dumps(payload))
+        view = _map(payload.get('view')) or payload
+        for record in _iterable(view.get('agents')):
+            if not isinstance(record, dict) or _normalized_text(record.get('provider')) != 'omp':
+                continue
+            name = _optional_text(record.get('name'))
+            if not name:
+                continue
+            runtime, _ = self._omp_runtime_observation(project.project_root, name)
+            state, reason = _omp_runtime_activity(runtime)
+            record.update(omp_runtime=runtime, activity_state=state,
+                          activity_source='native_collab', activity_reason=reason)
+        return payload
+
+    def _omp_runtime_observation(self, root: Path, agent: str) -> tuple[dict, dict]:
+        try:
+            snapshot = self._omp_collab.get_snapshot(root, agent)
+        except Exception:
+            snapshot = {}
+        return _omp_runtime(snapshot, observed_at=self._clock()), snapshot
 
     def _request_project_view(self, project: MobileGatewayProject) -> dict[str, object]:
         with self._invalidation_watch_lock:
@@ -2921,11 +3199,22 @@ def _redact_project_view_payload(payload: dict[str, object]) -> dict[str, object
         if isinstance(namespace, dict):
             for key in _REDACTED_NAMESPACE_KEYS:
                 namespace.pop(key, None)
+        if collab_enabled():
+            for record in _iterable(view.get('agents')):
+                if not isinstance(record, dict) or str(record.get('provider') or '').strip().lower() != 'omp':
+                    continue
+                # Discovery does not connect hidden or unavailable runtimes.
+                control = _map(record.get('provider_control'))
+                control.update(provider='omp', runtime_source='collab', mutation_mode='native')
+                capabilities = _map(control.get('capabilities'))
+                capabilities.update(model_catalog=True, model_select=True, thinking_select=True)
+                control['capabilities'] = capabilities
+                record['provider_control'] = control
     return redacted
 
 
 def _project_activity_summary_from_view(payload: dict[str, object]) -> dict[str, object]:
-    view = _map(payload.get('view'))
+    view = _map(payload.get('view')) or payload
     agents = [_map(item) for item in _iterable(view.get('agents'))]
     working_agents = [agent for agent in agents if _agent_has_working_activity(agent)]
     timestamps: list[object] = []
@@ -3047,6 +3336,9 @@ def _agent_has_working_activity(agent: dict[str, object]) -> bool:
     reason = _normalized_text(agent.get('activity_reason'))
     if state in {'active', 'busy', 'pending', 'running', 'start', 'starting', 'working'}:
         return True
+    if source == 'native_collab':
+        # Native unknown/disconnected must not fall back to stale ccbd queues.
+        return False
     if state in {
         'idle',
         'free',
@@ -3155,6 +3447,8 @@ def _invalidation_snapshots_for_project(
             agent=agent_name,
             provider=provider,
         )
+        if _normalized_text(provider) == 'omp' and collab_enabled():
+            fingerprint = _omp_runtime_fingerprint(_map(agent_record.get('omp_runtime')))
         fingerprint_text = hashlib.sha256(
             repr(fingerprint).encode('utf-8')
         ).hexdigest()[:24]
@@ -3622,6 +3916,11 @@ def _agent_native_conversation_items(
         )
         if provider_key == 'claude' or claude_items:
             return _ConversationItemsResult(claude_items)
+    if provider_key == 'omp' and collab_enabled():
+        return _ConversationItemsResult(_omp_native_conversation_items(
+            project_root, project_id=project_id, agent=agent,
+            mobile_files_dir=mobile_files_dir,
+        ))
     if provider_key in {'', 'pi', 'omp'}:
         native_provider = provider_key or 'pi'
         return _ConversationItemsResult(
@@ -3657,7 +3956,7 @@ def _agent_native_conversation_cache_fingerprint(
         )
         if claude_fingerprint:
             return claude_fingerprint
-    if provider_key in {'', 'pi', 'omp'}:
+    if provider_key in {'', 'pi'} or (provider_key == 'omp' and not collab_enabled()):
         native_provider = provider_key or 'pi'
         pi_family_fingerprint = _pi_family_native_conversation_cache_fingerprint(
             project_root,
@@ -3704,6 +4003,406 @@ def _conversation_page_has_provider_native_items(page: dict[str, object]) -> boo
         if source.startswith('provider_native/'):
             return True
     return False
+
+
+def _omp_status_bar(value: object, *, session_id: object, ready: bool) -> dict:
+    """Accept only native, session-bound status metadata, never tool payloads."""
+    unknown = {'available': False}
+    if not ready or not isinstance(value, dict) or value.get('available') is not True:
+        return unknown
+    if (value.get('source') != 'native_events' or not isinstance(session_id, str) or not session_id or len(session_id) > 256
+            or value.get('session_id') != session_id or type(value.get('is_streaming')) is not bool):
+        return unknown
+    observed = _mobile_conversation_timestamp(str(value.get('observed_at') or '')[:64])
+    if not observed or _parse_mobile_conversation_timestamp(observed) is None:
+        return unknown
+    started = _mobile_conversation_timestamp(str(value.get('started_at') or '')[:64])
+    if started and _parse_mobile_conversation_timestamp(started) is None:
+        started = None
+    elapsed = value.get('elapsed_ms')
+    elapsed = elapsed if type(elapsed) is int and 0 <= elapsed <= 9007199254740991 else None
+    streaming = value['is_streaming']
+    result = {'available': True, 'source': 'native_events', 'session_id': session_id,
+              'observed_at': observed, 'is_streaming': streaming,
+              'started_at': started if streaming else None,
+              'elapsed_ms': elapsed if streaming and started else None,
+              'step': value['step'][:512] if streaming and isinstance(value.get('step'), str) else None,
+              'todos': {'available': False}}
+    todos = value.get('todos')
+    if isinstance(todos, dict) and todos.get('available') is True:
+        counts = {key: todos.get(key) for key in ('done', 'total', 'in_progress', 'blocked')}
+        valid = all(type(count) is int and 0 <= count <= 9007199254740991 for count in counts.values())
+        if valid and counts['done'] + counts['in_progress'] + counts['blocked'] <= counts['total']:
+            clean = {'available': True, **counts, 'items': [], 'truncated': todos.get('truncated') is True}
+            rows = todos.get('items')
+            if isinstance(rows, list):
+                for row in rows[:16]:
+                    if not isinstance(row, dict) or not isinstance(row.get('content'), str) or not isinstance(row.get('phase'), str):
+                        clean['truncated'] = True
+                        continue
+                    if row.get('status') not in {'pending', 'in_progress', 'completed', 'abandoned', 'blocked'}:
+                        clean['truncated'] = True
+                        continue
+                    item = {'content': row['content'][:256], 'phase': row['phase'][:128], 'status': row['status']}
+                    if isinstance(row.get('blocker'), str):
+                        item['blocker'] = row['blocker'][:256]
+                    if any(len(row.get(key, '')) > limit for key, limit in (('content', 256), ('phase', 128))):
+                        clean['truncated'] = True
+                    clean['items'].append(item)
+                clean['truncated'] |= len(rows) > 16
+            else:
+                clean['truncated'] = True
+            result['todos'] = clean
+    while len(json.dumps(result).encode('utf-8')) > 8 * 1024 and result['todos'].get('items'):
+        result['todos']['items'].pop()
+        result['todos']['truncated'] = True
+    return result
+
+
+def _omp_pending_ui_request(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    req_id, kind, title = value.get('req_id'), value.get('kind'), value.get('title')
+    if (type(req_id) is not int or not 0 <= req_id <= 9007199254740991
+            or kind not in {'select', 'editor'} or not isinstance(title, str) or len(title) > 512):
+        return None
+    result = {'req_id': req_id, 'kind': kind, 'title': title}
+    for key in ('help_text', 'prefill', 'marker'):
+        text = value.get(key)
+        if text is not None and (not isinstance(text, str) or len(text) > 512):
+            return None
+        result[key] = text
+    options = value.get('options', [])
+    if not isinstance(options, list) or len(options) > 16:
+        return None
+    result['options'] = []
+    for row in options:
+        if not isinstance(row, dict) or not isinstance(row.get('label'), str) or len(row['label']) > 256:
+            return None
+        option = {'label': row['label']}
+        description = row.get('description')
+        if description is not None:
+            if not isinstance(description, str) or len(description) > 512:
+                return None
+            option['description'] = description
+        result['options'].append(option)
+    initial, checked = value.get('initial_index'), value.get('checked_indices', [])
+    if (initial is not None and (type(initial) is not int or not 0 <= initial < len(options))
+            or not isinstance(checked, list) or len(checked) > len(options)
+            or any(type(index) is not int or not 0 <= index < len(options) for index in checked)
+            or len(set(checked)) != len(checked)):
+        return None
+    result.update(initial_index=initial, checked_indices=list(checked))
+    for row, key in ([(row, 'description') for row in result['options']]
+                     + [(result, key) for key in ('help_text', 'prefill', 'marker', 'title')]):
+        while len(json.dumps(result).encode('utf-8')) > 8192 and row.get(key):
+            row[key] = row[key][:len(row[key]) // 2]
+    if len(json.dumps(result).encode('utf-8')) > 8192:
+        return None
+    return result
+
+
+def _omp_runtime(snapshot: dict, *, observed_at: str) -> dict:
+    """Project bounded semantic progress, never arbitrary args, results or paths."""
+    native = _map(snapshot.get('runtime'))
+    state = _map(snapshot.get('state'))
+    connected = snapshot.get('connected') is True
+    ready = connected and snapshot.get('ready') is True
+    streaming = native.get('is_streaming', state.get('isStreaming'))
+    aborting = native.get('is_aborting', state.get('isAborting')) is True
+    queued = native.get('queued_message_count', state.get('queuedMessageCount'))
+    queued = max(0, queued) if type(queued) is int else 0
+    status_bar = _omp_status_bar(native.get('status_bar'), session_id=snapshot.get('session_id'), ready=ready)
+    if status_bar.get('available'):
+        streaming = status_bar['is_streaming']
+    runtime = {
+        'connected': connected, 'ready': ready, 'progress_available': native.get('progress_available') is True,
+        'is_streaming': streaming if ready and type(streaming) is bool else (None if ready else False),
+        'is_aborting': aborting if ready else False,
+        'queued_message_count': queued if ready else 0,
+        'started_at': _mobile_conversation_timestamp(str(native.get('started_at') or '')[:64]),
+        'observed_at': observed_at, 'model': None, 'thinking_level': None,
+        'context_usage': None, 'activities': [], 'agents': [], 'tasks': [],
+        'truncated': native.get('truncated') is True,
+        'status_bar': status_bar,
+        'pending_ui_request': _omp_pending_ui_request(native.get('pending_ui_request')) if ready else None,
+    }
+    if status_bar.get('available'):
+        runtime['started_at'] = status_bar['started_at']
+    if not ready:
+        runtime['started_at'] = None
+    model = _map(native.get('model', state.get('model')))
+    if isinstance(model.get('provider'), str) and isinstance(model.get('id'), str):
+        runtime['model'] = {key: model[key][:128] for key in ('provider', 'id', 'name')
+                            if isinstance(model.get(key), str)}
+    thinking = native.get('thinking_level', state.get('thinkingLevel'))
+    if isinstance(thinking, str):
+        runtime['thinking_level'] = thinking[:128]
+    usage = _map(native.get('context_usage', state.get('contextUsage')))
+    def finite_nonnegative(value):
+        return type(value) in (int, float) and 0 <= value < float('inf')
+
+    if usage and all(finite_nonnegative(usage.get(key)) for key in ('tokens', 'contextWindow', 'percent')):
+        runtime['context_usage'] = {key: usage[key] for key in ('tokens', 'contextWindow', 'percent')}
+    fields = {
+        'activities': ('id', 'kind', 'status', 'title', 'text', 'tool_name', 'started_at', 'updated_at', 'duration_ms'),
+        'tasks': ('id', 'agent', 'status', 'description', 'parent_tool_call_id', 'index', 'detached',
+                  'started_at', 'updated_at', 'duration_ms', 'tool_name', 'task', 'intent', 'stage', 'progress_text',
+                  'completion_percent', 'tool_count', 'requests', 'tokens', 'context_tokens', 'context_window'),
+        'agents': ('id', 'displayName', 'kind', 'parentId', 'status', 'createdAt', 'lastActivity', 'hasSessionFile'),
+    }
+    candidates = []
+    for kind, keys in fields.items():
+        rows = native.get(kind)
+        if not isinstance(rows, list):
+            continue
+        limit_rows = 8 if kind == 'activities' else 128
+        if len(rows) > limit_rows:
+            runtime['truncated'] = True
+        # Preserve active work before terminal rows when either limit applies.
+        rows = sorted((row for row in rows if isinstance(row, dict)),
+                      key=lambda row: _normalized_text(row.get('status')) not in
+                      {'running', 'active', 'started', 'pending', 'queued', 'streaming'})
+        for row in rows[:limit_rows]:
+            if not isinstance(row, dict):
+                continue
+            clean = {}
+            numeric = {'duration_ms', 'index', 'completion_percent', 'tool_count', 'requests', 'tokens',
+                       'context_tokens', 'context_window', 'createdAt', 'lastActivity'}
+            for key in keys:
+                value = row.get(key)
+                if key in numeric:
+                    if finite_nonnegative(value) and (key != 'completion_percent' or value <= 100):
+                        clean[key] = value
+                elif key in {'detached', 'hasSessionFile'}:
+                    if type(value) is bool:
+                        clean[key] = value
+                elif isinstance(value, str):
+                    limit = {'description': 512, 'title': 512, 'text': 768, 'task': 512,
+                             'intent': 512, 'stage': 256, 'progress_text': 768}.get(key, 256 if key == 'id' and kind == 'activities' else 128)
+                    if len(value) > limit:
+                        runtime['truncated'] = True
+                    clean[key] = value[-limit:] if key in {'text', 'progress_text'} else value[:limit]
+                elif value is None and key == 'parentId':
+                    clean[key] = None
+            if not clean.get('id'):
+                continue
+            if kind == 'activities' and (clean.get('kind') not in {'tool', 'reasoning', 'message', 'retry', 'compaction', 'notice'}
+                                         or clean.get('status') not in {'running', 'completed', 'failed', 'aborted', 'info'}):
+                continue
+            if not ready and clean.get('status') in {'running', 'started'}:
+                clean['status'] = 'aborted'
+            candidates.append((kind, clean))
+    # Main semantic activity and active tasks precede old registry history.
+    candidates.sort(key=lambda pair: (
+        pair[0] != 'activities',
+        _normalized_text(pair[1].get('status')) not in {'running', 'active', 'started', 'pending', 'queued', 'streaming'},
+        pair[0] == 'agents'))
+    # OmpContentPager reserves 16 KiB for the envelope. Leave 4 KiB for its
+    # fences/cursor and cap runtime at 12 KiB including JSON escaping/spacing.
+    byte_size = len(json.dumps(runtime).encode('utf-8'))
+    for kind, row in candidates:
+        row_size = len(json.dumps(row).encode('utf-8')) + 2
+        # ASCII escaping can make a single Unicode-rich row exceed the budget.
+        # Shrink display strings rather than dropping every useful activity.
+        for key in ('text', 'progress_text', 'title', 'task', 'description', 'intent', 'stage'):
+            while byte_size + row_size > 12 * 1024 and len(row.get(key, '')) > 32:
+                value = row[key]
+                row[key] = value[-len(value) // 2:] if key in {'text', 'progress_text'} else value[:len(value) // 2]
+                runtime['truncated'] = True
+                row_size = len(json.dumps(row).encode('utf-8')) + 2
+        if byte_size + row_size > 12 * 1024:
+            runtime['truncated'] = True
+            continue
+        runtime[kind].append(row)
+        byte_size += row_size
+    while len(json.dumps(runtime).encode('utf-8')) > 12 * 1024 and runtime['status_bar'].get('todos', {}).get('items'):
+        runtime['status_bar']['todos']['items'].pop()
+        runtime['status_bar']['todos']['truncated'] = True
+        runtime['truncated'] = True
+    return runtime
+
+
+def _omp_runtime_activity(runtime: dict) -> tuple[str, str]:
+    if not runtime.get('connected'):
+        return 'unknown', 'disconnected'
+    if not runtime.get('ready'):
+        return 'unknown', 'not_ready'
+    if runtime.get('is_streaming') is True:
+        return 'active', 'streaming'
+    if runtime.get('is_aborting') is True:
+        return 'active', 'aborting'
+    if runtime.get('queued_message_count', 0) > 0:
+        return 'pending', 'native_queue'
+    if runtime.get('is_streaming') is False:
+        return 'idle', 'native_idle'
+    return 'unknown', 'native_state_missing'
+
+
+def _omp_runtime_fingerprint(runtime: dict, snapshot: dict | None = None) -> tuple:
+    stable = {key: value for key, value in runtime.items() if key != 'observed_at'}
+    if isinstance(stable.get('status_bar'), dict):
+        stable['status_bar'] = {key: value for key, value in stable['status_bar'].items()
+                                if key not in {'observed_at', 'elapsed_ms'}}
+    identity = {key: (snapshot or {}).get(key)
+                for key in ('session_id', 'generation', 'revision', 'branch_id')}
+    return (json.dumps([identity, stable], sort_keys=True, separators=(',', ':')),)
+
+
+def _omp_model_revision(native: dict) -> str:
+    identity = [native.get(key) for key in
+                ('session_id', 'generation', 'model', 'thinking_level', 'model_revision')]
+    return hashlib.sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
+
+
+def _omp_model_catalog(native: dict) -> dict:
+    models = []
+    for row in native.get('models', []):
+        if not isinstance(row, dict) or not row.get('provider') or not row.get('id'):
+            continue
+        models.append({
+            'id': f"{row['provider']}/{row['id']}", 'label': str(row.get('name') or row['id']),
+            'reasoning_levels': [level for level in row.get('reasoning_levels', [])
+                                 if isinstance(level, str)],
+        })
+    return {
+        'id': 'omp', 'model_shortcut': True, 'model_source': 'native_collab',
+        'models': models, 'custom_model': False, 'static_thinking': False,
+    }
+
+
+def _omp_model_control(native: dict) -> dict:
+    model = native.get('model') or {}
+    active = f"{model['provider']}/{model['id']}" if model.get('provider') and model.get('id') else None
+    selected = next((row for row in _omp_model_catalog(native)['models'] if row['id'] == active), {})
+    return {
+        'provider': 'omp', 'active_model': active, 'active_thinking': native.get('thinking_level'),
+        'session_id': native.get('session_id'), 'runtime_revision': _omp_model_revision(native),
+        'runtime_source': 'collab', 'restart_pending': False, 'mutation_mode': 'native',
+        'thinking_options': selected.get('reasoning_levels', []),
+        'capabilities': {'model_catalog': True, 'model_select': True,
+                         'thinking_select': bool(selected.get('reasoning_levels'))},
+    }
+
+
+def _omp_collab_gateway_error(exc: Exception) -> MobileGatewayError:
+    # Never forward upstream exception strings: they may contain capability URLs.
+    status = getattr(exc, 'status_code', 502) if isinstance(exc, OmpCollabError) else 502
+    if status not in {409, 502, 503}:
+        status = 502
+    message = {
+        503: 'OMP Collab is unavailable. Reconnect the active OMP TUI Collab host; restart that agent with Collab enabled if it predates mobile support.',
+        409: 'OMP Collab session changed or is busy. Refresh and reconnect before submitting again.',
+        502: 'OMP Collab outcome is unknown. Refresh the active conversation before retrying; prompts are not replayed automatically.',
+    }[status]
+    return MobileGatewayError(message, status_code=status)
+
+
+def _omp_collab_snapshot(client: OmpCollabClient, project_root: Path, agent: str) -> dict:
+    try:
+        snapshot = client.get_snapshot(project_root, agent)
+    except Exception as exc:
+        raise _omp_collab_gateway_error(exc) from exc
+    if not snapshot.get('connected') or not snapshot.get('ready'):
+        raise MobileGatewayError('OMP Collab snapshot is not ready. Reconnect the active TUI Collab host before refreshing.', status_code=503)
+    return snapshot
+
+
+def _omp_native_conversation_items(
+    project_root: Path, *, project_id: str, agent: str,
+    mobile_files_dir: Path | None = None, snapshot: dict | None = None,
+) -> list[dict[str, object]]:
+    if snapshot is None:
+        client = OmpCollabClient()
+        try:
+            snapshot = _omp_collab_snapshot(client, project_root, agent)
+        finally:
+            client.close_all()
+    file_roots = [path for path in (
+        mobile_files_dir, project_root / '.ccb' / 'ccbd' / 'mobile' / 'files',
+    ) if path is not None]
+
+    def clean_text(text: str) -> str:
+        return _clean_native_message_text(_inject_workspace_artifacts(
+            text, project_root=project_root, project_id=project_id, agent=agent,
+            mobile_files_dir=mobile_files_dir,
+        ))
+
+    session_id, turns = project_omp_snapshot(snapshot, clean_text=clean_text)
+    items = []
+    pending = [row for row in snapshot.get('pending_inputs', []) if isinstance(row, dict)]
+    # Completed bodies leave pending_inputs, but exact receipt associations
+    # retain the original user ID across later history refreshes.
+    bindings = [row for row in snapshot.get('input_bindings', []) if isinstance(row, dict)]
+    associated = {
+        row['entry_id']: row for row in (*bindings, *pending)
+        if isinstance(row.get('entry_id'), str) and row.get('entry_id')
+        and row.get('session_id') == session_id
+        and row.get('generation') == snapshot.get('generation')
+    }
+    projected_keys = set()
+    for turn in turns:
+        native = {
+            'schema_version': 1, 'session_id': session_id, 'turn_id': turn.turn_id,
+            'status': turn.status, 'transport': 'collab',
+        }
+        identity = json.dumps([session_id, turn.turn_id], ensure_ascii=False)
+        stable_id = hashlib.sha256(identity.encode('utf-8')).hexdigest()[:24]
+        attachment_text = '\n'.join(
+            block['text'] for entry in turn.entries if entry['role'] == 'assistant'
+            for block in entry['blocks'] if block['type'] == 'text'
+        )
+        attachments = _artifact_link_attachments(
+            attachment_text, file_roots=file_roots, project_id=project_id, agent=agent,
+        )
+        for is_user in (True, False):
+            if is_user and turn.user is None or not is_user and not turn.entries:
+                continue
+            entries = [turn.user] if is_user else turn.entries
+            body = ('\n\n'.join(block['text'] for block in turn.user['blocks']
+                               if block['type'] == 'text') if is_user else turn.body)
+            item = {
+                'id': f'omp-{stable_id}-{"user" if is_user else "assistant"}',
+                'agent': agent, 'session_id': session_id,
+                'kind': 'user_message' if is_user else 'agent_reply',
+                'title': 'You' if is_user else 'Agent reply',
+                'body': body, 'format': 'markdown', 'source': 'provider_native/omp',
+                'attachments': [] if is_user else attachments,
+                'native_turn': {**native, 'entries': entries},
+            }
+            if is_user:
+                item['state'] = 'sent'
+                queued = associated.get(turn.user.get('id'))
+                if queued is not None:
+                    key = queued.get('idempotency_key') or queued.get('id')
+                    if isinstance(key, str) and key:
+                        item['id'] = key
+                        projected_keys.add(key)
+            else:
+                _apply_mobile_conversation_timing(
+                    item, started_at=_native_record_timestamp(turn.first_record),
+                    completed_at=(_native_record_timestamp(turn.last_record)
+                                  if turn.status in {'completed', 'failed', 'aborted'} else None),
+                )
+            items.append(item)
+    for row in pending:
+        key = row.get('idempotency_key') or row.get('id')
+        if not isinstance(key, str) or not key or key in projected_keys:
+            continue
+        state = row.get('state')
+        if state not in {'queued', 'unconfirmed', 'sent', 'failed', 'held'}:
+            continue
+        item = {
+            'id': key, 'agent': agent, 'session_id': row.get('session_id'),
+            'kind': 'user_message', 'title': 'You', 'body': clean_text(str(row.get('body') or '')),
+            'format': 'markdown', 'source': 'mobile/collab', 'attachments': [],
+            'state': 'unconfirmed' if state == 'held' else state,
+            'queue_position': row.get('position'),
+        }
+        if state == 'held':
+            item['delivery_reason'] = 'needs_review'
+        items.append(item)
+    return items
 
 
 def _pi_family_native_conversation_items(

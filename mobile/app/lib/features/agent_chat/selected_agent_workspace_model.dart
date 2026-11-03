@@ -1,3 +1,5 @@
+import '../../native_session/native_session_turn.dart';
+import '../../models/omp_runtime.dart';
 import '../../models/ccb_agent.dart';
 import '../../models/ccb_content_item.dart';
 import '../../models/ccb_conversation_item.dart';
@@ -26,6 +28,10 @@ class SelectedAgentWorkspaceModel {
     required this.isComposerCollapsed,
     required this.executionStatus,
     this.workingReplyItemId,
+    this.ompRuntime,
+    this.pendingUiRequest,
+    this.uiRequestScope,
+    this.uiRequestAvailable = false,
   });
 
   final CcbAgent agent;
@@ -42,6 +48,10 @@ class SelectedAgentWorkspaceModel {
   final bool isComposerCollapsed;
   final AgentExecutionStatus? executionStatus;
   final String? workingReplyItemId;
+  final OmpRuntime? ompRuntime;
+  final OmpPendingUiRequest? pendingUiRequest;
+  final String? uiRequestScope;
+  final bool uiRequestAvailable;
 }
 
 SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
@@ -52,6 +62,28 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
   bool hasLocalExecutionException = false,
 }) {
   final remoteConversation = chatController.remoteConversationFor(agent.name);
+  final sameScope = remoteConversation != null &&
+      remoteConversation.projectId == view.project.id &&
+      remoteConversation.namespaceEpoch == view.namespaceEpoch &&
+      remoteConversation.agentName == agent.name &&
+      (agent.providerControl?.sessionId == null ||
+       remoteConversation.ompSessionId == agent.providerControl!.sessionId);
+  final conversationRuntime = sameScope ? remoteConversation.ompRuntime : null;
+  final agentRuntime = agent.ompRuntime;
+  final agentObserved = agentRuntime?.statusBar?.observedAt ?? agentRuntime?.observedAt;
+  final conversationObserved = conversationRuntime?.statusBar?.observedAt ?? conversationRuntime?.observedAt;
+  final newerAgentRuntime = agentObserved != null &&
+      (conversationObserved == null || agentObserved.isAfter(conversationObserved));
+  final observedRuntime = newerAgentRuntime ? agentRuntime : conversationRuntime ?? agentRuntime;
+  // Native status timestamps may not advance when an interactive prompt ends.
+  // Prompt freshness follows the enclosing runtime observation instead.
+  final agentRequestObserved = agentRuntime?.observedAt;
+  final conversationRequestObserved = conversationRuntime?.observedAt;
+  final pendingRuntime = agentRequestObserved != null &&
+      (conversationRequestObserved == null || agentRequestObserved.isAfter(conversationRequestObserved))
+      ? agentRuntime : conversationRuntime ?? agentRuntime;
+  final runtime = isOmpHostUnavailable(chatController.conversationErrorFor(agent.name))
+      ? observedRuntime?.disconnected() : observedRuntime;
   final isLoadingConversation = chatController.isLoadingConversation(
     agent.name,
   );
@@ -59,6 +91,7 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
     agent: agent,
     isAwaitingAgentResponse: isAwaitingAgentResponse,
     hasLocalExecutionException: hasLocalExecutionException,
+    ompRuntime: runtime,
   );
   final rawTimelineItems = [
     if (remoteConversation != null)
@@ -70,9 +103,13 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
       executionStatus.state == 'working'
           ? selectedAgentWorkingReplyItemId(rawTimelineItems)
           : null;
-  final workingPresentationId = syntheticAgentWorkingConversationItemId(
-    agent.name,
-  );
+  final nativeWorkingTurn = runtime == null ? null : rawTimelineItems
+      .where((item) => item.id == rawWorkingReplyItemId || _isExecutingUserMessage(item))
+      .map((item) => item.nativeTurn)
+      .whereType<NativeSessionTurn>()
+      .lastOrNull;
+  final workingPresentationId = syntheticAgentWorkingConversationItemId(agent.name) +
+      (nativeWorkingTurn == null ? '' : '-${nativeWorkingTurn.sessionId}-${nativeWorkingTurn.turnId}');
   if (executionStatus.state == 'working') {
     chatController.claimRemotePresentationId(
       agent.name,
@@ -126,8 +163,8 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
             ...timelineItems,
             syntheticAgentWorkingConversationItem(
               agent.name,
-              startedAt: _latestUserSentAt(timelineItems),
-            ),
+              startedAt: runtime == null ? _latestUserSentAt(timelineItems) : null,
+            ).copyWith(id: workingPresentationId),
           ]
           : timelineItems;
   final visibleWorkingReplyItemId =
@@ -152,6 +189,12 @@ SelectedAgentWorkspaceModel selectedAgentWorkspaceModel({
     isComposerCollapsed: chatController.isComposerCollapsed(agent.name),
     executionStatus: executionStatus,
     workingReplyItemId: visibleWorkingReplyItemId,
+    ompRuntime: runtime,
+    pendingUiRequest: pendingRuntime?.pendingUiRequest,
+    uiRequestScope: '${remoteConversation?.ompSessionId}:${remoteConversation?.ompGeneration}',
+    uiRequestAvailable: sameScope && pendingRuntime?.connected == true && pendingRuntime?.ready == true &&
+        remoteConversation.ompSessionId != null && remoteConversation.ompGeneration != null &&
+        !isOmpHostUnavailable(chatController.conversationErrorFor(agent.name)),
   );
 }
 
@@ -203,7 +246,7 @@ CcbConversationItem syntheticAgentWorkingConversationItem(
 
 DateTime? _latestUserSentAt(List<CcbConversationItem> items) {
   for (final item in items.reversed) {
-    if (item.kind == CcbConversationItemKind.userMessage) {
+    if (_isExecutingUserMessage(item)) {
       return item.sentAt;
     }
   }
@@ -217,7 +260,7 @@ String? selectedAgentWorkingReplyItemId(List<CcbConversationItem> items) {
   var latestReplyIndex = -1;
   for (var index = 0; index < items.length; index += 1) {
     final item = items[index];
-    if (item.kind == CcbConversationItemKind.userMessage) {
+    if (_isExecutingUserMessage(item)) {
       latestUser = item;
       latestUserIndex = index;
     } else if (item.kind == CcbConversationItemKind.agentReply) {
@@ -227,6 +270,10 @@ String? selectedAgentWorkingReplyItemId(List<CcbConversationItem> items) {
   }
   if (latestReply == null) {
     return null;
+  }
+  if (latestReply.source == 'provider_native/omp' &&
+      latestReply.nativeTurn?.status.name == 'running') {
+    return latestReply.id;
   }
   final completedNativeCurrentTurn =
       latestReply.completedAt != null &&
@@ -249,6 +296,12 @@ String? selectedAgentWorkingReplyItemId(List<CcbConversationItem> items) {
   }
   return _isCurrentTurnReplyCandidate(latestReply) ? latestReply.id : null;
 }
+
+bool _isExecutingUserMessage(CcbConversationItem item) =>
+    item.kind == CcbConversationItemKind.userMessage &&
+    item.state != CcbConversationDeliveryState.queued &&
+    (item.source != 'mobile/collab' ||
+        item.state == CcbConversationDeliveryState.sent);
 
 bool _isCurrentTurnReplyCandidate(CcbConversationItem item) {
   final source = item.source ?? '';

@@ -55,6 +55,15 @@ def test_codex_empty_placeholder_with_terminal_right_padding():
     assert inspect_screen('codex', screen, binding='pane').state == 'nonempty'
 
 
+@pytest.mark.parametrize('border', ['────────────', '──────────── Claude ────'])
+@pytest.mark.parametrize('padding', ['', '    '])
+@pytest.mark.parametrize('draft,expected', [('', 'empty'), ('human draft', 'nonempty')])
+def test_claude_plain_and_titled_borders_allow_terminal_padding(border, padding, draft, expected):
+    screen = {'text': f'{border}{padding}\n❯ {draft}\n────────────{padding}',
+              'cursor_x': 2 + len(draft), 'cursor_y': 1}
+    assert inspect_screen('claude', screen, binding='pane').state == expected
+
+
 class Target:
     def __init__(self, *, clears=True):
         self.state = 'nonempty'
@@ -348,3 +357,14 @@ def test_preclaim_binding_resolution_is_read_only(tmp_path, monkeypatch, provide
     context.backend_type = 'tmux'
     with pytest.raises(ValueError, match='missing managed binding'):
         resolve_job_target(job, context)
+
+
+def test_native_task_observation_ignores_cursor_and_uses_owner_binding():
+    from provider_execution.draft_guard import DraftTarget
+    backend = SimpleNamespace(capture_composer=lambda _: pytest.fail('native ingress queried cursor'))
+    target = DraftTarget('omp', backend, '%1', 'launch', '/native.sock')
+    target._editor_request = lambda *_: dict(task_ingress_version=1, state='empty',
+                                            runtime_instance_id='runtime', session_id='native')
+    observed = target.observe()
+    assert observed.state == 'empty'
+    assert observed.binding == 'launch:runtime:native'

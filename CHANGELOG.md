@@ -7,6 +7,84 @@
 - Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
 - Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
 
+## v8.7.21 (2026-11-02)
+
+- OpenCode 2.2.x native task support, safe legacy WAL snapshots, and OMP native task ingress. See [bilingual release notes](docs/releases/v8.7.21.md).
+- OpenCode 2.2.x 原生任务适配、旧版 WAL 安全快照读取与 OMP 原生任务入口。详见[中英双语版本说明](docs/releases/v8.7.21.md)。
+
+## v8.7.20 (2026-10-29)
+
+- Render mobile chat and content Markdown through a shared `CcbMarkdown` widget backed by `gpt_markdown` 1.3.x, preserving link routing and selectable text while adding code highlighting/copy controls, task checkboxes and LaTeX. Keep dependency locking aligned with Flutter 3.44.2.
+
+## v8.7.19 (2026-10-26)
+
+- Support live OMP Collab select/editor questions on mobile through fenced native `ui-response`, including custom input, stale/disconnect handling and no-replay unknown delivery. Route replies through HTTP and encrypted Relay; keep questions separate from ordinary queued chat messages.
+- Replace raw JSON original-content pages with bounded semantic content pages and a full-screen “Complete content” reader. Render assistant prose as Markdown, with reasoning and tools independently folded, instead of exposing serialized record fields or byte offsets.
+- Preserve exact projected source blocks across Unicode-safe pages, including code-fence continuation rendering; keep immutable version/branch fences, current-page-only reader memory, and visible load errors without mixing content versions.
+- Expose bounded OMP Collab runtime metadata in Mobile: native main-turn activity/elapsed time, queue depth, model/thinking/context usage, task lifecycle/progress and agent-registry status. Use native observations consistently for project working counts and selected-agent status; disconnected or missing evidence never becomes idle.
+- Keep task identities and reply bubbles distinct across consecutive turns, support reused subagents and bounded long-session retention, and preserve current runtime while paging older history. Android qualification exercises real upstream Collab state, task bus and agent-registry frames through the production gateway and app without model calls.
+- Synchronize the OMP status bar through owner-bound native inspection: native-process elapsed time, the current working step, and canonical Todo done/total plus active items. Use a local monotonic clock between native observations, preserve exact counts under truncation, and ignore clock-only ticks in conversation/invalidation fingerprints.
+- Remove Execution process and recent raw tool/intent lists from normal chat. Preserve every assistant prose entry and keep Complete content as an explicit reader; missing native status/time/Todo evidence remains unavailable rather than guessed from messages or rendered terminal text.
+- Keep active native reply bubbles free of misleading “Tool execution unfinished” and “No assistant answer” placeholders. Before the first native intent arrives, the status bar explicitly waits for a native step instead of presenting an unexplained “Not reported” label.
+- Render native elapsed time, current step and active Todo inside the current working reply bubble, outside its collapsible prose. Idle/disconnected observations remain in the workspace status area; do not duplicate the same running state above the timeline.
+- Replace the mobile Tab shortcut with an explicit Codex Queue action. Submit `/queue <draft and uploaded attachments>` with Enter rather than a Tab byte; preserve the unprefixed user bubble, ignore empty queue clicks, and hide the queue action for other providers.
+- Bind Pi/OMP completion tracking to the parent session and ignore in-process subagent turns. Subagent `before_agent_start`/`turn_end`/`agent_end` activity no longer supersedes the active request or leaks its output into the parent reply; the parent keeps request attribution through task-tool fan-out, matching the Codex parent-binding behavior.
+
+## v8.7.18 (2026-10-23)
+
+- Keep healthy OMP Mobile Collab connections alive when history queries fail; report history errors separately from owner/transport failures instead of repeated leave/rejoin cycles.
+- Page native history through indexed parent-chain queries with session/branch-fenced, append-stable cursors and lossless oversized-record chunks. Retain only a bounded recent Collab replica; older messages and complete tool/text originals remain readable on demand.
+- Preserve loaded phone history across live appends and reject old cursors after genuine branch changes. Local Android emulator qualification uses the real native host, generated bridge, gateway and encrypted Relay, without paid inference or changes to live nozeli sessions.
+- Oversized OMP replies now keep a readable structured latest-content window inside the conversation bubble instead of clearing entries and showing only a 512-character prefix. Bound the serialized item to 24 KiB, at most 8 entries / 24 blocks, prioritize recent assistant prose, retain bounded tool/reasoning snippets, and replace the window on refresh without accumulating stale content. Complete originals remain available separately.
+- Fence native history/live-replica append races, retain exact input identities, and preserve complete original content. Update server and Android app together; normally restart idle OMP Agents to load the new native bridge. [Full bilingual notes](docs/releases/v8.7.18.md).
+
+## v8.7.17 (2026-10-22)
+
+- Add bounded, owner-bound native OMP `reply_deliver` / `reply_status` ingress so returned replies do not wait behind an entire long-running business turn. Deliver `ccb-reply` as an aside at a safe step boundary.
+- Treat only a persisted native `custom_message` receipt as delivery completion and release the mailbox without claiming subsequent business processing is finished; preserve composer drafts and active ask anchors, start no concurrent turn, and query ambiguous sends instead of replaying them.
+- Existing OMP processes must restart normally when idle to load the new extension; never restart a busy session just to apply this update.
+- 为 OMP 增加有界、绑定归属的原生回复投递/状态接口，在安全步骤边界以 aside 接收 `ccb-reply`，避免回复被完整长回合阻塞。仅以持久化的原生 `custom_message` 为收据并释放邮箱，不表示后续业务完成；保留草稿及活跃 ask 锚点，不启动并发回合，发送结果不明时查询而不重放。已有 OMP 进程请在空闲后正常重启加载扩展，不要重启忙碌会话。
+- Preserve v8.7.16 history and the existing WeChat QR image/cache key; [full bilingual notes](docs/releases/v8.7.17.md).
+
+## v8.7.16 (2026-10-22)
+
+- Include `6d3ae4a53`: recover OMP Python `ask` caller identity from an exact configured managed `PI_CODING_AGENT_DIR` when the tool filters CCB environment fields, preserving existing identity precedence and completion mailbox routing.
+- Refresh the WeChat group 2 invitation image and README cache keys; the supplied QR expires October 29.
+- Retain v8.7.15's incremental OMP Mobile conversation history and durable FIFO delivery; [full bilingual notes](docs/releases/v8.7.16.md).
+
+## v8.7.15 (2026-10-22)
+
+- Incrementally merge same-branch OMP history and preserve all visible assistant prose, loaded older pages and disclosure state instead of replacing the current view.
+- Accept running-session messages into a bounded durable FIFO with visible queued/held status, exact native input identity, one-at-a-time dispatch and no unknown replay.
+- Include the Relay large-history repair from the incomplete v8.7.14 prerelease; [full bilingual notes](docs/releases/v8.7.15.md).
+
+## v8.7.14 (incomplete prerelease; publication paused)
+
+- Bound Linux OMP conversation pages by serialized bytes below the CCB Relay limit; oversized turns expose versioned, UTF-8-safe original-content pages rather than dropping tool history.
+- Return correlated Relay payload-limit errors instead of request timeouts, and distinguish conversation-load failures from actual OMP host disconnection.
+- Add an opt-in parallel-install Debug APK identifier for Relay repair testing without replacing the signed production app.
+- Correct Relay mobile message target forwarding (`agent` with compatible legacy `agent_name`), rejecting conflicting identities; [full bilingual notes](docs/releases/v8.7.14.md).
+
+## v8.7.13 (2026-10-21)
+
+- Extract a product-independent native-session Flutter model and turn renderer for CCB and future Nozeli mobile consumers.
+- Render OMP replies as user-anchored turns with folded reasoning, intermediate text and native tool calls/results; preserve branch identity and explicit failure/unknown outcomes.
+- Connect only OMP mobile agents to their existing TUI through private native Collab snapshots/events and fenced prompt submission; keep other Provider paths unchanged.
+- Add live OMP model/effort selection with same-session readback, draft/busy protection, stale revision rejection and no project configuration writes.
+- Show disconnected and unconfirmed delivery states without prompt replay; pause selected-agent refresh in the background.
+- Preserve exact native ancestry across metadata entries omitted by Collab, keeping real tool calls/results in their original reply turn.
+- Give new OMP mobile submissions cross-launch unique keys while preserving the original key for retries, avoiding collisions after app/controller recreation.
+- Enable the new OMP Collab route only on Linux servers; macOS retains its original OMP terminal/history path. Mobile routing follows server-advertised capabilities rather than the Provider name alone.
+- Synchronize Mobile update identity and download entry; [full bilingual notes](docs/releases/v8.7.13.md).
+
+## v8.7.12 (2026-10-19)
+
+- Recover proven orphaned reply-delivery leases without replacing pending jobs; preserve execution evidence and live ownership.
+- Correct silent/callback completion status, show pending deliveries, and retain 20 recent communication rows.
+- Recognize newer Claude/Codex composers and preserve padded Claude borders and draft protection.
+- 修复失效回复租约、通信状态及输入框兼容，保留草稿保护；继续包含 PR #386 的 V2 工作流隔离。
+- [Full bilingual notes](docs/releases/v8.7.12.md).
+
 ## v8.7.11 (2026-10-13)
 
 - Isolate V3 workflow policies from ordinary V2 routing, recovery and completion.

@@ -87,6 +87,14 @@ class DraftTarget:
 
     def observe(self) -> Observation:
         try:
+            if self.provider == 'omp' and self.editor_socket:
+                data = self._editor_request('inspect')
+                if data.get('task_ingress_version') == 1:
+                    self._native = data
+                    binding = f'{self.generation}:{data.get("runtime_instance_id", "")}:{data.get("session_id", "")}'
+                    state = data.get('state')
+                    return Observation(state if state in {'empty', 'nonempty'} else 'unknown',
+                                       binding, str(data.get('reason') or state))
             screen = self.backend.capture_composer(self.pane_id)
             binding = f'{self.generation}:{screen["binding"]}'
             if screen.get('blocked'):
@@ -219,6 +227,11 @@ def resolve_job_target(job, context) -> DraftTarget | None:
     data = json.loads(session_file.read_text(encoding='utf-8-sig'))
     if not isinstance(data, dict):
         raise ValueError('invalid managed binding')
+    if job.provider == 'omp' and str(getattr(getattr(job, 'request', None), 'message_type', '')) == 'reply_delivery':
+        from provider_backends.omp.reply_delivery import capable
+        if capable(str(data.get('omp_draft_guard_socket') or ''), job.agent_name,
+                   str(data.get('ccb_session_id') or '')):
+            return None
     backend = get_backend_for_session(data)
     config = initial_guard_state(job.provider, backend, data)
     if not config['draft_guard_enabled']:

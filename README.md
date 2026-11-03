@@ -6,7 +6,7 @@
 **Coordinate Codex, Claude, Gemini, and other CLI agents in visible, controllable workflows you can take over**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.7.11-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.21-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL%20%7C%20Windows%20beta-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -52,9 +52,48 @@
 - Hub capability: run multiple CLI providers concurrently from one command.
 - Mobile remote controller: cross-provider voice control, file transfer, and remote terminal access.
 
-## New in 8.7.11: V2 Compatibility and Pi Completion Repair
+## New in 8.7.21: OpenCode v2 and native Provider reliability / OpenCode v2 与原生通信修复
 
-Keep V3 workflow policies out of ordinary V2 projects, preserve Pi request attribution after image-input transformation, and scope cancellation to the active request. [Notes](docs/releases/v8.7.11.md).
+OpenCode 2.2.x gains opt-in native task submission and idle completion. Legacy OpenCode reads use private snapshots to avoid touching Provider WAL indexes; OMP tasks use native ingress. See [bilingual release notes](docs/releases/v8.7.21.md) and the [OpenCode configuration contract](docs/opencode-completion-contract.md).
+
+OpenCode 2.2.x 新增显式启用的原生任务提交与完成判定；旧版 OpenCode 使用私有快照读取，OMP 使用原生任务入口。启用方式与限制见版本说明。
+
+## New in 8.7.20: Mobile Markdown rendering / 手机 Markdown 渲染升级
+
+Chat and content readers share a selectable `gpt_markdown` renderer with syntax-highlighted code, copy controls, task checkboxes and LaTeX. Existing artifact routing and external-link confirmation are preserved. [Bilingual notes](docs/releases/v8.7.20.md).
+
+
+## New in 8.7.19: OMP Mobile native questions and runtime status / OMP 原生交互与运行状态
+
+OMP Mobile now renders native OMP Collab select/editor questions as interactive cards and returns answers through the fenced native `ui-response` channel over HTTP or encrypted Relay. The workspace also shows bounded native runtime status such as the current step, elapsed time, queue depth, model/thinking/context usage, task progress and Todo counts. Upgrade the server and app together; idle existing OMP processes must be restarted normally to load the bridge, and busy agents must not be interrupted.
+
+[Full bilingual notes](docs/releases/v8.7.19.md).
+
+## New in 8.7.18: Stable OMP Mobile History / 稳定长历史
+
+OMP Mobile now paginates stable long history through bounded native parent-chain pages. History-query errors preserve a healthy WebSocket and already-loaded content. Oversized replies keep a structured latest-content bubble capped at 24 KiB, 8 entries and 24 blocks; complete originals remain available as a secondary reader. Upgrade both the server and app, then restart existing OMP processes normally when idle; do not interrupt busy agents or discard history.
+
+[Full bilingual notes](docs/releases/v8.7.18.md).
+
+## New in 8.7.17: OMP Reply Receipts, Not Business Completion
+
+OMP replies use bounded, owner-bound native `reply_deliver` / `reply_status` delivery. A `ccb-reply` is received as an aside at a safe step boundary; only a persisted native `custom_message` counts as a receipt and releases the mailbox. Receipt does not mean subsequent business processing is finished. Drafts and active ask anchors remain intact, no concurrent turn is started, and ambiguous sends are queried rather than replayed. [Notes](docs/releases/v8.7.17.md).
+
+## New in 8.7.16: OMP Python Ask Sender Identity Recovery
+
+When CCB environment variables are filtered, OMP Python `ask` now recovers the sender identity from the exact configured managed `PI_CODING_AGENT_DIR`. Existing identity precedence is preserved, and historical jobs are not replayed. The WeChat group 2 QR code has also been refreshed and is valid until October 29. [Notes](docs/releases/v8.7.16.md).
+
+## New in 8.7.15: Reliable OMP Mobile Turns
+
+Linux OMP Mobile now preserves earlier reply text while appending same-session updates, with tool reasoning folded in place. Runtime sends use a persisted FIFO and run serially; queued sends remain visible but cannot steer an active turn, and disconnects with an unknown outcome are held instead of blindly replayed. This release also includes the 8.7.14 Relay and large-history fixes. The legacy macOS route is unchanged. [Notes](docs/releases/v8.7.15.md).
+
+## New in 8.7.13: OMP Mobile Collab on Linux
+
+Linux OMP agents now connect Mobile to the existing native TUI through a private loopback Collab relay, with live output, reasoning, tool calls, and results grouped into user-anchored reply bubbles. Mobile can select the current native model and supported thinking level in the same host session. The new route is Linux-only: macOS keeps the original OMP terminal-input and native-history route, and other providers are unchanged. [Notes](docs/releases/v8.7.13.md).
+
+## New in 8.7.12: Reply Queue Recovery and Composer Compatibility
+
+Recover proven stale delivery leases without duplicating pending jobs, correct silent/callback completion status, and recognize newer Claude/Codex input layouts. [Notes](docs/releases/v8.7.12.md).
 
 ## New in 8.7.10: Faster Pi Plugin Startup
 
@@ -337,9 +376,9 @@ This command guides installation and configuration.
 <details>
 <summary><b>Mobile App details, safety boundary, and source</b></summary>
 
-CCB 8.7.11 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
+CCB 8.7.21 includes the Flutter CCB Mobile source in [`mobile/`](mobile/) and publishes the Android APK through GitHub Releases:
 
-- [Download CCB Mobile v8.7.11 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.11/ccb-mobile-v8.7.11.apk)
+- [Download CCB Mobile v8.7.21 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.21/ccb-mobile-v8.7.21.apk)
 - App source: [`mobile/app`](mobile/app)
 - Server gateway source: [`lib/mobile_gateway`](lib/mobile_gateway)
 
@@ -410,7 +449,7 @@ Supported managed Agents receive the built-in `ask`, `ccb-clear`, `ccb-compact`,
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="assets/weixin.png?v=583d37f5" alt="CCB WeChat group 2" width="240">
+  <img src="assets/weixin.png?v=a9f2d800" alt="CCB WeChat group 2" width="240">
 </p>
 
 > WeChat group QR codes are valid for seven days. If this one has expired, add `seemseam-com` to request the latest invitation.
@@ -427,7 +466,80 @@ Thanks to [tmux-agent-sidebar](https://github.com/hiroppy/tmux-agent-sidebar) fo
 
 ## Release Notes
 
+<details>
+<summary><b>v8.7.21</b> - OpenCode v2 native support / OpenCode v2 原生适配</summary>
+
+Native OpenCode 2.2.x task ingress and idle completion; private legacy database snapshots; OMP native task delivery. OpenCode 2.2.x 原生入队与 idle 完成判定、旧版数据库私有快照和 OMP 原生投递。 [Release notes / 版本说明](docs/releases/v8.7.21.md).
+
+</details>
+
 <details open>
+<summary><b>v8.7.19</b> - OMP Mobile native questions and runtime status / OMP 原生交互与运行状态</summary>
+
+OMP Mobile now renders native OMP Collab select/editor questions as interactive cards and returns answers through the fenced native `ui-response` channel over HTTP or encrypted Relay. The workspace also shows bounded native runtime status such as the current step, elapsed time, queue depth, model/thinking/context usage, task progress and Todo counts. Upgrade the server and app together; restart idle OMP processes normally and do not interrupt busy agents.
+
+[Full bilingual notes](docs/releases/v8.7.19.md).
+</details>
+
+<details open>
+<summary><b>v8.7.18</b> - Stable OMP Mobile history / 稳定长历史</summary>
+
+OMP Mobile now paginates stable long history through bounded native parent-chain pages. History-query errors preserve a healthy WebSocket and already-loaded content. Oversized replies keep a structured latest-content bubble capped at 24 KiB, 8 entries and 24 blocks; complete originals remain available as a secondary reader. Upgrade both the server and app, then restart existing OMP processes normally when idle; do not interrupt busy agents or discard history.
+
+[Full bilingual notes](docs/releases/v8.7.18.md).
+</details>
+
+<details open>
+<summary><b>v8.7.17</b> - OMP reply receipts / OMP 回复收据</summary>
+
+OMP replies use bounded, owner-bound native `reply_deliver` / `reply_status` delivery. A `ccb-reply` is received as an aside at a safe step boundary; only a persisted native `custom_message` counts as a receipt and releases the mailbox. Receipt does not mean subsequent business processing is finished. Drafts and active ask anchors remain intact, no concurrent turn is started, and ambiguous sends are queried rather than replayed.
+
+OMP 回复通过有界、绑定归属的原生 `reply_deliver` / `reply_status` 投递；`ccb-reply` 在安全步骤边界作为 aside 接收。只有已持久化的原生 `custom_message` 才算收据并释放邮箱，不代表后续业务处理完成。保留草稿与活跃 ask 锚点，不启动并发回合；发送结果不明时查询状态，不重放。
+
+[Full bilingual notes](docs/releases/v8.7.17.md).
+</details>
+
+<details open>
+<summary><b>v8.7.16</b> - OMP Python ask sender identity recovery</summary>
+
+Recover the OMP Python `ask` sender identity from the exact configured managed `PI_CODING_AGENT_DIR` when CCB environment variables are filtered, while preserving existing identity precedence and without replaying historical jobs. Refresh the WeChat group 2 QR code, valid until October 29.
+
+[Full bilingual notes](docs/releases/v8.7.16.md).
+</details>
+
+<details>
+<summary><b>v8.7.15</b> - Reliable OMP Mobile turns</summary>
+
+Preserve earlier reply text across same-session incremental updates, fold tool reasoning in place, and serialize runtime sends through a persisted FIFO. Queued sends remain visible but do not steer an active turn; unknown disconnect outcomes are held rather than blindly replayed. Includes the 8.7.14 Relay and large-history fixes on Linux; the legacy macOS route is unchanged.
+
+[Full bilingual notes](docs/releases/v8.7.15.md).
+</details>
+
+<details>
+<summary><b>v8.7.14</b> - Incomplete prerelease (Android release canceled)</summary>
+
+This incomplete prerelease contained the Linux OMP history paging and Relay work now included in 8.7.15. No Android release was published.
+
+[Full bilingual notes](docs/releases/v8.7.14.md).
+</details>
+
+<details>
+<summary><b>v8.7.13</b> - OMP Mobile Collab on Linux</summary>
+
+Connect Linux OMP Mobile sessions to the native TUI through Collab, with user-anchored reply bubbles and same-session model and thinking selection. macOS keeps its original terminal-input and native-history route; other providers are unchanged.
+
+[Full bilingual notes](docs/releases/v8.7.13.md).
+</details>
+
+<details>
+<summary><b>v8.7.12</b> - Reply queue recovery and composer compatibility</summary>
+
+Recover stale reply delivery, correct communication status, and preserve drafts and valid lease ownership.
+
+[Full bilingual notes](docs/releases/v8.7.12.md).
+</details>
+
+<details>
 <summary><b>v8.7.11</b> - V2 workflow compatibility and Pi completion repair</summary>
 
 Isolate V3 workflow policies, repair Pi transformed-input attribution and active-request cancellation, and refresh the WeChat QR image.

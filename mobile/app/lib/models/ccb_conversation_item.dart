@@ -1,3 +1,5 @@
+import '../native_session/native_session.dart';
+
 import 'ccb_content_item.dart';
 
 enum CcbConversationItemKind {
@@ -12,7 +14,7 @@ enum CcbConversationItemKind {
   systemNotice,
 }
 
-enum CcbConversationDeliveryState { pending, sent, failed, unconfirmed }
+enum CcbConversationDeliveryState { pending, queued, sent, failed, unconfirmed }
 
 enum CcbMessageAttachmentKind { image, document }
 
@@ -45,6 +47,7 @@ extension CcbConversationDeliveryStateWire on CcbConversationDeliveryState {
   String get wireName {
     return switch (this) {
       CcbConversationDeliveryState.pending => 'pending',
+      CcbConversationDeliveryState.queued => 'queued',
       CcbConversationDeliveryState.sent => 'sent',
       CcbConversationDeliveryState.failed => 'failed',
       CcbConversationDeliveryState.unconfirmed => 'unconfirmed',
@@ -94,6 +97,7 @@ CcbConversationDeliveryState? ccbConversationDeliveryStateFromWireName(
 ) {
   return switch (_text(value)) {
     'pending' => CcbConversationDeliveryState.pending,
+    'queued' => CcbConversationDeliveryState.queued,
     'sent' => CcbConversationDeliveryState.sent,
     'failed' => CcbConversationDeliveryState.failed,
     'unconfirmed' => CcbConversationDeliveryState.unconfirmed,
@@ -132,6 +136,10 @@ class CcbConversationItem {
     required this.body,
     this.format = 'plain',
     this.state,
+    this.queuePosition,
+    this.deliveryReason,
+    this.readCursor,
+    this.readReason,
     this.contentId,
     this.source,
     this.sessionId,
@@ -140,6 +148,7 @@ class CcbConversationItem {
     this.completedAt,
     this.durationMs,
     this.attachments = const [],
+    this.nativeTurn,
   });
 
   final String id;
@@ -149,6 +158,10 @@ class CcbConversationItem {
   final String body;
   final String format;
   final CcbConversationDeliveryState? state;
+  final int? queuePosition;
+  final String? deliveryReason;
+  final String? readCursor;
+  final String? readReason;
   final String? contentId;
   final String? source;
   final String? sessionId;
@@ -157,6 +170,7 @@ class CcbConversationItem {
   final DateTime? completedAt;
   final int? durationMs;
   final List<CcbMessageAttachment> attachments;
+  final NativeSessionTurn? nativeTurn;
 
   factory CcbConversationItem.userMessage({
     required String id,
@@ -261,6 +275,10 @@ class CcbConversationItem {
       body: _optionalText(json['body']) ?? _text(json['text']),
       format: _text(json['format'], fallback: 'plain'),
       state: ccbConversationDeliveryStateFromWireName(json['state']),
+      queuePosition: _optionalInt(json['queue_position']),
+      deliveryReason: _optionalText(json['delivery_reason']),
+      readCursor: _optionalText(json['read_cursor']),
+      readReason: _optionalText(json['read_reason']),
       contentId:
           _optionalText(json['content_id']) ?? _optionalText(json['contentId']),
       source: _optionalText(json['source']),
@@ -279,6 +297,12 @@ class CcbConversationItem {
       durationMs:
           _optionalInt(json['duration_ms']) ??
           _durationSecondsToMs(json['duration_seconds']),
+      nativeTurn:
+          json['native_turn'] is Map
+              ? NativeSessionTurn.fromJson(
+                Map<String, Object?>.from(json['native_turn'] as Map),
+              )
+              : null,
       attachments: [
         if (json['attachments'] is Iterable)
           for (final item in json['attachments'] as Iterable)
@@ -300,9 +324,14 @@ class CcbConversationItem {
       'body': body,
       'format': format,
       if (state != null) 'state': state!.wireName,
+      if (queuePosition != null) 'queue_position': queuePosition,
+      if (deliveryReason != null) 'delivery_reason': deliveryReason,
+      if (readCursor != null) 'read_cursor': readCursor,
+      if (readReason != null) 'read_reason': readReason,
       if (contentId != null) 'content_id': contentId,
       if (source != null) 'source': source,
       if (sessionId != null) 'session_id': sessionId,
+      if (nativeTurn != null) 'native_turn': nativeTurn!.toJson(),
       if (sentAt != null) 'sent_at': sentAt!.toUtc().toIso8601String(),
       if (startedAt != null) 'started_at': startedAt!.toUtc().toIso8601String(),
       if (completedAt != null)
@@ -323,6 +352,7 @@ class CcbConversationItem {
     DateTime? startedAt,
     DateTime? completedAt,
     int? durationMs,
+    NativeSessionTurn? nativeTurn,
   }) {
     return CcbConversationItem(
       id: id ?? this.id,
@@ -332,6 +362,10 @@ class CcbConversationItem {
       body: body ?? this.body,
       format: format,
       state: state ?? this.state,
+      queuePosition: queuePosition,
+      deliveryReason: deliveryReason,
+      readCursor: readCursor,
+      readReason: readReason,
       contentId: contentId,
       source: source,
       sessionId: sessionId ?? this.sessionId,
@@ -340,6 +374,7 @@ class CcbConversationItem {
       completedAt: completedAt ?? this.completedAt,
       durationMs: durationMs ?? this.durationMs,
       attachments: attachments ?? this.attachments,
+      nativeTurn: nativeTurn ?? this.nativeTurn,
     );
   }
 }

@@ -63,6 +63,8 @@ def test_native_active_status_still_blocks(body):
 @pytest.mark.parametrize('footer', [
     ['  ? for shortcuts', '  remaining draft'],
     ['  GPT-6.1-Sol · workspace', '  unrecognized continuation'],
+    ['  GPT-6.1-Sol · workspace', '  ? for shortcuts — unrecognized continuation'],
+    ['  GPT-6.1-Sol · workspace', '  ? for shortcuts\t⚠ 2 warnings · f2 to view'],
 ])
 def test_arbitrary_indented_text_is_not_a_multiline_footer(footer):
     assert inspect_screen('codex', screen(footer=footer), binding='pane').state == 'unknown'
@@ -117,3 +119,94 @@ def test_completed_multiline_screen_releases_same_fifo_head_once(tmp_path, monke
     assert execution.started[:2] == [first.job_id, second.job_id]
     assert execution.started.count(first.job_id) == execution.started.count(second.job_id) == 1
     assert target.clear_count == 0
+
+
+def test_combined_agents_and_shortcuts_hint_releases_empty_composer() -> None:
+    captured = screen(footer=[
+        '  GPT-6.1-Sol xhigh · workspace · title',
+        '  ← for agents · ? for shortcuts  ⚠ 2 warnings · f2 to view  ',
+    ])
+
+    assert inspect_screen('codex', captured, binding='pane').state == 'empty'
+
+
+@pytest.mark.parametrize(('warning_suffix', 'expected'), [
+    ('1 warning', 'empty'),
+    ('2 warnings', 'empty'),
+    ('2 warning', 'unknown'),
+    ('٢ warnings', 'unknown'),
+])
+def test_warning_count_suffix_requires_matching_pluralization(
+        warning_suffix: str, expected: str) -> None:
+    hint = '  ← for agents · ? for shortcuts  ⚠ ' + warning_suffix + ' · f2 to view'
+    captured = screen(footer=['  GPT-6.1-Sol xhigh · workspace · title', hint])
+
+    assert inspect_screen('codex', captured, binding='pane').state == expected
+
+
+def test_context_suffix_shortcut_continuation_remains_supported() -> None:
+    captured = screen(footer=[
+        '  GPT-6.1-Sol xhigh · workspace · title',
+        '  ? for shortcuts    42% Context left',
+    ])
+
+    assert inspect_screen('codex', captured, binding='pane').state == 'empty'
+
+
+def test_combined_agents_hint_with_unknown_continuation_remains_unknown() -> None:
+    captured = screen(footer=[
+        '  GPT-6.1-Sol xhigh · workspace · title',
+        '  ← for agents · ? for shortcuts — unrecognized continuation',
+    ])
+
+    assert inspect_screen('codex', captured, binding='pane').state == 'unknown'
+
+
+@pytest.mark.parametrize('hint', [
+    '  ← for agents',
+    '  ← for agent · ? for shortcuts',
+    '  ← for agents · ? for shortcut',
+    '  ← for agents · unrecognized hint',
+])
+def test_unrecognized_agent_hint_remains_fail_closed(hint: str) -> None:
+    captured = screen(footer=['  GPT-6.1-Sol xhigh · workspace · title', hint])
+
+    assert inspect_screen('codex', captured, binding='pane').state == 'unknown'
+
+
+@pytest.mark.parametrize('hint', [
+    '  ? for shortcuts — unrecognized continuation',
+    '  ← for agents · ? for shortcuts — unrecognized continuation',
+    '  ? for Shortcuts',
+    '  ?  for shortcuts',
+    '   ? for shortcuts',
+    '  ? for shortcuts\t⚠ 2 warnings · f2 to view',
+    '  ← for agents',
+    '  ← for agent · ? for shortcuts',
+])
+def test_unrecognized_single_row_shortcut_footer_remains_unknown(hint: str) -> None:
+    assert inspect_screen('codex', screen(footer=[hint]), binding='pane').state == 'unknown'
+
+
+@pytest.mark.parametrize('context', [
+    '101% Context left',
+    '-1% Context left',
+    '42% Context left garbage',
+    '42%  Context left',
+    '42 % Context left',
+    'Context 101% left',
+    'Context 42% left garbage',
+    'context 42% left garbage',
+])
+def test_out_of_range_context_footer_remains_unknown(context: str) -> None:
+    assert inspect_screen('codex', screen(footer=['  ' + context]),
+                          binding='pane').state == 'unknown'
+
+
+def test_combined_agents_hint_does_not_hide_human_draft() -> None:
+    captured = screen(content='human draft', footer=[
+        '  Context 42% left',
+        '  ← for agents · ? for shortcuts  ⚠ 2 warnings · f2 to view',
+    ])
+
+    assert inspect_screen('codex', captured, binding='pane').state == 'nonempty'

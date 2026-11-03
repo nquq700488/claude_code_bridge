@@ -1,3 +1,5 @@
+import 'omp_runtime.dart';
+import '../native_session/native_content_page.dart';
 import 'ccb_conversation_item.dart';
 
 class CcbAgentConversation {
@@ -8,6 +10,11 @@ class CcbAgentConversation {
     required this.items,
     this.nextCursor,
     this.generatedAt,
+    this.ompSessionId,
+    this.ompGeneration,
+    this.nativeContent,
+    this.branchId,
+    this.ompRuntime,
   });
 
   final String projectId;
@@ -16,6 +23,11 @@ class CcbAgentConversation {
   final List<CcbConversationItem> items;
   final String? nextCursor;
   final DateTime? generatedAt;
+  final String? ompSessionId;
+  final String? ompGeneration;
+  final NativeContentPage? nativeContent;
+  final String? branchId;
+  final OmpRuntime? ompRuntime;
 
   factory CcbAgentConversation.fromJson(Map<String, Object?> json) {
     final conversation = _map(json['conversation']);
@@ -33,6 +45,21 @@ class CcbAgentConversation {
       ],
       nextCursor: _optionalText(source['next_cursor']),
       generatedAt: _optionalDateTime(source['generated_at']),
+      ompSessionId:
+          source['transport'] == 'collab'
+              ? _optionalText(source['session_id'])
+              : null,
+      ompGeneration:
+          source['transport'] == 'collab'
+              ? _optionalText(source['generation']?.toString())
+              : null,
+      branchId: _optionalText(source['branch_id']),
+      ompRuntime: source['omp_runtime'] is Map
+          ? OmpRuntime.fromJson(_map(source['omp_runtime']), sessionId: _optionalText(source['session_id'])) : null,
+      nativeContent:
+          source['native_content'] is Map
+              ? NativeContentPage.fromJson(_map(source['native_content']))
+              : null,
     );
   }
 
@@ -45,6 +72,12 @@ class CcbAgentConversation {
       if (nextCursor != null) 'next_cursor': nextCursor,
       if (generatedAt != null)
         'generated_at': generatedAt!.toUtc().toIso8601String(),
+      if (ompSessionId != null) 'transport': 'collab',
+      if (ompSessionId != null) 'session_id': ompSessionId,
+      if (ompGeneration != null) 'generation': ompGeneration,
+      if (branchId != null) 'branch_id': branchId,
+      if (nativeContent != null) 'native_content': nativeContent!.toJson(),
+      if (ompRuntime != null) 'omp_runtime': ompRuntime!.toJson(),
     };
   }
 }
@@ -59,6 +92,8 @@ class CcbAgentMessageSubmitRequest {
     this.format = 'markdown',
     this.attachments = const [],
     this.schemaVersion = 1,
+    this.expectedOmpSessionId,
+    this.expectedOmpGeneration,
   }) {
     _requireText(projectId, 'projectId');
     _requireText(agentName, 'agentName');
@@ -76,6 +111,8 @@ class CcbAgentMessageSubmitRequest {
   final String body;
   final String format;
   final List<CcbMessageAttachment> attachments;
+  final String? expectedOmpSessionId;
+  final String? expectedOmpGeneration;
 
   Map<String, Object?> toJson() {
     return {
@@ -86,6 +123,10 @@ class CcbAgentMessageSubmitRequest {
       'idempotency_key': idempotencyKey,
       'body': body,
       'format': format,
+      if (expectedOmpSessionId != null)
+        'expected_omp_session_id': expectedOmpSessionId,
+      if (expectedOmpGeneration != null)
+        'expected_omp_generation': expectedOmpGeneration,
       if (attachments.isNotEmpty)
         'attachments': [for (final a in attachments) a.toSubmitJson()],
     };

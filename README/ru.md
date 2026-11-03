@@ -6,7 +6,7 @@
 **Координируйте Codex, Claude, Gemini и другие CLI Agent в видимых и управляемых процессах, которые можно напрямую взять под контроль**
 
 <p>
-  <img src="https://img.shields.io/badge/version-8.7.11-orange.svg" alt="version">
+  <img src="https://img.shields.io/badge/version-8.7.21-orange.svg" alt="version">
   <img src="https://img.shields.io/badge/platform-Linux%20%7C%20macOS%20%7C%20WSL-lightgrey.svg" alt="platform">
   <img src="https://img.shields.io/badge/providers-16%20CLI%20families-0B7285.svg" alt="providers">
 </p>
@@ -51,6 +51,28 @@
 - Мобильный удаленный контроллер: голосовое управление между providers, передача файлов и доступ к удаленному терминалу.
 
 <a id="how-to-install"></a>
+
+## New in 8.7.19: OMP native questions and runtime status / OMP 原生交互与运行状态
+
+Native select/editor cards use fenced replies over HTTP or encrypted Relay. Mobile shows native elapsed time, current step and Todo progress. Update gateway and app together; restart only idle OMP agents.
+
+[Full bilingual notes](../docs/releases/v8.7.19.md).
+
+## New in 8.7.18: Stable OMP Mobile History / 稳定长历史
+
+OMP Mobile now paginates stable long history through bounded native parent-chain pages. History-query errors preserve a healthy WebSocket and already-loaded content. Oversized replies keep a structured latest-content bubble capped at 24 KiB, 8 entries and 24 blocks; complete originals remain available as a secondary reader. Upgrade both the server and app, then restart existing OMP processes normally when idle; do not interrupt busy agents or discard history.
+
+OMP Mobile 通过有界原生父链分页稳定读取长历史；历史查询失败不再重置健康的 WebSocket 或清除已加载内容。超长回复在气泡中保留结构化最新内容，最多 24 KiB、8 条记录、24 个块；完整原文仍可通过次级阅读入口查看。请同时升级服务端与 App，已有 OMP 进程在空闲时正常重启加载；不要中断忙碌 Agent 或清空历史。
+
+[Full bilingual notes](../docs/releases/v8.7.18.md).
+
+## New in 8.7.17: OMP Reply Receipts / OMP 回复收据
+
+OMP replies use bounded, owner-bound native `reply_deliver` / `reply_status` delivery. A `ccb-reply` is received as an aside at a safe step boundary; only a persisted native `custom_message` counts as a receipt and releases the mailbox. Receipt does not mean subsequent business processing is finished. Drafts and active ask anchors remain intact, no concurrent turn is started, and ambiguous sends are queried rather than replayed.
+
+OMP 回复通过有界、绑定归属的原生 `reply_deliver` / `reply_status` 投递；`ccb-reply` 在安全步骤边界作为 aside 接收。只有已持久化的原生 `custom_message` 才算收据并释放邮箱，不代表后续业务处理完成。保留草稿与活跃 ask 锚点，不启动并发回合；发送结果不明时查询状态，不重放。
+
+[Full bilingual notes](../docs/releases/v8.7.17.md).
 
 ## Как установить
 
@@ -184,7 +206,7 @@ ccb update mobile
 
 CCB 8.6.6 включает Flutter source CCB Mobile в [`mobile/`](../mobile/) и публикует Android APK через GitHub Releases:
 
-- [Скачать CCB Mobile v8.7.11 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.11/ccb-mobile-v8.7.11.apk)
+- [Скачать CCB Mobile v8.7.21 APK](https://github.com/SeemSeam/claude_codex_bridge/releases/download/v8.7.21/ccb-mobile-v8.7.21.apk)
 - Исходники app: [`mobile/app`](../mobile/app)
 - Исходники server gateway: [`lib/mobile_gateway`](../lib/mobile_gateway)
 
@@ -247,7 +269,7 @@ CCB поддерживает [Agent Roles Spec](https://github.com/SeemSeam/agen
 - WeChat: `seemseam-com`
 
 <p align="center">
-  <img src="../assets/weixin.png?v=583d37f5" alt="Группа WeChat" width="240">
+  <img src="../assets/weixin.png?v=a9f2d800" alt="Группа WeChat" width="240">
 </p>
 
 <a id="community"></a>
@@ -262,7 +284,74 @@ CCB поддерживает [Agent Roles Spec](https://github.com/SeemSeam/agen
 
 ## Release Notes
 
+<details>
+<summary><b>v8.7.21</b> - OpenCode v2 native support / OpenCode v2 原生适配</summary>
+
+Native OpenCode 2.2.x task ingress and idle completion; private legacy database snapshots; OMP native task delivery. OpenCode 2.2.x 原生入队与 idle 完成判定、旧版数据库私有快照和 OMP 原生投递。 [Release notes / 版本说明](../docs/releases/v8.7.21.md).
+
+</details>
+
 <details open>
+<summary><b>v8.7.18</b> - Stable OMP Mobile history / 稳定长历史</summary>
+
+OMP Mobile now paginates stable long history through bounded native parent-chain pages. History-query errors preserve a healthy WebSocket and already-loaded content. Oversized replies keep a structured latest-content bubble capped at 24 KiB, 8 entries and 24 blocks; complete originals remain available as a secondary reader. Upgrade both the server and app, then restart existing OMP processes normally when idle; do not interrupt busy agents or discard history.
+
+OMP Mobile 通过有界原生父链分页稳定读取长历史；历史查询失败不再重置健康的 WebSocket 或清除已加载内容。超长回复在气泡中保留结构化最新内容，最多 24 KiB、8 条记录、24 个块；完整原文仍可通过次级阅读入口查看。请同时升级服务端与 App，已有 OMP 进程在空闲时正常重启加载；不要中断忙碌 Agent 或清空历史。
+
+[Full bilingual notes](../docs/releases/v8.7.18.md).
+</details>
+
+<details open>
+<summary><b>v8.7.17</b> - OMP reply receipts / OMP 回复收据</summary>
+
+OMP replies use bounded, owner-bound native `reply_deliver` / `reply_status` delivery. A `ccb-reply` is received as an aside at a safe step boundary; only a persisted native `custom_message` counts as a receipt and releases the mailbox. Receipt does not mean subsequent business processing is finished. Drafts and active ask anchors remain intact, no concurrent turn is started, and ambiguous sends are queried rather than replayed.
+
+OMP 回复通过有界、绑定归属的原生 `reply_deliver` / `reply_status` 投递；`ccb-reply` 在安全步骤边界作为 aside 接收。只有已持久化的原生 `custom_message` 才算收据并释放邮箱，不代表后续业务处理完成。保留草稿与活跃 ask 锚点，不启动并发回合；发送结果不明时查询状态，不重放。
+
+[Full bilingual notes](../docs/releases/v8.7.17.md).
+</details>
+
+<details open>
+<summary><b>v8.7.16</b> - OMP Python ask sender identity recovery</summary>
+
+Recover the OMP Python `ask` sender identity from the exact configured managed `PI_CODING_AGENT_DIR` when CCB environment variables are filtered, while preserving existing identity precedence and without replaying historical jobs. Refresh the WeChat group 2 QR code, valid until October 29.
+
+[Full bilingual notes](../docs/releases/v8.7.16.md).
+</details>
+
+<details>
+<summary><b>v8.7.15</b> - Incremental turn history and persisted FIFO delivery</summary>
+
+Preserve the complete historical body of same-session incremental turns while collapsing tool reasoning. Sends made while an agent is running now enter a persisted FIFO and execute serially: queued items stay visible without steering the active turn, while items with unknown delivery after a disconnect are held instead of blindly replayed. This release also includes v8.7.14's Relay large-history fixes. The changes are Linux-only; macOS keeps its legacy route unchanged.
+
+[Full bilingual notes](../docs/releases/v8.7.15.md).
+</details>
+
+<details>
+<summary><b>v8.7.14</b> - Incomplete prerelease; Android release canceled</summary>
+
+Fix Relay delivery for very large Linux OMP histories with byte-based pagination and lossless paging of oversized raw messages, repair Relay agent fields, and classify errors accurately. macOS keeps its legacy route unchanged.
+
+[Full bilingual notes](../docs/releases/v8.7.14.md).
+</details>
+
+<details>
+<summary><b>v8.7.13</b> - Linux OMP Collab-native Mobile chat and model selection</summary>
+
+Connect Mobile to Linux OMP's native Collab chat with user-anchored reply bubbles and same-host, same-session model selection. macOS keeps its legacy route, and other providers remain unchanged.
+
+[Full bilingual notes](../docs/releases/v8.7.13.md).
+</details>
+
+<details>
+<summary><b>v8.7.12</b> - Reply queue recovery and composer compatibility</summary>
+
+Recover stale reply delivery, correct communication status, and preserve drafts and valid lease ownership.
+
+[Full bilingual notes](../docs/releases/v8.7.12.md).
+</details>
+
+<details>
 <summary><b>v8.7.11</b> - V2 workflow compatibility and Pi completion repair</summary>
 
 Isolate V3 workflow policies, repair Pi transformed-input attribution and active-request cancellation, and refresh the WeChat QR image.

@@ -20,6 +20,144 @@ import 'support/project_home_test_driver.dart';
 import 'support/project_home_test_fakes.dart';
 
 void main() {
+  testWidgets('OMP queue receipts preserve live awaiting and allow next send', (tester) async {
+    await setTestSurfaceSize(tester, const Size(390, 844));
+    const agent = CcbAgent(
+      name: 'mobile', provider: 'omp', window: 'main', order: 0,
+      active: true, queueDepth: 0,
+      providerControl: CcbProviderControl(provider: 'omp', runtimeSource: 'collab'),
+    );
+    final repository = _QueuedCollabRepository();
+    await tester.pumpWidget(MaterialApp(home: Scaffold(body: SelectedAgentWorkspace(
+      repository: repository, terminalTransport: null,
+      usePaneInputForMessages: true, view: _workspaceView(agent), agent: agent,
+      enableComposerCollapse: false, onRefreshView: null,
+    ))));
+    await tester.pumpAndSettle();
+    for (final body in ['first', 'second', 'third']) {
+      await tester.enterText(find.byKey(const ValueKey('agent-message-composer')), body);
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pumpAndSettle();
+      final workspace = tester.widget<SelectedAgentWorkspaceView>(find.byType(SelectedAgentWorkspaceView));
+      expect(workspace.model.isAwaitingAgentResponse, isTrue);
+    }
+    expect(repository.submittedMessages, hasLength(3));
+    expect(find.text('Queued'), findsNWidgets(2));
+    await tester.pumpWidget(const SizedBox.shrink());
+  });
+  testWidgets(
+    'Mac legacy OMP sends without generation and keeps terminal keys without polling',
+    (tester) async {
+      await setTestSurfaceSize(tester, const Size(390, 844));
+      const agent = CcbAgent(
+        name: 'mobile',
+        provider: 'omp',
+        window: 'main',
+        order: 0,
+        active: true,
+        queueDepth: 0,
+      );
+      final repository = RecordingGatewayRepository();
+      final terminal = RecordingTerminalTransport();
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: SelectedAgentWorkspace(
+              repository: repository,
+              terminalTransport: terminal,
+              usePaneInputForMessages: true,
+              view: _workspaceView(agent),
+              agent: agent,
+              enableComposerCollapse: false,
+              onRefreshView: null,
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+      final initial = repository.conversationCalls.length;
+      await tester.pump(const Duration(seconds: 6));
+      await tester.pumpAndSettle();
+      expect(repository.conversationCalls.length, initial);
+      expect(
+        find.byKey(const ValueKey('omp-collab-disconnected')),
+        findsNothing,
+      );
+      final input = find.byKey(const ValueKey('agent-message-composer'));
+      await tester.enterText(input, 'legacy terminal prompt');
+      await tester.tap(find.byKey(const ValueKey('agent-message-send-button')));
+      await tester.pumpAndSettle();
+      expect(repository.submittedMessages, isEmpty);
+      expect(terminal.sessions.single.pasted, ['legacy terminal prompt']);
+      expect(terminal.sessions.single.written, [
+        [13],
+      ]);
+      await tester.tap(input);
+      await tester.pump();
+      expect(find.byKey(const ValueKey('agent-queue-button')), findsNothing);
+      await tester.tap(find.byKey(const ValueKey('agent-quick-key-esc')));
+      await tester.pumpAndSettle();
+      expect(terminal.sessions.single.written, [
+        [13],
+        [27],
+      ]);
+      await tester.pumpWidget(const SizedBox.shrink());
+    },
+  );
+
+  testWidgets('only visible OMP Collab refreshes and pauses in background', (
+    tester,
+  ) async {
+    const agent = CcbAgent(
+      name: 'mobile',
+      provider: 'omp',
+      providerControl: CcbProviderControl(
+        provider: 'omp',
+        runtimeSource: 'collab',
+      ),
+      window: 'main',
+      order: 0,
+      active: true,
+      queueDepth: 0,
+    );
+    final repository = RecordingGatewayRepository();
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(
+          body: SelectedAgentWorkspace(
+            repository: repository,
+            terminalTransport: null,
+            usePaneInputForMessages: true,
+            view: _workspaceView(agent),
+            agent: agent,
+            enableComposerCollapse: false,
+            onRefreshView: null,
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    final initial = repository.conversationCalls.length;
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(repository.conversationCalls.length, greaterThan(initial));
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.paused);
+    final paused = repository.conversationCalls.length;
+    await tester.pump(const Duration(seconds: 5));
+    expect(repository.conversationCalls.length, paused);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.hidden);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.inactive);
+    tester.binding.handleAppLifecycleStateChanged(AppLifecycleState.resumed);
+    await tester.pump(const Duration(seconds: 5));
+    await tester.pumpAndSettle();
+    expect(repository.conversationCalls.length, greaterThan(paused));
+    await tester.pumpWidget(const SizedBox.shrink());
+    final disposed = repository.conversationCalls.length;
+    await tester.pump(const Duration(seconds: 5));
+    expect(repository.conversationCalls.length, disposed);
+  });
   testWidgets('message composer sends on hardware enter', (tester) async {
     final controller = TextEditingController(text: 'hello mobile');
     var sendCount = 0;
@@ -42,7 +180,7 @@ void main() {
             onSend: () {
               sendCount += 1;
             },
-            onSendTab: () {},
+            onQueue: () {},
             onSendEscape: () {},
           ),
         ),
@@ -81,7 +219,7 @@ void main() {
             onSend: () {
               sendCount += 1;
             },
-            onSendTab: () {},
+            onQueue: () {},
             onSendEscape: () {},
           ),
         ),
@@ -165,8 +303,9 @@ void main() {
             onOpenAttachment: (_) {},
             onDeleteFailedMessage: (_) {},
             onSend: () {},
-            onSendTab: () {},
+            onQueue: () {},
             onSendEscape: () {},
+            onUiResponse: (_) async {},
           ),
         ),
       ),
@@ -260,8 +399,9 @@ void main() {
               onOpenAttachment: (_) {},
               onDeleteFailedMessage: (_) {},
               onSend: () {},
-              onSendTab: () {},
+              onQueue: () {},
               onSendEscape: () {},
+              onUiResponse: (_) async {},
             ),
           ),
         ),
@@ -316,7 +456,7 @@ void main() {
             onPickFile: () {},
             onRemoveAttachment: (_) {},
             onSend: () {},
-            onSendTab: () {
+            onQueue: () {
               tabCount += 1;
             },
             onSendEscape: () {
@@ -328,7 +468,7 @@ void main() {
     );
 
     expect(find.byKey(const ValueKey('agent-quick-key-toolbar')), findsNothing);
-    expect(find.byKey(const ValueKey('agent-quick-key-tab')), findsNothing);
+    expect(find.byKey(const ValueKey('agent-queue-button')), findsNothing);
     expect(find.byKey(const ValueKey('agent-quick-key-esc')), findsNothing);
 
     await tester.tap(find.byKey(const ValueKey('agent-message-composer')));
@@ -337,14 +477,14 @@ void main() {
     final toolbar = find.byKey(const ValueKey('agent-quick-key-toolbar'));
     final composer = find.byKey(const ValueKey('agent-message-composer'));
     expect(toolbar, findsOneWidget);
-    expect(find.byKey(const ValueKey('agent-quick-key-tab')), findsOneWidget);
+    expect(find.byKey(const ValueKey('agent-queue-button')), findsOneWidget);
     expect(find.byKey(const ValueKey('agent-quick-key-esc')), findsOneWidget);
     expect(
       tester.getBottomLeft(toolbar).dy,
       lessThanOrEqualTo(tester.getTopLeft(composer).dy),
     );
 
-    await tester.tap(find.byKey(const ValueKey('agent-quick-key-tab')));
+    await tester.tap(find.byKey(const ValueKey('agent-queue-button')));
     await tester.pump();
     await tester.tap(find.byKey(const ValueKey('agent-quick-key-esc')));
     await tester.pump();
@@ -499,7 +639,7 @@ void main() {
               removed = localId;
             },
             onSend: () {},
-            onSendTab: () {},
+            onQueue: () {},
             onSendEscape: () {},
           ),
         ),
@@ -1769,11 +1909,11 @@ void main() {
     expect(find.text('Value'), findsOneWidget);
     expect(find.text('alpha'), findsOneWidget);
     expect(find.text('42'), findsOneWidget);
-    expect(find.text('docs link'), findsOneWidget);
+    expect(find.text('docs link', findRichText: true), findsOneWidget);
 
-    await tester.ensureVisible(find.text('docs link'));
+    await tester.ensureVisible(find.text('docs link', findRichText: true));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('docs link'));
+    await tester.tap(find.text('docs link', findRichText: true));
     await tester.pumpAndSettle();
     expect(
       find.byKey(const ValueKey('open-url-confirm-action')),
@@ -2837,7 +2977,7 @@ void main() {
     expect(find.text('Credits remaining: 42%'), findsOneWidget);
   });
 
-  testWidgets('paired Tab quick key keeps a visible queued user bubble', (
+  testWidgets('Codex queue button uses native slash command and preserves visible draft', (
     tester,
   ) async {
     await setTestSurfaceSize(tester, const Size(390, 844));
@@ -2882,15 +3022,15 @@ void main() {
     );
     await tester.pump();
 
-    expect(find.byKey(const ValueKey('agent-quick-key-tab')), findsOneWidget);
-    await tester.tap(find.byKey(const ValueKey('agent-quick-key-tab')));
+    expect(find.byKey(const ValueKey('agent-queue-button')), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey('agent-queue-button')));
     await tester.pump();
 
     expect(repository.submittedMessages, isEmpty);
     expect(terminalTransport.requests, hasLength(1));
-    expect(terminalTransport.sessions.single.pasted, ['draft before tab']);
+    expect(terminalTransport.sessions.single.pasted, ['/queue draft before tab']);
     expect(terminalTransport.sessions.single.written, [
-      [9],
+      [13],
     ]);
     expect(find.text('draft before tab'), findsOneWidget);
     expect(
@@ -2904,7 +3044,7 @@ void main() {
     );
   });
 
-  testWidgets('paired Tab quick key uploads and queues image attachment', (
+  testWidgets('Codex queue button uploads and queues image attachment', (
     tester,
   ) async {
     await setTestSurfaceSize(tester, const Size(390, 844));
@@ -2970,7 +3110,7 @@ void main() {
       'queue this image',
     );
 
-    await tester.tap(find.byKey(const ValueKey('agent-quick-key-tab')));
+    await tester.tap(find.byKey(const ValueKey('agent-queue-button')));
     for (
       var attempt = 0;
       attempt < 20 && repository.pathUploads.isEmpty;
@@ -2981,6 +3121,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(repository.pathUploads.single.fileName, 'queued-photo.jpg');
+    expect(terminalTransport.sessions.single.pasted.single, startsWith('/queue '));
     expect(repository.pathUploads.single.mimeType, 'image/jpeg');
     expect(
       terminalTransport.sessions.single.pasted.single,
@@ -2991,7 +3132,7 @@ void main() {
       contains('queued-photo.jpg'),
     );
     expect(terminalTransport.sessions.single.written, [
-      [9],
+      [13],
     ]);
     expect(find.text('queue this image'), findsOneWidget);
     expect(
@@ -3038,6 +3179,33 @@ void main() {
       expect(find.text('Failed'), findsOneWidget);
     },
   );
+}
+
+class _QueuedCollabRepository extends RecordingGatewayRepository {
+  @override
+  Future<CcbAgentConversation> getAgentConversation({
+    required String projectId, required String agent, required int namespaceEpoch,
+    int limit = 50, String? cursor,
+  }) async => CcbAgentConversation(
+    projectId: projectId, agentName: agent, namespaceEpoch: namespaceEpoch,
+    items: const [], ompSessionId: 'native', ompGeneration: 'instance:1',
+  );
+
+  @override
+  Future<CcbAgentMessageSubmitResult> submitAgentMessage(CcbAgentMessageSubmitRequest request) async {
+    submittedMessages.add(request);
+    final state = submittedMessages.length == 1
+        ? CcbConversationDeliveryState.sent : CcbConversationDeliveryState.queued;
+    return CcbAgentMessageSubmitResult(
+      accepted: true, idempotencyKey: request.idempotencyKey,
+      messageId: request.idempotencyKey, state: state,
+      message: CcbConversationItem(
+        id: request.idempotencyKey, agentName: request.agentName,
+        kind: CcbConversationItemKind.userMessage, title: 'You', body: request.body,
+        source: 'mobile/collab', state: state,
+      ),
+    );
+  }
 }
 
 File _tempFile(Directory dir, String name) {

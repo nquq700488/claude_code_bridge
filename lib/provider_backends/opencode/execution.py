@@ -41,6 +41,11 @@ class OpenCodeProviderAdapter:
             wrap_prompt_fn=wrap_opencode_prompt,
         )
 
+    def cancel(self, submission: ProviderSubmission) -> None:
+        if submission.runtime_state.get('native_v2'):
+            from .execution_runtime.native_v2 import cancel
+            cancel(submission)
+
     def poll(self, submission: ProviderSubmission, *, now: str) -> ProviderPollResult | None:
         submission = _refresh_reader_for_current_session_binding(submission)
         return _poll_submission_impl(
