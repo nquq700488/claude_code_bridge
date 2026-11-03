@@ -9,7 +9,7 @@
 | `planner` | Codex | 方案设计 - 负责系统架构、技术选型、模块划分 |
 | `developer` | Claude | 核心开发 - 负责编码实现、功能开发、Bug 修复（评审框架中的 `executor` 角色） |
 | `reviewer` | Codex | 代码审查 - 负责代码质量、潜在风险、最佳实践检查 |
-| `tester` | Kimi | 执行分析测试 - 负责命令执行、结果分析、回归测试 |
+| `tester` | Claude | 执行分析测试 - 负责命令执行、结果分析、回归测试 |
 
 > **`inspiration`（OpenCode）当前未挂载**：`ccb-compact.config` 中没有该 agent，`ccb-multi.config` 中的定义处于注释状态。
 >
@@ -25,7 +25,7 @@
 │    (codex)    │  (claude)     │
 ├───────────────┼───────────────┤
 │   reviewer    │   tester      │
-│   (codex)     │   (kimi)      │
+│   (codex)     │   (claude)    │
 └───────────────┴───────────────┘
 ```
 
