@@ -23,6 +23,19 @@ CODEX_TOOL_LINE_RE = re.compile(
     rf"^{STATUS_MARKER_RE}\s*(?:working|running)\b.*(?:\d+\s+background terminals? running|background terminals? running|/ps to view|shells? still running|running scheduled task)",
     re.IGNORECASE,
 )
+# Codex renders these two rows together when automatic session recovery gives
+# up. They must be anchored native rows (never prose or a quoted example) and
+# appear as a pair: a requoted sentence can start with a bullet, but it is not
+# the session-failure screen.
+CODEX_TERMINAL_RECONNECT_ROW_RE = re.compile(
+    r"^[■•◦\s]*automatic reconnect could not restore this session[\s.!]*$",
+    re.IGNORECASE,
+)
+CODEX_TERMINAL_RECONNECT_HINT_RE = re.compile(
+    r"^[■•◦\s]*reconnect failed\s*[—–-]\s*check the endpoint\b.*$",
+    re.IGNORECASE,
+)
+TERMINAL_RECONNECT_FAILURE_REASON = "provider_reconnect_failed"
 
 ERROR_MARKERS = (
     "stream disconnected before completion",
@@ -183,6 +196,25 @@ def parse_codex_pane_status(
     if not recent:
         return PaneStatus("unknown", "empty_capture")
 
+    # An explicit recovery failure outranks completion evidence that predates
+    # it; newer working/completed activity disproves the failure (the session
+    # was repaired and produced output since).
+    reconnect_failure_index = _last_terminal_reconnect_failure_index(recent_lines)
+    if (reconnect_failure_index >= 0
+            and reconnect_failure_index > active_index
+            and reconnect_failure_index > worked_for_index):
+        return PaneStatus(
+            "failed",
+            TERMINAL_RECONNECT_FAILURE_REASON,
+            ("codex_terminal_reconnect_failure",),
+            terminal_outcome="failed",
+            completion_evidence=PaneCompletionEvidence(
+                "failed",
+                "codex_pane",
+                TERMINAL_RECONNECT_FAILURE_REASON,
+            ),
+        )
+
     if completed:
         return PaneStatus(
             "completed",
@@ -301,6 +333,17 @@ def _last_worked_for_index(lines: list[str]) -> int:
     return -1
 
 
+def _last_terminal_reconnect_failure_index(lines: list[str]) -> int:
+    """Index of the last native failure row that is followed by its hint row."""
+    for index in range(len(lines) - 1, max(-1, len(lines) - 13), -1):
+        if not CODEX_TERMINAL_RECONNECT_ROW_RE.match(lines[index].strip()):
+            continue
+        hint = lines[index + 1:index + 4]
+        if any(CODEX_TERMINAL_RECONNECT_HINT_RE.match(row.strip()) for row in hint):
+            return index
+    return -1
+
+
 def _last_active_status(lines: list[str]) -> tuple[int, str | None, str]:
     for index in range(len(lines) - 1, -1, -1):
         line = lines[index]
@@ -325,6 +368,7 @@ __all__ = [
     "PaneCompletionEvidence",
     "PaneStatus",
     "STATUS_CATALOG",
+    "TERMINAL_RECONNECT_FAILURE_REASON",
     "normalize_screen",
     "parse_codex_pane_status",
     "strip_ansi",

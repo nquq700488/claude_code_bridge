@@ -309,6 +309,42 @@ def test_watch_target_reconnects_after_socket_error(monkeypatch: pytest.MonkeyPa
     assert seen == [True, True]
 
 
+def test_watch_target_returns_promptly_on_failed_terminal_status(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    project_root = tmp_path / 'repo-watch-failed-terminal'
+    project_root.mkdir()
+    context = _context(project_root)
+    stream = _StreamingWatchClient(
+        {
+            'job_id': 'job_demo',
+            'agent_name': 'codex',
+            'cursor': 1,
+            'generation': 1,
+            'terminal': True,
+            'status': 'failed',
+            'reply': 'Codex could not restore its session.',
+            'events': [],
+        },
+    )
+
+    def _connect(context, allow_restart_stale):
+        del context
+        assert allow_restart_stale is True
+        return SimpleNamespace(client=stream)
+
+    monkeypatch.setattr(watch_service, 'connect_mounted_daemon', _connect)
+    monkeypatch.setenv('CCB_WATCH_TIMEOUT_S', '600')
+    monkeypatch.setenv('CCB_WATCH_POLL_INTERVAL_S', '0')
+
+    batches = list(watch_service.watch_target(context, ParsedWatchCommand(project=None, target='job_demo')))
+
+    assert [batch.terminal for batch in batches] == [True]
+    assert batches[0].status == 'failed'
+    assert stream.calls == [0]
+
+
 def test_watch_target_preserves_cursor_across_reconnect(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-cursor'
     project_root.mkdir()

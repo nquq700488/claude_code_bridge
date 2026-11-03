@@ -220,6 +220,99 @@ def test_parse_reconnecting_status_ignores_retry_count_and_ui_elapsed() -> None:
     assert status.terminal_outcome is None
 
 
+def test_parse_terminal_reconnect_failure_as_failed() -> None:
+    text = "\n".join(
+        [
+            "■ Automatic reconnect could not restore this session",
+            "Reconnect failed — check the endpoint, then relaunch",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state == "failed"
+    assert status.reason == "provider_reconnect_failed"
+    assert status.terminal_outcome == "failed"
+
+
+def test_standalone_reconnect_hint_row_is_not_terminal() -> None:
+    # The hint row alone is not the native failure screen; treating it as
+    # terminal would also match quoted and pasted text.
+    status = probe.parse_codex_pane_status(
+        "■ Reconnect failed — check the endpoint, then relaunch\n"
+    )
+
+    assert status.state == "unknown"
+    assert status.terminal_outcome is None
+
+
+def test_quoted_reconnect_failure_sentence_is_not_terminal() -> None:
+    text = "\n".join(
+        [
+            "› Explain this error",
+            "",
+            "The error message was “Reconnect failed — check the endpoint, then relaunch”.",
+            "Automatic reconnect could not restore this session is shown first.",
+            "",
+            "› Use /skills to list available skills",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state == "unknown"
+    assert status.terminal_outcome is None
+
+
+def test_terminal_reconnect_failure_wins_over_stale_worked_for_summary() -> None:
+    text = "\n".join(
+        [
+            "• Worked for 6s",
+            "",
+            "■ Automatic reconnect could not restore this session",
+            "Reconnect failed — check the endpoint, then relaunch",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state == "failed"
+    assert status.reason == "provider_reconnect_failed"
+
+
+def test_activity_after_terminal_reconnect_failure_recovers() -> None:
+    text = "\n".join(
+        [
+            "■ Automatic reconnect could not restore this session",
+            "Reconnect failed — check the endpoint, then relaunch",
+            "",
+            "• Worked for 3s",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state == "completed"
+    assert status.terminal_outcome == "completed"
+
+
+def test_conversation_text_about_reconnect_failure_is_not_terminal() -> None:
+    text = "\n".join(
+        [
+            "› Explain reconnect errors",
+            "",
+            "The docs say reconnect failed sometimes; check the endpoint.",
+            "",
+            "› Use /skills to list available skills",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state == "unknown"
+    assert status.terminal_outcome is None
+
+
 def test_parse_pane_dead_as_pane_dead() -> None:
     status = probe.parse_codex_pane_status("› idle", pane_dead=True)
 

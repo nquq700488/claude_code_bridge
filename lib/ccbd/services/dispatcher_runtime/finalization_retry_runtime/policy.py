@@ -60,6 +60,16 @@ def has_retryable_diagnostic(decision) -> bool:
     return policy_bool(diagnostics.get('delivery_retryable'), False)
 
 
+def suppresses_automatic_retry(decision) -> bool:
+    """An explicit decision-level suppression outranks any retry policy.
+
+    It must also stop retry-exhaustion reporting: a retry that was never
+    attempted is not an exhausted retry.
+    """
+    diagnostics = getattr(decision, 'diagnostics', {}) or {}
+    return diagnostics.get('automatic_retry') is False
+
+
 def provider_supports_resume(dispatcher, provider: str) -> bool:
     try:
         manifest = dispatcher._provider_catalog.get(provider)
@@ -74,6 +84,8 @@ def is_retryable_failure(
     retry_policy: dict[str, object],
     provider_supports_resume_value: bool,
 ) -> bool:
+    if suppresses_automatic_retry(decision):
+        return False
     status = decision.status.value
     if status == JobStatus.INCOMPLETE.value:
         if is_pure_empty_provider_outcome(decision):
@@ -107,6 +119,7 @@ __all__ = [
     'DEFAULT_RETRYABLE_INCOMPLETE_REASONS',
     'DEFAULT_RETRYABLE_RUNTIME_REASONS',
     'has_retryable_diagnostic',
+    'suppresses_automatic_retry',
     'TIMEOUT_INSPECTION_REASONS',
     'is_retryable_failure',
     'policy_bool',

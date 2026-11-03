@@ -69,6 +69,11 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
     if provider == 'codex':
         arrows = [i for i, line in enumerate(lines) if line.startswith('›') and i <= cursor_y]
         if not arrows:
+            # No composer row at all: only the provider's explicit recovery
+            # failure explains the screen, and nothing can be typed into it.
+            terminal_reason = _codex_terminal_failure_reason(screen['text'])
+            if terminal_reason is not None:
+                return result('terminal_failure', terminal_reason)
             return result('unknown', 'composer_missing')
         top = arrows[-1]
         if _codex_busy(lines[:top]):
@@ -77,6 +82,12 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
         # menus use the same arrow; their confirmation footer is not accepted.
         footer = _codex_footer(lines, styled, cursor_x, cursor_y)
         if footer is None:
+            # Only an unverifiable composer can be an unrecoverable session; a
+            # valid composer proves Codex is usable even if the error stays in
+            # the scrollback.
+            terminal_reason = _codex_terminal_failure_reason(screen['text'])
+            if terminal_reason is not None:
+                return result('terminal_failure', terminal_reason)
             return result('unknown', 'composer_layout_unknown')
         if _editor_mode_in_footer(lines[footer:]):
             return result('unknown', 'unsupported_editor_mode')
@@ -120,6 +131,22 @@ def inspect_screen(provider: str, screen: dict, *, binding: str) -> Observation:
             return result('unknown', 'provider_native_queue_pending')
         return result('empty', 'claude_ghost')
     return result('nonempty', 'claude_draft')
+
+
+def _codex_terminal_failure_reason(text: str) -> str | None:
+    """Only an explicit, still-current Codex recovery failure is terminal.
+
+    The pane parser owns the classification; a recoverable reconnect, a busy
+    turn, or any unknown layout stays an ordinary composer block.
+    """
+    from provider_pane_status.codex_pane import (
+        TERMINAL_RECONNECT_FAILURE_REASON, parse_codex_pane_status,
+    )
+
+    status = parse_codex_pane_status(text)
+    if status.reason == TERMINAL_RECONNECT_FAILURE_REASON:
+        return TERMINAL_RECONNECT_FAILURE_REASON
+    return None
 
 
 def _codex_busy(lines: list[str]) -> bool:

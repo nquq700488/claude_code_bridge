@@ -13,6 +13,29 @@ from .draft_observation import Observation, inspect_screen
 
 WAIT_SECONDS = 180.0
 
+PRECLAIM_ALLOWED = 'allowed'
+PRECLAIM_BLOCKED = 'blocked'
+PRECLAIM_TERMINAL_FAILURE = 'terminal_failure'
+# Mirrors provider_pane_status.codex_pane.TERMINAL_RECONNECT_FAILURE_REASON; a
+# top-level import here would be circular, and only that parser emits it.
+TERMINAL_FAILURE_REASON = 'provider_reconnect_failed'
+
+
+@dataclass(frozen=True)
+class PreclaimOutcome:
+    """Read-only pre-claim verdict; it never clears or types into a composer."""
+
+    state: str
+    reason: str
+
+    @property
+    def allows_start(self) -> bool:
+        return self.state == PRECLAIM_ALLOWED
+
+    @property
+    def is_terminal_failure(self) -> bool:
+        return self.state == PRECLAIM_TERMINAL_FAILURE
+
 
 @dataclass
 class DraftGuard:

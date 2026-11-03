@@ -1550,6 +1550,29 @@ def test_activity_resolver_provider_free_does_not_hide_running_job() -> None:
     assert activity.current_job_id == 'job_running'
 
 
+def test_activity_resolver_reports_terminal_reconnect_failure_as_failed() -> None:
+    activity = resolve_agent_activity(
+        AgentActivityFacts(
+            namespace_mounted=True,
+            provider='codex',
+            runtime_state='idle',
+            pane_id='%1',
+            pane_state='alive',
+            current_job_status='queued',
+            current_job_id='job_queued',
+            current_job_updated_at=NOW,
+            provider_runtime_state='failed',
+            provider_runtime_source='codex_runtime',
+            provider_runtime_reason='provider_reconnect_failed',
+        ),
+        now=NOW,
+    )
+
+    assert activity.state == 'failed'
+    assert activity.source == 'codex_runtime'
+    assert activity.reason == 'provider_reconnect_failed'
+
+
 def test_project_view_marks_stale_provider_activity_failed_from_pane_error(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-provider-pane-error'
     project_root.mkdir()

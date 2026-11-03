@@ -3,7 +3,12 @@ from __future__ import annotations
 from message_bureau import AttemptStore, MessageStore
 
 from .models import AutomaticRetryPlan, RetryableFailureContext
-from .policy import is_retryable_failure, provider_supports_resume, safe_int
+from .policy import (
+    is_retryable_failure,
+    provider_supports_resume,
+    safe_int,
+    suppresses_automatic_retry,
+)
 
 
 def automatic_retry_plan(dispatcher, job, decision) -> AutomaticRetryPlan | None:
@@ -24,6 +29,10 @@ def retryable_failure_context(
     job,
     decision,
 ) -> RetryableFailureContext | None:
+    # Shared by retry scheduling and retry-exhaustion reporting: an explicitly
+    # suppressed failure must not look retryable to either of them.
+    if suppresses_automatic_retry(decision):
+        return None
     attempt = AttemptStore(dispatcher._layout).get_latest_by_job_id(job.job_id)
     if attempt is None:
         return None

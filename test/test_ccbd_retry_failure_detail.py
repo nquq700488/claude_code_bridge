@@ -103,6 +103,23 @@ def test_retry_policy_honors_delivery_retryable_incomplete_diagnostic() -> None:
     )
 
 
+def test_retry_policy_honors_explicit_automatic_retry_suppression() -> None:
+    decision = SimpleNamespace(
+        status=CompletionStatus.FAILED,
+        reason="provider_reconnect_failed",
+        diagnostics={"automatic_retry": False, "delivery_retryable": True},
+    )
+
+    assert not is_retryable_failure(
+        decision,
+        retry_policy={
+            "retryable_reasons": ["provider_reconnect_failed", "api_error"],
+            "retryable_runtime_reasons": ["pane_dead"],
+        },
+        provider_supports_resume_value=True,
+    )
+
+
 def test_retry_policy_does_not_override_nonretryable_api_failure() -> None:
     decision = SimpleNamespace(
         status=CompletionStatus.FAILED,

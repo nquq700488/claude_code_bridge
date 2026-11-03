@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from provider_pane_status.codex_pane import PaneStatus
+from provider_pane_status.codex_pane import PaneStatus, parse_codex_pane_status
 from provider_pane_status.codex_session import (
     compose_codex_runtime_status,
     read_codex_session_status,
@@ -164,6 +164,22 @@ def test_runtime_does_not_mark_empty_capture_free(tmp_path: Path) -> None:
 
     assert runtime.state == "unknown"
     assert runtime.reason == "empty_capture"
+
+
+def test_runtime_pane_terminal_reconnect_failure_beats_session_free(tmp_path: Path) -> None:
+    root = tmp_path / "sessions"
+    root.mkdir()
+    session_status = read_codex_session_status(root)
+    pane_status = parse_codex_pane_status(
+        "Automatic reconnect could not restore this session\n"
+        "Reconnect failed — check the endpoint, then relaunch\n"
+    )
+
+    runtime = compose_codex_runtime_status(pane_status, session_status)
+
+    assert runtime.state == "failed"
+    assert runtime.reason == "provider_reconnect_failed"
+    assert runtime.source == "pane"
 
 
 def test_runtime_uses_session_interrupted_when_pane_is_unknown(tmp_path: Path) -> None:

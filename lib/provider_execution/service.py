@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from threading import RLock
+from typing import TYPE_CHECKING
 
 from ccbd.api_models import JobRecord
 from completion.models import CompletionDecision
@@ -29,6 +30,9 @@ from .service_runtime import (
 from .service_state import ExecutionServiceRuntimeState, ExecutionServiceStateMixin
 from .state_store import ExecutionStateStore
 
+if TYPE_CHECKING:
+    from .draft_guard import PreclaimOutcome
+
 
 class ExecutionService(ExecutionServiceStateMixin):
     def __init__(
@@ -52,8 +56,21 @@ class ExecutionService(ExecutionServiceStateMixin):
         )
         self._draft_guards = {}
 
-    def draft_allows_start(self, job, *, runtime_context) -> bool:
-        from .draft_guard import DraftGuard, resolve_job_target
+    def draft_preclaim(self, job, *, runtime_context) -> PreclaimOutcome:
+        """Classify the passive pre-claim check without touching the composer.
+
+        Only the provider's own explicit terminal failure is actionable here;
+        unknown layouts and nonempty drafts stay blocked and recoverable.
+        """
+        from .draft_guard import (
+            PRECLAIM_ALLOWED,
+            PRECLAIM_BLOCKED,
+            PRECLAIM_TERMINAL_FAILURE,
+            TERMINAL_FAILURE_REASON,
+            DraftGuard,
+            PreclaimOutcome,
+            resolve_job_target,
+        )
         previous = self._draft_guards.get(job.agent_name)
         guard = previous[1] if previous and previous[0] == job.job_id else DraftGuard()
         self._draft_guards[job.agent_name] = (job.job_id, guard)
@@ -61,14 +78,19 @@ class ExecutionService(ExecutionServiceStateMixin):
             target = resolve_job_target(job, runtime_context)
         except Exception:
             guard.reset('binding_unavailable')
-            return False
+            return PreclaimOutcome(PRECLAIM_BLOCKED, 'binding_unavailable')
         if target is None:
             self._draft_guards.pop(job.agent_name, None)
-            return True
-        allowed = guard.allows(target)
-        if allowed:
+            return PreclaimOutcome(PRECLAIM_ALLOWED, '')
+        if guard.allows(target):
             self._draft_guards.pop(job.agent_name, None)
-        return allowed
+            return PreclaimOutcome(PRECLAIM_ALLOWED, guard.reason)
+        if job.provider == 'codex' and guard.reason == TERMINAL_FAILURE_REASON:
+            return PreclaimOutcome(PRECLAIM_TERMINAL_FAILURE, guard.reason)
+        return PreclaimOutcome(PRECLAIM_BLOCKED, guard.reason)
+
+    def draft_allows_start(self, job, *, runtime_context) -> bool:
+        return self.draft_preclaim(job, runtime_context=runtime_context).allows_start
 
     def draft_wait_snapshot(self, agent_name: str, job_id: str) -> dict:
         """Cached pre-claim evidence only: observers must never inspect/clear input."""

@@ -64,15 +64,79 @@ def test_claude_plain_and_titled_borders_allow_terminal_padding(border, padding,
     assert inspect_screen('claude', screen, binding='pane').state == expected
 
 
+def test_codex_terminal_reconnect_failure_is_reported_separately_from_unknown():
+    screen = {'text': 'Automatic reconnect could not restore this session\n'
+                      'Reconnect failed — check the endpoint, then relaunch\n',
+              'cursor_x': 0, 'cursor_y': 0}
+
+    observation = inspect_screen('codex', screen, binding='pane')
+
+    assert observation.state == 'terminal_failure'
+    assert observation.reason == 'provider_reconnect_failed'
+
+
+def test_codex_quoted_reconnect_failure_above_a_valid_composer_is_not_terminal():
+    screen = {
+        'text': '\n'.join(
+            [
+                '› Explain reconnect errors',
+                '',
+                'The error message was “Reconnect failed — check the endpoint, then relaunch”.',
+                '',
+                '› Ask Codex to do anything',
+                '',
+                '  ? for shortcuts',
+            ]
+        ),
+        'cursor_x': 2,
+        'cursor_y': 4,
+    }
+
+    observation = inspect_screen('codex', screen, binding='pane')
+
+    assert observation.state == 'empty'
+    assert observation.reason == 'codex_placeholder'
+
+
+def test_codex_drafted_reconnect_failure_text_stays_a_draft():
+    screen = {
+        'text': '\n'.join(
+            [
+                '› Automatic reconnect could not restore this session',
+                '  Reconnect failed — check the endpoint, then relaunch',
+                '',
+                '  ? for shortcuts',
+            ]
+        ),
+        'cursor_x': 2,
+        'cursor_y': 0,
+    }
+
+    observation = inspect_screen('codex', screen, binding='pane')
+
+    assert observation.state == 'nonempty'
+    assert observation.reason == 'codex_draft'
+
+
+def test_codex_recoverable_reconnect_is_still_an_unknown_composer():
+    screen = {'text': '• Reconnecting... 2/5 (16s • esc to interrupt)\n\n', 'cursor_x': 0, 'cursor_y': 2}
+
+    observation = inspect_screen('codex', screen, binding='pane')
+
+    assert observation.state == 'unknown'
+    assert observation.reason != 'provider_reconnect_failed'
+
+
 class Target:
     def __init__(self, *, clears=True):
         self.state = 'nonempty'
         self.binding = 'pane-1'
         self.clear_count = 0
         self.clears = clears
+        self.reason = None
 
     def observe(self):
-        return Observation(self.state, self.binding, self.state)
+        return Observation(self.state, self.binding, self.reason or self.state)
 
     def clear(self, observation):
         self.clear_count += 1
@@ -115,6 +179,17 @@ def test_unknown_or_binding_change_starts_fresh_wait(interruption):
     target.state = 'nonempty'
     now[0] = 200
     assert not guard.allows(target)
+    assert target.clear_count == 0
+
+
+def test_terminal_reconnect_failure_never_clears_or_types():
+    guard = DraftGuard(clock=lambda: 10000)
+    target = Target()
+    target.state = 'terminal_failure'
+    target.reason = 'provider_reconnect_failed'
+
+    assert not guard.allows(target)
+    assert guard.reason == 'provider_reconnect_failed'
     assert target.clear_count == 0
 
 
