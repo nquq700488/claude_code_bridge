@@ -235,6 +235,52 @@ def test_parse_terminal_reconnect_failure_as_failed() -> None:
     assert status.terminal_outcome == "failed"
 
 
+def test_parse_wrapped_terminal_reconnect_failure_as_failed() -> None:
+    # Codex renders the failure box at its own width, so the native row wraps
+    # after "session" and the paired hint lands several rows further down.
+    text = "\n".join(
+        [
+            "  Worked for 2m 6s • 19:58",
+            "",
+            "■ Automatic reconnect could not restore this session. Your draft",
+            "is still editable. Copy it before quitting with Ctrl+C, then",
+            "reconnect with the same command.",
+            "",
+            "■ Automatic reconnect timed out while connecting to the server.",
+            "",
+            "• Reconnect failed — check the endpoint, then relaunch (16h 18m 0…",
+            "",
+            "",
+            "› Ask Codex to do anything",
+            "",
+            "  gpt-6-luna medium · ~/Documents/code/correct-center · review",
+            "  ⌃c quit",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state == "failed"
+    assert status.reason == "provider_reconnect_failed"
+    assert status.terminal_outcome == "failed"
+
+
+def test_sentence_mentioning_the_failure_row_is_not_terminal() -> None:
+    # Only the native row (and its own "Your draft" wrap) counts; prose that
+    # starts with the same words and continues differently must not.
+    text = "\n".join(
+        [
+            "Automatic reconnect could not restore this session is shown first.",
+            "Reconnect failed — check the endpoint, then relaunch",
+        ]
+    )
+
+    status = probe.parse_codex_pane_status(text)
+
+    assert status.state != "failed"
+    assert status.terminal_outcome is None
+
+
 def test_standalone_reconnect_hint_row_is_not_terminal() -> None:
     # The hint row alone is not the native failure screen; treating it as
     # terminal would also match quoted and pasted text.

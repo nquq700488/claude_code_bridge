@@ -45,7 +45,7 @@
 - **消息投递阶段诊断**：`ccb queue --detail <agent>` 与 `ccb trace <job_id>` 会显示排队、claim、Provider 启动和 pane 投递阶段；失败时显示阶段、原因和错误
 - **Codex 双行底栏兼容**：Codex v0.158.0 的模型/工作目录行与快捷键行组合会被识别为正常空 composer，不再误报 `composer_layout_unknown`
 - **Codex 合并式提示行兼容**：Codex v0.166.0 的 `← for agents · ? for shortcuts` 合并提示行被识别为合法底栏；仅接受该字面前缀、匹配单复数的 warning 计数和 0–100% 的 context 后缀，其他畸形提示行与真实草稿仍按 unknown/nonempty 拦截
-- **Codex 会话不可恢复时快速失败**：Codex pane 显示 `Automatic reconnect could not restore this session` / `Reconnect failed — check the endpoint, then relaunch` 时，排在队列头部的任务会立刻以 `provider_reconnect_failed` 失败，而不是一直等到 `ccb pend --watch` observer 超时。失败不会重启 Codex、不会清空或输入草稿，也不会自动重试；回复会提示先复制 pane 中可见的草稿，再修复/重启 Codex 并重试该任务。普通的 `Reconnecting…` 与未知 composer 布局仍然保持排队并在恢复后继续投递
+- **Codex 会话不可恢复时快速失败**：Codex pane 显示 `Automatic reconnect could not restore this session` / `Reconnect failed — check the endpoint, then relaunch` 时，排在队列头部的任务会立刻以 `provider_reconnect_failed` 失败，而不是一直等到 `ccb pend --watch` observer 超时。失败不会重启 Codex、不会清空或输入草稿，也不会自动重试；回复会提示先复制 pane 中可见的草稿，再修复/重启 Codex 并重试该任务。该失败行按终端宽度折行时（`… this session. Your draft` 续行、提示行下移数行）同样能识别。普通的 `Reconnecting…` 与未知 composer 布局仍然保持排队并在恢复后继续投递
 - **`pend --watch` 自动拉起目标**：目标 Agent 未运行时，`ccb pend --watch <job_id>` 会自动 mount 项目 daemon 并启动该 Agent 的 pane，然后继续等待任务，不再直接报 `health is stopped`。自动启动单次 watch 最多 2 次、冷启动宽限 90 秒；已终态的任务完全不连接 daemon；`provider-auth-revoked` / `session-missing` 等无法通过启动修复的健康状态仍然快速失败。设 `CCB_WATCH_AUTO_START=0` 可恢复旧的只读快速失败行为
 - **Rich 文件面板系统打开（v8.7.1+）**：点击文件或按 Enter 用系统默认应用打开（macOS `open` / Linux `gio open` / WSL `wslview`）
 - 按项目配置 Agent 团队和 tmux 分屏布局

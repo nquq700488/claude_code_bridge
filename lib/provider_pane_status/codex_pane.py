@@ -27,8 +27,13 @@ CODEX_TOOL_LINE_RE = re.compile(
 # up. They must be anchored native rows (never prose or a quoted example) and
 # appear as a pair: a requoted sentence can start with a bullet, but it is not
 # the session-failure screen.
+# The failure box has a fixed width, so the native row wraps after "session"
+# on ordinary terminals ("… this session. Your draft" / "is still editable …").
+# Only that continuation is accepted: prose that merely starts with the same
+# words must not become evidence of a dead session.
 CODEX_TERMINAL_RECONNECT_ROW_RE = re.compile(
-    r"^[■•◦\s]*automatic reconnect could not restore this session[\s.!]*$",
+    r"^[■•◦\s]*automatic reconnect could not restore this session[.!]*"
+    r"(?:\s+your draft\b.*)?$",
     re.IGNORECASE,
 )
 CODEX_TERMINAL_RECONNECT_HINT_RE = re.compile(
@@ -334,11 +339,15 @@ def _last_worked_for_index(lines: list[str]) -> int:
 
 
 def _last_terminal_reconnect_failure_index(lines: list[str]) -> int:
-    """Index of the last native failure row that is followed by its hint row."""
-    for index in range(len(lines) - 1, max(-1, len(lines) - 13), -1):
+    """Index of the last native failure row that is followed by its hint row.
+
+    The hint is rendered below the wrapped recovery paragraph and a second
+    timeout row, so it is a few rows away rather than immediately adjacent.
+    """
+    for index in range(len(lines) - 1, max(-1, len(lines) - 24), -1):
         if not CODEX_TERMINAL_RECONNECT_ROW_RE.match(lines[index].strip()):
             continue
-        hint = lines[index + 1:index + 4]
+        hint = lines[index + 1:index + 8]
         if any(CODEX_TERMINAL_RECONNECT_HINT_RE.match(row.strip()) for row in hint):
             return index
     return -1

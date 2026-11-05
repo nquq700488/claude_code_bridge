@@ -75,6 +75,35 @@ def test_codex_terminal_reconnect_failure_is_reported_separately_from_unknown():
     assert observation.reason == 'provider_reconnect_failed'
 
 
+def test_codex_wrapped_terminal_reconnect_failure_with_unverifiable_footer():
+    # Real Codex layout: the failure row wraps, the footer hint row is a bare
+    # "⌃c quit", so the composer cannot be verified. The job must fail fast
+    # instead of waiting for a dispatch that can never happen.
+    lines = [
+        "  Worked for 2m 6s • 19:58",
+        "",
+        "■ Automatic reconnect could not restore this session. Your draft",
+        "is still editable. Copy it before quitting with Ctrl+C, then",
+        "reconnect with the same command.",
+        "",
+        "■ Automatic reconnect timed out while connecting to the server.",
+        "",
+        "• Reconnect failed — check the endpoint, then relaunch (16h 18m 0…",
+        "",
+        "",
+        "› Ask Codex to do anything",
+        "",
+        "  gpt-6-luna medium · ~/Documents/code/correct-center · review",
+        "  ⌃c quit",
+    ]
+    screen = {'text': '\n'.join(lines), 'cursor_x': 2, 'cursor_y': 11}
+
+    observation = inspect_screen('codex', screen, binding='pane')
+
+    assert observation.state == 'terminal_failure'
+    assert observation.reason == 'provider_reconnect_failed'
+
+
 def test_codex_quoted_reconnect_failure_above_a_valid_composer_is_not_terminal():
     screen = {
         'text': '\n'.join(
