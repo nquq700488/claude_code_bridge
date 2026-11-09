@@ -92,17 +92,26 @@ class ExecutionService(ExecutionServiceStateMixin):
     def draft_allows_start(self, job, *, runtime_context) -> bool:
         return self.draft_preclaim(job, runtime_context=runtime_context).allows_start
 
-    def draft_wait_snapshot(self, agent_name: str, job_id: str) -> dict:
+    def draft_wait_snapshot(self, agent_name: str, job_id: str) -> dict[str, object]:
         """Cached pre-claim evidence only: observers must never inspect/clear input."""
         from .draft_guard import WAIT_SECONDS
         record = self._draft_guards.get(agent_name)
         if record is None or record[0] != job_id:
             return {}
         guard = record[1]
-        return {'job_id': job_id, 'reason': guard.reason,
-                'wait_seconds': WAIT_SECONDS,
-                'elapsed_seconds': max(0.0, guard.clock() - guard.since) if guard.since is not None else None,
-                'clear_attempted': guard.clear_attempted}
+        return {
+            'job_id': job_id,
+            'reason': guard.reason,
+            'wait_seconds': WAIT_SECONDS,
+            'elapsed_seconds': max(0.0, guard.clock() - guard.since) if guard.since is not None else None,
+            'clear_attempted': guard.clear_attempted,
+            **guard.composer_wait_snapshot(),
+        }
+
+    def _clear_draft_wait(self, job_id: str) -> None:
+        for agent_name, (guard_job_id, _guard) in tuple(self._draft_guards.items()):
+            if guard_job_id == job_id:
+                self._draft_guards.pop(agent_name, None)
 
     def start(self, job: JobRecord, *, runtime_context: ProviderRuntimeContext | None = None) -> ProviderSubmission | None:
         start_token = object()
@@ -139,6 +148,7 @@ class ExecutionService(ExecutionServiceStateMixin):
     def cancel(self, job_id: str) -> None:
         with self._active_transition_lock:
             self._starting.pop(job_id, None)
+            self._clear_draft_wait(job_id)
             submission = self._active.pop(job_id, None)
             self._runtime_contexts.pop(job_id, None)
             self._pending_replays.pop(job_id, None)
@@ -171,6 +181,7 @@ class ExecutionService(ExecutionServiceStateMixin):
     def finish(self, job_id: str) -> None:
         with self._active_transition_lock:
             self._starting.pop(job_id, None)
+            self._clear_draft_wait(job_id)
             self._active.pop(job_id, None)
             self._runtime_contexts.pop(job_id, None)
             self._pending_replays.pop(job_id, None)

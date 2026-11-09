@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 
 from .agent_health import HealthVerdict, classify_agent_health
 from .watch_fallback import load_persisted_terminal_watch_payload
@@ -36,6 +38,9 @@ class WatchEventBatch:
     status: str | None
     reply: str
     events: tuple[dict, ...]
+    delivery_wait: dict[str, object] | None = None
+    diagnostic_only: bool = False
+    composer_diagnostic_cleared: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +50,7 @@ class HealthCheckResult:
     pane_dead_count: int
     verdict: HealthVerdict
     fatal_message: str = ""
+    delivery_wait: dict[str, object] | None = None
 
 
 def default_watch_timeout_seconds() -> float | None:
@@ -96,6 +102,7 @@ def watch_target(
     auto_start_attempts = 0
     auto_start_first_at: float | None = None
     auto_start_last_at: float | None = None
+    last_composer_diagnostic_key: tuple[str, str, bool] | None = None
 
     while True:
         try:
@@ -172,6 +179,13 @@ def watch_target(
         last_health_check = result.last_health_check
         health_check_errors = result.health_check_errors
         pane_dead_count = result.pane_dead_count
+        diagnostic_key = _composer_diagnostic_key(result.delivery_wait)
+        if diagnostic_key != last_composer_diagnostic_key:
+            if result.delivery_wait is not None:
+                yield replace(batch, delivery_wait=result.delivery_wait, diagnostic_only=True)
+            elif last_composer_diagnostic_key is not None:
+                yield replace(batch, diagnostic_only=True, composer_diagnostic_cleared=True)
+            last_composer_diagnostic_key = diagnostic_key
 
         if result.fatal_message:
             # Every other failure path in this loop consults the persisted
@@ -245,6 +259,7 @@ def _check_agent_health(
     try:
         health_payload = queue_fn(batch.agent_name)
         agent = health_payload.get("agent") or {}
+        delivery_wait = _matching_composer_wait(agent.get('delivery_wait'), batch)
         verdict = classify_agent_health(
             runtime_health=agent.get("runtime_health"),
             runtime_state=agent.get("runtime_state"),
@@ -260,13 +275,14 @@ def _check_agent_health(
                     f"Agent {batch.agent_name} health is {verdict.observed}. "
                     f"Job {batch.job_id} cannot proceed."
                 ),
+                delivery_wait=delivery_wait,
             )
         if verdict.action != "ok":
             # The pane is expected to be missing or dead while it is being
             # started or healed by ccbd, so the verdict governs here rather
             # than the pane probe.  Without this, a 2-confirm pane-dead fatal
             # would fire ~10s in, long before the auto-start grace elapses.
-            return HealthCheckResult(now, 0, 0, verdict)
+            return HealthCheckResult(now, 0, 0, verdict, delivery_wait=delivery_wait)
 
         pane_state = agent.get("pane_state")
         if pane_state is not None and pane_state != "alive":
@@ -285,7 +301,7 @@ def _check_agent_health(
                 )
         else:
             pane_dead_count = 0
-        return HealthCheckResult(now, 0, pane_dead_count, verdict)
+        return HealthCheckResult(now, 0, pane_dead_count, verdict, delivery_wait=delivery_wait)
     except reconnect_error_classes + (AttributeError,) as exc:
         health_check_errors += 1
         if health_check_errors >= _MAX_HEALTH_CHECK_ERRORS:
@@ -300,6 +316,46 @@ def _check_agent_health(
                 ),
             )
         return HealthCheckResult(now, health_check_errors, pane_dead_count, _UNCHANGED_VERDICT)
+
+
+def _matching_composer_wait(wait: object, batch: WatchEventBatch) -> dict[str, object] | None:
+    if not isinstance(wait, Mapping):
+        return None
+    job_id = str(wait.get('job_id') or '')
+    reason = wait.get('composer_unavailable_reason')
+    elapsed = wait.get('composer_unavailable_elapsed_seconds')
+    threshold = wait.get('composer_unavailable_threshold_seconds')
+    if job_id != batch.job_id or reason not in {'composer_missing', 'composer_layout_unknown'}:
+        return None
+    if not _finite_composer_number(elapsed) or not _finite_composer_number(threshold):
+        return None
+    return {
+        'job_id': job_id,
+        'composer_unavailable_reason': reason,
+        'composer_unavailable_elapsed_seconds': float(elapsed),
+        'composer_unavailable_threshold_seconds': float(threshold),
+        'composer_unavailable_attention': wait.get('composer_unavailable_attention') is True,
+    }
+
+
+def _finite_composer_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(number) and number >= 0
+
+
+def _composer_diagnostic_key(wait: Mapping[str, object] | None) -> tuple[str, str, bool] | None:
+    if wait is None:
+        return None
+    return (
+        str(wait.get('job_id') or ''),
+        str(wait.get('composer_unavailable_reason') or ''),
+        wait.get('composer_unavailable_attention') is True,
+    )
 
 
 def _watch_deadline(timeout_s: float | None, *, time_fn) -> float | None:

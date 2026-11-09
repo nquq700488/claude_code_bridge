@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ccbd.models import LeaseHealth
 from cli.context import CliContext
 from cli.models import ParsedPingCommand
@@ -7,7 +9,7 @@ from cli.models import ParsedPingCommand
 from .daemon import connect_mounted_daemon, ping_local_state
 
 
-def ping_target(context: CliContext, command: ParsedPingCommand) -> dict:
+def ping_target(context: CliContext, command: ParsedPingCommand) -> dict[str, object]:
     local = ping_local_state(context)
     target = command.target
     if local.mount_state == 'unmounted':
@@ -73,4 +75,43 @@ def ping_target(context: CliContext, command: ParsedPingCommand) -> dict:
     if target == 'ccbd':
         diagnostics = dict(payload.pop('diagnostics', {}) or {})
         payload.update(diagnostics)
-    return payload
+        return payload
+    return _merge_delivery_wait(handle.client, payload, target)
+
+
+def _merge_delivery_wait(
+    client: object,
+    payload: dict[str, object],
+    target: str,
+) -> dict[str, object]:
+    queue_fn = getattr(client, 'queue', None)
+    if not callable(queue_fn):
+        return payload
+    try:
+        queue_payload = queue_fn(target)
+    except Exception:
+        return payload
+    if not isinstance(queue_payload, Mapping):
+        return payload
+    if target == 'all':
+        queued_agents = queue_payload.get('agents') or ()
+        waits = {
+            str(agent.get('agent_name') or ''): agent.get('delivery_wait')
+            for agent in queued_agents
+            if isinstance(agent, Mapping) and isinstance(agent.get('delivery_wait'), Mapping)
+        }
+        if not waits:
+            return payload
+        agents = payload.get('agents') or ()
+        return {
+            **payload,
+            'agents': [
+                {**agent, 'delivery_wait': dict(waits[str(agent.get('agent_name') or '')])}
+                if isinstance(agent, Mapping) and str(agent.get('agent_name') or '') in waits
+                else agent
+                for agent in agents
+            ],
+        }
+    queue_agent = queue_payload.get('agent')
+    wait = queue_agent.get('delivery_wait') if isinstance(queue_agent, Mapping) else None
+    return {**payload, 'delivery_wait': dict(wait)} if isinstance(wait, Mapping) else payload

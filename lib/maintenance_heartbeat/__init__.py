@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from .classifier import MaintenanceHeartbeatEvaluation, evaluate_project_view, evaluate_ps_summary
+from .classifier import (
+    MaintenanceHeartbeatEvaluation,
+    composer_advisories_from_project_view,
+    evaluate_project_view,
+    evaluate_ps_summary,
+)
 from .lock import MaintenanceHeartbeatLock, MaintenanceHeartbeatLockBusy
 from .models import (
     MaintenanceHeartbeatActivation,
@@ -20,6 +25,7 @@ __all__ = [
     'MaintenanceHeartbeatSchedule',
     'MaintenanceHeartbeatStatus',
     'MaintenanceHeartbeatStore',
+    'composer_advisories_from_project_view',
     'evaluate_project_view',
     'evaluate_ps_summary',
 ]

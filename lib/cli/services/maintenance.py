@@ -32,6 +32,7 @@ from maintenance_heartbeat import (
     MaintenanceHeartbeatSchedule,
     MaintenanceHeartbeatStatus,
     MaintenanceHeartbeatStore,
+    composer_advisories_from_project_view,
     evaluate_project_view,
     evaluate_ps_summary,
 )
@@ -72,7 +73,7 @@ class _RuntimeObservation:
 def maintenance_status(context: CliContext, command: ParsedMaintenanceCommand) -> dict:
     action = str(command.action or 'status').strip().lower()
     if action == 'status':
-        return _maintenance_status(context)
+        return _maintenance_status(context, refresh_composer=True)
     if action == 'tick':
         return _maintenance_tick(context, command)
     if action == 'schedule':
@@ -92,7 +93,12 @@ def maintenance_status(context: CliContext, command: ParsedMaintenanceCommand) -
     }
 
 
-def _maintenance_status(context: CliContext) -> dict:
+def _maintenance_status(
+    context: CliContext,
+    *,
+    composer_refresh: tuple[str, tuple[dict[str, object], ...]] | None = None,
+    refresh_composer: bool = False,
+) -> dict:
     loaded = load_project_config(context.project.project_root)
     heartbeat = loaded.config.maintenance_heartbeat
     store = MaintenanceHeartbeatStore(context.paths, project_id=context.project.project_id)
@@ -100,6 +106,9 @@ def _maintenance_status(context: CliContext) -> dict:
     last_status = store.load_status()
     runner = store.load_runner()
     last_activation = _load_last_activation(store, context)
+    if composer_refresh is None:
+        composer_refresh = _refresh_composer_advisories(context) if refresh_composer else ('unavailable', ())
+    composer_freshness, composer_advisories = composer_refresh
     degraded = schedule.state == 'corrupt' or last_status.state == 'corrupt' or runner.state == 'corrupt'
     return {
         'maintenance_status': 'degraded' if degraded else 'ok',
@@ -119,7 +128,32 @@ def _maintenance_status(context: CliContext) -> dict:
         'last_status': last_status.to_record(),
         'runner': runner.to_record(),
         'last_activation': last_activation,
+        'composer_advisory_freshness': composer_freshness,
+        'composer_advisories': list(composer_advisories),
     }
+
+
+def _refresh_composer_advisories(
+    context: CliContext,
+) -> tuple[str, tuple[dict[str, object], ...]]:
+    try:
+        handle = connect_mounted_daemon(context, allow_restart_stale=False)
+        if handle.client is None:
+            return 'unavailable', ()
+        payload = handle.client.project_view(schema_version=1)
+        if not isinstance(payload, Mapping):
+            return 'unavailable', ()
+        return 'current', composer_advisories_from_project_view(payload)
+    except Exception:
+        return 'unavailable', ()
+
+
+def _observation_composer_refresh(
+    observation: _RuntimeObservation,
+) -> tuple[str, tuple[dict[str, object], ...]]:
+    if observation.evaluation.source_kind != 'project_view' or not isinstance(observation.payload, Mapping):
+        return 'unavailable', ()
+    return 'current', composer_advisories_from_project_view(observation.payload)
 
 
 def _maintenance_tick(context: CliContext, command: ParsedMaintenanceCommand) -> dict:
@@ -438,6 +472,7 @@ def _run_due_tick(
 ) -> dict:
     observation = _evaluate_runtime(context)
     evaluation = observation.evaluation
+    composer_refresh = _observation_composer_refresh(observation)
     previous = store.load_status()
     unknown_streak = _next_unknown_streak(evaluation.health, previous)
     next_after_s = _next_after_s(evaluation.health, heartbeat=heartbeat, unknown_streak=unknown_streak)
@@ -467,6 +502,7 @@ def _run_due_tick(
         needs_user=needs_user,
         summary=evaluation.summary,
         evidence=evaluation.evidence,
+        composer_advisories=composer_refresh[1],
         last_activation_status=getattr(activation, 'status', None),
         last_activation_id=getattr(activation, 'activation_id', None),
         last_activation_job_id=getattr(activation, 'job_id', None),
@@ -483,7 +519,7 @@ def _run_due_tick(
     store.save_status(status)
     store.save_schedule(schedule)
     return {
-        **_maintenance_status(context),
+        **_maintenance_status(context, composer_refresh=composer_refresh),
         'maintenance_status': 'degraded' if _activation_needs_user(activation) else 'ok',
         'action': 'tick',
         'tick_status': evaluation.health,

@@ -2,10 +2,22 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+from cli.render_runtime.common import render_composer_unavailable
+
 
 def handle_ping(context, command, out, services) -> int:
     payload = services.ping_target(context, command)
-    services.write_lines(out, services.render_mapping(payload))
+    lines = list(services.render_mapping(payload))
+    if command.target == 'all':
+        for agent in payload.get('agents') or ():
+            lines.extend(render_composer_unavailable(
+                agent.get('delivery_wait'), agent_name=agent.get('agent_name')
+            ))
+    else:
+        lines.extend(render_composer_unavailable(
+            payload.get('delivery_wait'), agent_name=payload.get('agent_name')
+        ))
+    services.write_lines(out, lines)
     return 0
 
 

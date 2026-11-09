@@ -44,3 +44,49 @@ def test_doctor_loads_only_exact_project_view_active_inbound_diagnostics(monkeyp
 
     assert error is None
     assert diagnostics == [_diagnostic('job_orphaned')]
+
+
+def test_doctor_project_view_composer_diagnostic_is_safe_and_current(monkeypatch) -> None:
+    class _Client:
+        def __init__(self, socket_path, *, timeout_s):
+            del socket_path, timeout_s
+
+        def project_view(self, *, schema_version: int):
+            assert schema_version == 1
+            return {
+                'view': {
+                    'agents': [
+                        {
+                            'name': 'codex',
+                            'delivery_wait': {
+                                'job_id': 'job_wait',
+                                'composer_unavailable_reason': 'composer_missing',
+                                'composer_unavailable_elapsed_seconds': 180.0,
+                                'composer_unavailable_threshold_seconds': 180.0,
+                                'composer_unavailable_attention': True,
+                                'pane_text': 'private task body',
+                            },
+                        }
+                    ]
+                }
+            }
+
+    monkeypatch.setattr(doctor_service, 'CcbdClient', _Client)
+    context = SimpleNamespace(paths=SimpleNamespace(ccbd_socket_path='/tmp/ccbd.sock'))
+    local = SimpleNamespace(mount_state='mounted', socket_connectable=True)
+
+    payload, error = doctor_service._load_remote_project_view_payload(context, local=local)
+    diagnostics = doctor_service.composer_advisories_from_project_view(payload or {})
+
+    assert error is None
+    assert diagnostics == (
+        {
+            'agent_name': 'codex',
+            'job_id': 'job_wait',
+            'composer_unavailable_reason': 'composer_missing',
+            'composer_unavailable_elapsed_seconds': 180.0,
+            'composer_unavailable_threshold_seconds': 180.0,
+            'composer_unavailable_attention': True,
+        },
+    )
+    assert 'private task body' not in str(diagnostics)

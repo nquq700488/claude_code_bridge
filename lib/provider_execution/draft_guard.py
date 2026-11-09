@@ -12,6 +12,8 @@ from typing import Callable
 from .draft_observation import Observation, inspect_screen
 
 WAIT_SECONDS = 180.0
+COMPOSER_UNAVAILABLE_WAIT_SECONDS = 180.0
+COMPOSER_UNAVAILABLE_REASONS = frozenset({'composer_missing', 'composer_layout_unknown'})
 
 PRECLAIM_ALLOWED = 'allowed'
 PRECLAIM_BLOCKED = 'blocked'
@@ -44,16 +46,51 @@ class DraftGuard:
     since: float | None = None
     clear_attempted: bool = False
     reason: str = 'unobserved'
+    composer_wait_binding: str | None = None
+    composer_wait_since: float | None = None
+    composer_wait_reason: str | None = None
+
+    def _reset_composer_wait(self) -> None:
+        self.composer_wait_binding = None
+        self.composer_wait_since = None
+        self.composer_wait_reason = None
 
     def reset(self, reason: str) -> None:
         self.since = None
         self.reason = reason
+        self._reset_composer_wait()
+
+    def composer_wait_snapshot(self) -> dict[str, object]:
+        if self.composer_wait_since is None or self.composer_wait_reason is None:
+            return {}
+        elapsed = max(0.0, self.clock() - self.composer_wait_since)
+        return {
+            'composer_unavailable_reason': self.composer_wait_reason,
+            'composer_unavailable_elapsed_seconds': elapsed,
+            'composer_unavailable_threshold_seconds': COMPOSER_UNAVAILABLE_WAIT_SECONDS,
+            'composer_unavailable_attention': elapsed >= COMPOSER_UNAVAILABLE_WAIT_SECONDS,
+        }
+
+    def _record_composer_wait(self, observation: Observation) -> None:
+        if observation.reason not in COMPOSER_UNAVAILABLE_REASONS:
+            self._reset_composer_wait()
+            return
+        if self.composer_wait_binding != observation.binding or self.composer_wait_since is None:
+            self.composer_wait_binding = observation.binding
+            self.composer_wait_since = self.clock()
+        self.composer_wait_reason = observation.reason
 
     def allows(self, target: 'DraftTarget') -> bool:
         observation = target.observe()
         if observation.state not in {'empty', 'nonempty'}:
-            self.reset(observation.reason)
+            if observation.reason in COMPOSER_UNAVAILABLE_REASONS:
+                self.since = None
+                self.reason = observation.reason
+                self._record_composer_wait(observation)
+            else:
+                self.reset(observation.reason)
             return False
+        self._reset_composer_wait()
         if self.binding != observation.binding:
             self.binding = observation.binding
             self.since = None

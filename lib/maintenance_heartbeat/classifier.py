@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from ccbd.system import parse_utc_timestamp
@@ -178,6 +179,55 @@ def evaluate_project_view(payload: Mapping[str, object]) -> MaintenanceHeartbeat
         summary=summary,
         evidence=tuple(evidence[:20]),
     )
+
+
+def composer_advisories_from_project_view(payload: Mapping[str, object]) -> tuple[dict[str, object], ...]:
+    view = _mapping(payload.get('view')) or payload
+    advisories: list[dict[str, object]] = []
+    for agent in _records(view.get('agents')):
+        wait = _mapping(agent.get('delivery_wait'))
+        if wait is None:
+            continue
+        agent_name = str(agent.get('name') or agent.get('agent_name') or '').strip()
+        job_id = str(wait.get('job_id') or '').strip()
+        reason = wait.get('composer_unavailable_reason')
+        elapsed = wait.get('composer_unavailable_elapsed_seconds')
+        threshold = wait.get('composer_unavailable_threshold_seconds')
+        if (
+            not agent_name
+            or not job_id
+            or reason not in {'composer_missing', 'composer_layout_unknown'}
+            or not _finite_nonnegative_number(elapsed)
+            or not _finite_positive_number(threshold)
+        ):
+            continue
+        elapsed_seconds = float(elapsed)
+        threshold_seconds = float(threshold)
+        advisories.append(
+            {
+                'agent_name': agent_name,
+                'job_id': job_id,
+                'composer_unavailable_reason': reason,
+                'composer_unavailable_elapsed_seconds': elapsed_seconds,
+                'composer_unavailable_threshold_seconds': threshold_seconds,
+                'composer_unavailable_attention': elapsed_seconds >= threshold_seconds,
+            }
+        )
+    return tuple(advisories)
+
+
+def _finite_nonnegative_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(number) and number >= 0
+
+
+def _finite_positive_number(value: object) -> bool:
+    return _finite_nonnegative_number(value) and float(value) > 0
 
 
 def evaluate_ps_summary(payload: Mapping[str, object], *, error: str | None = None) -> MaintenanceHeartbeatEvaluation:

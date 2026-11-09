@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+import math
 import re
 
 
@@ -19,6 +20,43 @@ def display_text(value: object) -> str:
 
 def render_mapping(payload: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(f'{key}: {value}' for key, value in payload.items())
+
+
+def render_composer_unavailable_action(agent_name: object) -> str:
+    agent = str(agent_name or '<agent>')
+    return (
+        f'composer_unavailable_action: inspect with `ccb screen {agent}` and resolve the provider '
+        'prompt manually; the job remains queued and normal dispatch resumes when the composer is usable'
+    )
+
+
+def render_composer_unavailable(wait: object, *, agent_name: object) -> tuple[str, ...]:
+    if not isinstance(wait, Mapping):
+        return ()
+    reason = wait.get('composer_unavailable_reason')
+    elapsed = wait.get('composer_unavailable_elapsed_seconds')
+    threshold = wait.get('composer_unavailable_threshold_seconds')
+    if reason not in {'composer_missing', 'composer_layout_unknown'}:
+        return ()
+    if not _finite_number(elapsed) or not _finite_number(threshold):
+        return ()
+    attention = wait.get('composer_unavailable_attention') is True
+    lines = (
+        'composer_unavailable: '
+        f'agent={agent_name} job={wait.get("job_id")} reason={reason} '
+        f'elapsed_seconds={float(elapsed):.1f} threshold_seconds={float(threshold):.1f} '
+        f'attention={str(attention).lower()}',
+    )
+    return (*lines, render_composer_unavailable_action(agent_name)) if attention else lines
+
+
+def _finite_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(float(value))
+    except OverflowError:
+        return False
 
 
 def render_observer_notice(
@@ -124,6 +162,7 @@ def write_lines(out, lines: Iterable[str]) -> None:
 __all__ = [
     'display_text',
     'observer_status_is_terminal',
+    'render_composer_unavailable_action',
     'render_observer_notice',
     'render_mapping',
     'render_tmux_cleanup_summaries',

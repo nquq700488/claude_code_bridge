@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 from ccbd.socket_client import CcbdClientError
 from cli.context import CliContext
 from cli.models import ParsedPendCommand
@@ -18,10 +20,10 @@ def pend_target(context: CliContext, command: ParsedPendCommand) -> dict:
         return _pend_target_with_client(handle.client, command.target)
 
 
-def _pend_target_with_client(client, target: str) -> dict:
+def _pend_target_with_client(client: object, target: str) -> dict[str, object]:
     normalized = str(target or '').strip()
     if normalized.startswith('job_'):
-        return client.get(normalized)
+        return _merge_delivery_wait(client, client.get(normalized))
 
     inbox_head = _safe_mailbox_head(client, normalized)
     try:
@@ -30,8 +32,8 @@ def _pend_target_with_client(client, target: str) -> dict:
         if inbox_head is None:
             raise
         if inbox_head.get('reply_id') is not None:
-            return _mailbox_reply_payload(normalized, inbox_head)
-        return {
+            return _merge_delivery_wait(client, _mailbox_reply_payload(normalized, inbox_head))
+        payload = {
             'job_id': None,
             'agent_name': normalized,
             'target_kind': 'agent',
@@ -48,6 +50,7 @@ def _pend_target_with_client(client, target: str) -> dict:
             'mailbox_summary_status': inbox_head.get('summary_status'),
             'mailbox_summary_error': inbox_head.get('summary_error'),
         }
+        return _merge_delivery_wait(client, payload)
 
     if inbox_head is not None and inbox_head.get('reply_id') is not None:
         payload = dict(payload)
@@ -56,7 +59,23 @@ def _pend_target_with_client(client, target: str) -> dict:
         payload = dict(payload)
         payload['mailbox_summary_status'] = inbox_head.get('summary_status')
         payload['mailbox_summary_error'] = inbox_head.get('summary_error')
-    return payload
+    return _merge_delivery_wait(client, payload)
+
+
+def _merge_delivery_wait(client: object, payload: dict[str, object]) -> dict[str, object]:
+    agent_name = str(payload.get('agent_name') or '').strip()
+    queue_fn = getattr(client, 'queue', None)
+    if not agent_name or not callable(queue_fn):
+        return payload
+    try:
+        queue_payload = queue_fn(agent_name)
+    except Exception:
+        return payload
+    if not isinstance(queue_payload, Mapping):
+        return payload
+    agent = queue_payload.get('agent')
+    wait = agent.get('delivery_wait') if isinstance(agent, Mapping) else None
+    return {**payload, 'delivery_wait': dict(wait)} if isinstance(wait, Mapping) else payload
 
 
 def _safe_mailbox_head(client, agent_name: str) -> dict | None:

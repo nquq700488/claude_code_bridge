@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ..common import display_text, observer_status_is_terminal, render_observer_notice
+from ..common import display_text, observer_status_is_terminal, render_composer_unavailable, render_observer_notice
 
 
 def render_job_state(payload: Mapping[str, object]) -> tuple[str, ...]:
@@ -59,6 +59,7 @@ def render_pend(payload: Mapping[str, object]) -> tuple[str, ...]:
             )
         if payload.get('mailbox_reply') is not None:
             lines.append(f'mailbox_reply: {display_text(payload.get("mailbox_reply"))}')
+    lines.extend(render_composer_unavailable(payload.get('delivery_wait'), agent_name=payload.get('agent_name')))
     return tuple(lines)
 
 

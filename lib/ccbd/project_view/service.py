@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from time import monotonic
@@ -110,7 +111,7 @@ class ProjectViewDependencies:
 @dataclass(frozen=True)
 class _ExecutionProviderEvidence:
     state: str | None
-    identity_current: bool
+    identity_current: bool | None
     reason: str | None
     last_progress_at: str | None
 
@@ -552,7 +553,10 @@ class ProjectViewService:
                     sidebar_refresh_started = monotonic()
                     did_refresh_sidebar = self._refresh_sidebar_panes(refresh_started=sidebar_refresh_started)
                 _record_project_view_cache_hit(self._deps.metrics, response_started=response_started)
-                return cached.response
+                return _refresh_cached_composer_advisories(
+                    cached.response,
+                    dispatcher=self._deps.dispatcher,
+                )
         metrics_context = _ProjectViewMetricsContext()
         sidebar_refresh_started = monotonic()
         did_refresh_sidebar = self._consume_sidebar_refresh_request()
@@ -800,6 +804,85 @@ def _record_project_view_sidebar_refresh(metrics, *, refresh_started: float, suc
     metrics.last_project_view_sidebar_refresh_duration_s = max(0.0, monotonic() - refresh_started)
 
 
+def _composer_wait_for_job(dispatcher: object, agent_name: str, job_id: object) -> dict[str, object] | None:
+    execution = getattr(dispatcher, '_execution_service', None)
+    snapshotter = getattr(execution, 'draft_wait_snapshot', None)
+    job_key = str(job_id or '').strip()
+    if not job_key or not callable(snapshotter):
+        return None
+    try:
+        wait = snapshotter(agent_name, job_key)
+    except Exception:
+        return None
+    if not isinstance(wait, dict) or str(wait.get('job_id') or '').strip() != job_key:
+        return None
+    reason = wait.get('composer_unavailable_reason')
+    elapsed = wait.get('composer_unavailable_elapsed_seconds')
+    threshold = wait.get('composer_unavailable_threshold_seconds')
+    if reason not in {'composer_missing', 'composer_layout_unknown'}:
+        return None
+    if not _finite_nonnegative_number(elapsed) or not _finite_positive_number(threshold):
+        return None
+    elapsed_seconds = float(elapsed)
+    threshold_seconds = float(threshold)
+    return {
+        'job_id': job_key,
+        'composer_unavailable_reason': reason,
+        'composer_unavailable_elapsed_seconds': elapsed_seconds,
+        'composer_unavailable_threshold_seconds': threshold_seconds,
+        'composer_unavailable_attention': elapsed_seconds >= threshold_seconds,
+    }
+
+
+def _finite_nonnegative_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        number = float(value)
+    except OverflowError:
+        return False
+    return math.isfinite(number) and number >= 0
+
+
+def _finite_positive_number(value: object) -> bool:
+    return _finite_nonnegative_number(value) and float(value) > 0
+
+
+def _refresh_cached_composer_advisories(
+    response: dict[str, object],
+    *,
+    dispatcher: object,
+) -> dict[str, object]:
+    view = response.get('view')
+    agents = view.get('agents') if isinstance(view, dict) else None
+    if not isinstance(agents, list):
+        return response
+    refreshed_agents: list[dict[str, object]] = []
+    changed = False
+    for agent in agents:
+        if not isinstance(agent, dict):
+            continue
+        name = str(agent.get('name') or '').strip()
+        previous = agent.get('delivery_wait')
+        previous_job_id = previous.get('job_id') if isinstance(previous, dict) else None
+        job_id = agent.get('current_job_id') or previous_job_id
+        wait = _composer_wait_for_job(dispatcher, name, job_id)
+        if wait == previous:
+            refreshed_agents.append(agent)
+            continue
+        changed = True
+        refreshed = {key: value for key, value in agent.items() if key != 'delivery_wait'}
+        if wait is not None:
+            refreshed['delivery_wait'] = wait
+        refreshed_agents.append(refreshed)
+    if not changed:
+        return response
+    return {
+        **response,
+        'view': {**view, 'agents': refreshed_agents},
+    }
+
+
 def _agent_view(
     *,
     deps: ProjectViewDependencies,
@@ -957,6 +1040,10 @@ def _agent_view(
             restart_pending=provider_restart_pending,
         ),
     }
+    if queued_jobs:
+        wait = _composer_wait_for_job(deps.dispatcher, agent_name, getattr(queued_jobs[0], 'job_id', None))
+        if wait is not None:
+            record['delivery_wait'] = wait
     if provider_runtime is not None:
         record['provider_runtime'] = provider_runtime
     projection = build_herdr_runtime_surface_projection(runtime)
@@ -1025,7 +1112,7 @@ def _execution_provider_state(
             reason=str(getattr(provider_activity, 'reason', '') or '').strip() or None,
             last_progress_at=last_progress_at,
         )
-    return _ExecutionProviderEvidence(None, False, None, last_progress_at)
+    return _ExecutionProviderEvidence(None, None, None, last_progress_at)
 
 
 def _execution_provider_state_token(value: object) -> str | None:
@@ -2421,7 +2508,7 @@ def _execution_phase_projection(
     completion = comms_lookup.snapshot_for_job(job_id)
     provider_evidence = context.execution_provider_by_job_id.get(
         job_id,
-        _ExecutionProviderEvidence(None, False, None, None),
+        _ExecutionProviderEvidence(None, None, None, None),
     )
     if running_observation.exact_idle_candidate:
         provider_evidence = _ExecutionProviderEvidence(

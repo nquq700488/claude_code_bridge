@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 
-from .common import cleanup_csv, render_tmux_cleanup_summaries
+from .common import cleanup_csv, render_composer_unavailable, render_tmux_cleanup_summaries
 from .ops_views_common import binding_line, herdr_surface_lines
 
 
@@ -756,6 +756,14 @@ def render_maintenance(payload) -> tuple[str, ...]:
             for item in evidence[:5]:
                 if isinstance(item, Mapping):
                     lines.append(_maintenance_evidence_line('tick_evidence', item))
+
+    composer_advisories = data.get('composer_advisories')
+    composer_advisories = composer_advisories if isinstance(composer_advisories, (list, tuple)) else ()
+    lines.append(f'composer_advisory_freshness: {data.get("composer_advisory_freshness", "unavailable")}')
+    lines.append(f'composer_advisory_count: {len(composer_advisories)}')
+    for advisory in composer_advisories:
+        if isinstance(advisory, Mapping):
+            lines.extend(render_composer_unavailable(advisory, agent_name=advisory.get('agent_name')))
 
     lines.extend(
         [

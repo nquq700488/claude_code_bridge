@@ -211,6 +211,41 @@ def test_unknown_or_binding_change_starts_fresh_wait(interruption):
     assert target.clear_count == 0
 
 
+def test_composer_unavailable_timer_continues_across_reason_changes_and_resets():
+    now = [0.0]
+    guard = DraftGuard(clock=lambda: now[0])
+    target = Target()
+    target.state = 'unknown'
+    target.reason = 'composer_missing'
+
+    assert not guard.allows(target)
+    assert guard.composer_wait_snapshot()['composer_unavailable_elapsed_seconds'] == 0.0
+
+    now[0] = 100.0
+    target.reason = 'composer_layout_unknown'
+    assert not guard.allows(target)
+    assert guard.composer_wait_snapshot()['composer_unavailable_elapsed_seconds'] == 100.0
+
+    now[0] = 180.0
+    snapshot = guard.composer_wait_snapshot()
+    assert snapshot['composer_unavailable_attention'] is True
+    assert snapshot['composer_unavailable_threshold_seconds'] == 180.0
+
+    now[0] = 200.0
+    target.binding = 'pane-2'
+    assert not guard.allows(target)
+    assert guard.composer_wait_snapshot()['composer_unavailable_elapsed_seconds'] == 0.0
+
+    target.state = 'empty'
+    assert guard.allows(target)
+    assert guard.composer_wait_snapshot() == {}
+
+    target.state = 'unknown'
+    target.reason = 'provider_busy'
+    assert not guard.allows(target)
+    assert guard.composer_wait_snapshot() == {}
+
+
 def test_terminal_reconnect_failure_never_clears_or_types():
     guard = DraftGuard(clock=lambda: 10000)
     target = Target()

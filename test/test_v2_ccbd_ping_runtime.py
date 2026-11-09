@@ -597,7 +597,27 @@ def test_ping_target_all_uses_non_mutating_probe(monkeypatch) -> None:
 
     class _Client:
         def ping(self, target: str) -> dict:
-            return {'project_id': 'proj-1', 'ccbd_state': 'mounted', 'agents': [], 'target': target}
+            return {
+                'project_id': 'proj-1',
+                'ccbd_state': 'mounted',
+                'agents': [{'agent_name': 'codex', 'health': 'healthy'}],
+                'target': target,
+            }
+
+        def queue(self, target: str) -> dict:
+            assert target == 'all'
+            return {
+                'agents': [
+                    {
+                        'agent_name': 'codex',
+                        'delivery_wait': {
+                            'job_id': 'job_1',
+                            'reason': 'composer_layout_unknown',
+                            'composer_unavailable_reason': 'composer_layout_unknown',
+                        },
+                    }
+                ]
+            }
 
     def _connect(_context, *, allow_restart_stale):
         seen.append(allow_restart_stale)
@@ -608,6 +628,7 @@ def test_ping_target_all_uses_non_mutating_probe(monkeypatch) -> None:
     payload = ping_target(context, ParsedPingCommand(project=None, target='all'))
 
     assert payload['target'] == 'all'
+    assert payload['agents'][0]['delivery_wait']['job_id'] == 'job_1'
     assert seen == [False]
 
 
@@ -659,6 +680,19 @@ def test_ping_target_agent_uses_non_mutating_probe(monkeypatch) -> None:
         def ping(self, target: str) -> dict:
             return {'project_id': 'proj-1', 'agent_name': target, 'mount_state': 'mounted', 'health': 'healthy', 'diagnostics': {}}
 
+        def queue(self, target: str) -> dict:
+            assert target == 'demo'
+            return {
+                'agent': {
+                    'agent_name': target,
+                    'delivery_wait': {
+                        'job_id': 'job_2',
+                        'reason': 'composer_missing',
+                        'composer_unavailable_reason': 'composer_missing',
+                    },
+                }
+            }
+
     def _connect(_context, *, allow_restart_stale):
         seen.append(allow_restart_stale)
         return SimpleNamespace(client=_Client())
@@ -668,4 +702,32 @@ def test_ping_target_agent_uses_non_mutating_probe(monkeypatch) -> None:
     payload = ping_target(context, ParsedPingCommand(project=None, target='demo'))
 
     assert payload['agent_name'] == 'demo'
+    assert payload['delivery_wait']['job_id'] == 'job_2'
     assert seen == [False]
+
+
+def test_ping_queue_lookup_failure_preserves_ping_result(monkeypatch) -> None:
+    response = {'agent_name': 'demo', 'health': 'healthy'}
+    queue_targets: list[str] = []
+
+    class _Client:
+        def ping(self, target: str) -> dict:
+            return dict(response)
+
+        def queue(self, target: str) -> dict:
+            queue_targets.append(target)
+            raise RuntimeError('temporary queue failure')
+
+    monkeypatch.setattr(
+        'cli.services.ping.ping_local_state',
+        lambda _context: SimpleNamespace(mount_state='mounted'),
+    )
+    monkeypatch.setattr(
+        'cli.services.ping.connect_mounted_daemon',
+        lambda _context, *, allow_restart_stale: SimpleNamespace(client=_Client()),
+    )
+
+    payload = ping_target(SimpleNamespace(), ParsedPingCommand(project=None, target='demo'))
+
+    assert payload == response
+    assert queue_targets == ['demo']

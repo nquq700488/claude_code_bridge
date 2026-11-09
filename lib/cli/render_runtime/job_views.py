@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from .common import display_text, render_mapping, render_observer_notice
+from .common import display_text, render_composer_unavailable, render_mapping, render_observer_notice
 
 
 def render_ask(summary) -> tuple[str, ...]:
@@ -88,6 +88,14 @@ def render_watch_batch(batch) -> tuple[str, ...]:
         lines.append(
             f'event: {event["event_id"]} {event["job_id"]} {target} {event["type"]} {event["timestamp"]}'
         )
+    if getattr(batch, 'diagnostic_only', False):
+        lines.append('watch_status: diagnostic')
+        if getattr(batch, 'composer_diagnostic_cleared', False):
+            lines.append(f'composer_unavailable: cleared agent={batch.agent_name} job={batch.job_id}')
+        else:
+            lines.extend(render_composer_unavailable(
+                getattr(batch, 'delivery_wait', None), agent_name=batch.agent_name
+            ))
     if batch.terminal:
         target = getattr(batch, 'target_name', '') or getattr(batch, 'agent_name', '')
         lines.extend(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+from .common import render_composer_unavailable
 from .ops_views_common import binding_line, herdr_surface_lines
 
 
@@ -217,6 +218,12 @@ def render_doctor(payload: Mapping[str, object]) -> tuple[str, ...]:
             f'recommended_action={diagnostic.get("recommended_action")} '
             f'automatic_action={diagnostic.get("automatic_action")}'
         )
+    composer_advisories = payload.get('composer_advisories') or ()
+    lines.append(f'composer_advisory_freshness: {payload.get("composer_advisory_freshness", "unavailable")}')
+    lines.append(f'composer_advisory_count: {len(composer_advisories)}')
+    for advisory in composer_advisories:
+        if isinstance(advisory, Mapping):
+            lines.extend(render_composer_unavailable(advisory, agent_name=advisory.get('agent_name')))
     for agent in payload['agents']:
         lines.append(
             f'agent: name={agent["agent_name"]} health={agent["health"]} provider={agent["provider"]} completion={agent["completion_family"]}'

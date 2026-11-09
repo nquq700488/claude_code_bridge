@@ -500,8 +500,8 @@ def _write_active_unload_drain(layout: PathLayout, agent_name: str):
     ('activity_pane', 'activity_updated_at', 'expected_phase', 'expected_reason'),
     (
         ('%2', NOW, 'executing', 'provider_active'),
-        ('%99', NOW, 'unknown', 'provider_identity_mismatch'),
-        ('%2', '2026-05-20T11:58:00Z', 'unknown', 'provider_identity_mismatch'),
+        ('%99', NOW, 'unknown', 'provider_identity_unavailable'),
+        ('%2', '2026-05-20T11:58:00Z', 'unknown', 'provider_identity_unavailable'),
     ),
 )
 def test_project_view_correlates_anchored_provider_activity_by_exact_pane(
@@ -3527,6 +3527,68 @@ def test_project_view_sequence_changes_when_content_changes(tmp_path: Path) -> N
     assert second['view']['agents'][0]['activity_reason'] == 'job_running'
     assert second['view']['agents'][0]['current_job_id'] == 'job_running_1234'
     assert [item['id'] for item in second['view']['comms']] == ['job_running_1234']
+
+
+def test_project_view_cache_refreshes_composer_attention_without_pane_probe(tmp_path: Path) -> None:
+    project_root = tmp_path / 'repo-cache-composer-wait'
+    project_root.mkdir()
+    layout = PathLayout(project_root)
+    project_id = compute_project_id(project_root)
+    config = _config()
+    registry = AgentRegistry(layout, config)
+    for agent_name in config.agents:
+        registry.upsert(_runtime(agent_name, project_id=project_id))
+    mount_manager = MountManager(layout, clock=lambda: NOW)
+    mount_manager.mark_mounted(project_id=project_id, pid=123, socket_path=layout.ccbd_socket_path, generation=1, started_at=NOW)
+
+    wait = {
+        'job_id': 'job_composer_wait',
+        'composer_unavailable_reason': 'composer_layout_unknown',
+        'composer_unavailable_elapsed_seconds': 179.0,
+        'composer_unavailable_threshold_seconds': 180.0,
+        'composer_unavailable_attention': False,
+        'pane_text': 'must never be projected',
+    }
+
+    class _Execution:
+        def draft_wait_snapshot(self, agent_name: str, job_id: str) -> dict[str, object]:
+            assert (agent_name, job_id) == ('agent1', 'job_composer_wait')
+            return dict(wait)
+
+        def active_runtime_snapshots(self) -> tuple:
+            return ()
+
+    dispatcher = JobDispatcher(layout, config, registry, execution_service=_Execution(), clock=lambda: NOW)
+    queued = _job(project_id, job_id='job_composer_wait', sender='user', target='agent1', status=JobStatus.QUEUED)
+    dispatcher._append_job(queued)
+    dispatcher._state.enqueue_for(TargetKind.AGENT, 'agent1', queued.job_id)
+    service = ProjectViewService(
+        ProjectViewDependencies(
+            project_root=project_root,
+            project_id=project_id,
+            config=config,
+            registry=registry,
+            mount_manager=mount_manager,
+            namespace_state_store=ProjectNamespaceStateStore(layout),
+            dispatcher=dispatcher,
+            clock=lambda: NOW,
+            cache_ttl_ms=60000,
+        )
+    )
+
+    first = service.build_response()
+    wait.update(
+        composer_unavailable_elapsed_seconds=180.0,
+        composer_unavailable_attention=True,
+    )
+    second = service.build_response()
+    projected = second['view']['agents'][0]['delivery_wait']
+
+    assert first['view']['agents'][0]['delivery_wait']['composer_unavailable_attention'] is False
+    assert projected['composer_unavailable_elapsed_seconds'] == 180.0
+    assert projected['composer_unavailable_attention'] is True
+    assert 'pane_text' not in projected
+    assert 'must never be projected' not in str(second)
 
 
 def test_project_view_cache_hit_skips_tmux_calls(tmp_path: Path) -> None:

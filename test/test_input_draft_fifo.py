@@ -54,6 +54,55 @@ def test_queue_explains_unknown_and_recovers_same_job_without_timeout_clear(tmp_
     assert 'delivery_wait' not in dispatcher.queue('codex')['agent']
 
 
+def test_composer_attention_recomputes_without_a_new_pane_observation(tmp_path, monkeypatch):
+    from cli.render_runtime.mailbox_views_runtime.queue import render_queue
+
+    ctx, dispatcher, execution, target, now = _guarded_dispatcher(tmp_path, monkeypatch)
+    observations = []
+    original_observe = target.observe
+
+    def counted_observe():
+        observations.append(None)
+        return original_observe()
+
+    target.observe = counted_observe
+    target.state = 'unknown'
+    target.reason = 'composer_missing'
+    job = dispatcher.submit(
+        _ask('codex', 'claude', 'first', project_id=ctx.project_id, task_id='composer-wait')
+    ).jobs[0]
+    dispatcher.tick()
+
+    now[0] = 100.0
+    target.reason = 'composer_layout_unknown'
+    dispatcher.tick()
+    observation_count = len(observations)
+
+    now[0] = 179.999
+    before_threshold = dispatcher.queue('codex')['agent']['delivery_wait']
+    assert before_threshold['composer_unavailable_elapsed_seconds'] == pytest.approx(179.999)
+    assert before_threshold['composer_unavailable_attention'] is False
+
+    now[0] = 180.0
+    at_threshold = dispatcher.queue('codex')
+    wait = at_threshold['agent']['delivery_wait']
+    rendered = '\\n'.join(render_queue(at_threshold))
+    assert wait['job_id'] == job.job_id
+    assert wait['reason'] == 'composer_layout_unknown'
+    assert wait['composer_unavailable_elapsed_seconds'] == pytest.approx(180.0)
+    assert wait['composer_unavailable_attention'] is True
+    assert 'composer_layout_unknown' in rendered
+    assert 'manually' in rendered.lower()
+    assert len(observations) == observation_count
+    assert target.clear_count == 0
+    assert execution.started == []
+
+    target.state = 'empty'
+    dispatcher.tick()
+    assert execution.started == [job.job_id]
+    assert 'delivery_wait' not in dispatcher.queue('codex')['agent']
+
+
 def test_terminal_provider_failure_fails_queued_head_without_dispatching(tmp_path, monkeypatch):
     ctx, dispatcher, execution, target, now = _guarded_dispatcher(tmp_path, monkeypatch)
     target.state = 'terminal_failure'

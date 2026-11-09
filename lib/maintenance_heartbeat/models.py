@@ -60,6 +60,7 @@ class MaintenanceHeartbeatStatus:
     needs_user: bool = False
     summary: dict[str, Any] | None = None
     evidence: tuple[dict[str, Any], ...] = ()
+    composer_advisories: tuple[dict[str, Any], ...] = ()
     last_activation_status: str | None = None
     last_activation_id: str | None = None
     last_activation_job_id: str | None = None
@@ -80,6 +81,7 @@ class MaintenanceHeartbeatStatus:
         object.__setattr__(self, 'needs_user', bool(self.needs_user))
         object.__setattr__(self, 'summary', _optional_mapping(self.summary))
         object.__setattr__(self, 'evidence', _tuple_of_mappings(self.evidence))
+        object.__setattr__(self, 'composer_advisories', _tuple_of_mappings(self.composer_advisories))
 
     def to_record(self) -> dict[str, Any]:
         return {
@@ -98,6 +100,7 @@ class MaintenanceHeartbeatStatus:
             'needs_user': bool(self.needs_user),
             'summary': self.summary or {},
             'evidence': list(self.evidence),
+            'composer_advisories': list(self.composer_advisories),
             'last_activation_status': self.last_activation_status,
             'last_activation_id': self.last_activation_id,
             'last_activation_job_id': self.last_activation_job_id,
@@ -122,6 +125,7 @@ class MaintenanceHeartbeatStatus:
             needs_user=bool(payload.get('needs_user', False)),
             summary=_optional_mapping(payload.get('summary')),
             evidence=_tuple_of_mappings(payload.get('evidence')),
+            composer_advisories=_tuple_of_mappings(payload.get('composer_advisories')),
             last_activation_status=_optional_text(payload.get('last_activation_status')),
             last_activation_id=_optional_text(payload.get('last_activation_id')),
             last_activation_job_id=_optional_text(payload.get('last_activation_job_id')),

@@ -12,6 +12,7 @@ from completion.models import (
     CompletionSourceKind,
     CompletionStatus,
 )
+from provider_execution.draft_guard import DraftGuard
 from provider_execution.base import (
     ProviderPollResult,
     ProviderRuntimeContext,
@@ -106,6 +107,25 @@ def test_pi_waits_indefinitely_without_terminal_evidence_by_default() -> None:
     assert policy is not None
     assert policy.primary_authority == "pi_extension_agent_settled"
     assert policy.no_terminal_timeout_s == 0.0
+
+
+def test_execution_service_clears_composer_wait_on_cancel_and_finish() -> None:
+    for operation in ('cancel', 'finish'):
+        service = ExecutionService(
+            ProviderExecutionRegistry([]),
+            clock=lambda: '2026-04-06T00:00:02Z',
+        )
+        guard = DraftGuard(clock=lambda: 180.0)
+        guard.reason = 'composer_missing'
+        guard.composer_wait_binding = 'binding-1'
+        guard.composer_wait_since = 0.0
+        guard.composer_wait_reason = 'composer_missing'
+        service._draft_guards['agent1'] = ('job_1', guard)
+        assert service.draft_wait_snapshot('agent1', 'job_1')['composer_unavailable_attention'] is True
+
+        getattr(service, operation)('job_1')
+
+        assert service.draft_wait_snapshot('agent1', 'job_1') == {}
 
 
 def test_execution_service_captures_provider_cancel_evidence_without_mutating_active() -> None:

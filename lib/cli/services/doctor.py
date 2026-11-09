@@ -8,6 +8,7 @@ from agents.config_loader import load_project_config
 from ccbd.socket_client import CcbdClient
 from provider_core.catalog import build_default_provider_catalog
 from provider_execution.registry import build_default_execution_registry
+from maintenance_heartbeat import composer_advisories_from_project_view
 from platforms.windows.herdr.supportability_projection import load_matrix as load_herdr_support_matrix
 from platforms.windows.release.workflow_matrix import MATRIX_RELATIVE_PATH as HERDR_MATRIX_PATH
 from platforms.windows.release.surface import load_windows_x64_release_surface_projection
@@ -44,12 +45,14 @@ def doctor_summary(context) -> dict:
     )
     if remote_error is not None:
         errors.append(f'remote_ccbd_probe:{remote_error}')
-    active_inbound_diagnostics, project_view_error = _load_remote_project_view_diagnostics(
+    project_view_payload, project_view_error = _load_remote_project_view_payload(
         context,
         local=local,
         client=remote_client,
         client_error=remote_client_error,
     )
+    active_inbound_diagnostics = _active_inbound_diagnostics_from_project_view(project_view_payload)
+    composer_advisories = composer_advisories_from_project_view(project_view_payload or {})
     if project_view_error is not None:
         errors.append(f'remote_project_view_probe:{project_view_error}')
     agents = agent_summaries(
@@ -76,6 +79,8 @@ def doctor_summary(context) -> dict:
         'config': config_validation.to_record(),
         'ccbd': ccbd_summary(local=local, stores=stores, errors=errors, remote=remote_ccbd),
         'active_inbound_diagnostics': active_inbound_diagnostics,
+        'composer_advisory_freshness': 'current' if project_view_payload is not None else 'unavailable',
+        'composer_advisories': list(composer_advisories),
         'agents': agents,
     }
 
@@ -188,6 +193,31 @@ def _load_remote_ccbd_summary(
     return (payload if isinstance(payload, dict) else None), None
 
 
+def _load_remote_project_view_payload(
+    context,
+    *,
+    local,
+    client: object | None = None,
+    client_error: str | None = None,
+) -> tuple[dict[str, object] | None, str | None]:
+    if local.mount_state == 'unmounted' or not local.socket_connectable:
+        return None, None
+    if client_error is not None:
+        return None, client_error
+    try:
+        if client is None:
+            client, client_error = _load_remote_client(context, local=local)
+            if client_error is not None or client is None:
+                return None, client_error
+        project_view = getattr(client, 'project_view', None)
+        if not callable(project_view):
+            return None, None
+        payload = project_view(schema_version=1)
+    except Exception as exc:
+        return None, str(exc)
+    return (payload, None) if isinstance(payload, dict) else (None, 'invalid project-view response')
+
+
 def _load_remote_project_view_diagnostics(
     context,
     *,
@@ -195,22 +225,13 @@ def _load_remote_project_view_diagnostics(
     client: object | None = None,
     client_error: str | None = None,
 ) -> tuple[list[dict[str, object]], str | None]:
-    if local.mount_state == 'unmounted' or not local.socket_connectable:
-        return [], None
-    if client_error is not None:
-        return [], client_error
-    try:
-        if client is None:
-            client, client_error = _load_remote_client(context, local=local)
-            if client_error is not None or client is None:
-                return [], client_error
-        project_view = getattr(client, 'project_view', None)
-        if not callable(project_view):
-            return [], None
-        payload = project_view(schema_version=1)
-    except Exception as exc:
-        return [], str(exc)
-    return _active_inbound_diagnostics_from_project_view(payload), None
+    payload, error = _load_remote_project_view_payload(
+        context,
+        local=local,
+        client=client,
+        client_error=client_error,
+    )
+    return _active_inbound_diagnostics_from_project_view(payload or {}), error
 
 
 def _active_inbound_diagnostics_from_project_view(payload: object) -> list[dict[str, object]]:

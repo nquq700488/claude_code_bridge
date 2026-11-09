@@ -19,6 +19,7 @@ from maintenance_heartbeat import (
     MaintenanceHeartbeatSchedule,
     MaintenanceHeartbeatStatus,
     MaintenanceHeartbeatStore,
+    composer_advisories_from_project_view,
     evaluate_project_view,
 )
 from storage.paths import PathLayout
@@ -93,6 +94,7 @@ def _project_view_payload(
     runtime_state: str = 'idle',
     pane_id: str | None = '%1',
     provider_runtime: dict | None = None,
+    delivery_wait: dict | None = None,
     comms=(),
 ) -> dict:
     agent = {
@@ -107,6 +109,8 @@ def _project_view_payload(
     }
     if current_job_id:
         agent['current_job_id'] = current_job_id
+    if delivery_wait is not None:
+        agent['delivery_wait'] = delivery_wait
     if provider_runtime is not None:
         agent['provider_runtime'] = provider_runtime
     return {
@@ -148,6 +152,38 @@ def test_maintenance_classifier_flags_provider_work_without_control_work() -> No
     assert envelope['control_state']['active_comms_count'] == 0
     assert envelope['pane_ref']['pane_id'] == '%3'
     assert 'capture_pane_readonly' in envelope['allowed_actions']
+
+
+def test_maintenance_classifier_ignores_composer_advisories() -> None:
+    baseline = evaluate_project_view(_project_view_payload())
+    with_advisory = evaluate_project_view(
+        _project_view_payload(
+            delivery_wait={
+                'job_id': 'job_queued',
+                'composer_unavailable_reason': 'composer_layout_unknown',
+                'composer_unavailable_elapsed_seconds': 180.0,
+                'composer_unavailable_threshold_seconds': 180.0,
+                'composer_unavailable_attention': True,
+            }
+        )
+    )
+
+    assert with_advisory.health == baseline.health == 'healthy'
+    assert with_advisory.summary == baseline.summary
+    assert with_advisory.evidence == baseline.evidence == ()
+
+
+def test_composer_advisory_rejects_unrepresentable_numeric_values() -> None:
+    payload = _project_view_payload(
+        delivery_wait={
+            'job_id': 'job_queued',
+            'composer_unavailable_reason': 'composer_missing',
+            'composer_unavailable_elapsed_seconds': 10**10000,
+            'composer_unavailable_threshold_seconds': 180.0,
+        }
+    )
+
+    assert composer_advisories_from_project_view(payload) == ()
 
 
 def test_maintenance_classifier_keeps_active_ccb_job_healthy() -> None:
@@ -524,6 +560,90 @@ startup_ensure = true
     assert payload['runner']['state'] == 'missing'
 
 
+def test_maintenance_status_refreshes_and_clears_persisted_composer_advisories_read_only(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / 'repo-status-composer-clear'
+    _write(project_root / '.ccb' / 'ccb.config', _enabled_config())
+    context = CliContextBuilder().build(
+        ParsedMaintenanceCommand(project=None, action='status'),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+    store = MaintenanceHeartbeatStore(context.paths, project_id=context.project.project_id)
+    previous = MaintenanceHeartbeatStatus(
+        project_id=context.project.project_id,
+        last_tick_status='healthy',
+        composer_advisories=(
+            {
+                'agent_name': 'demo',
+                'job_id': 'job_old',
+                'composer_unavailable_reason': 'composer_missing',
+                'composer_unavailable_elapsed_seconds': 180.0,
+                'composer_unavailable_threshold_seconds': 180.0,
+                'composer_unavailable_attention': True,
+            },
+        ),
+    )
+    store.save_status(previous)
+    status_path = context.paths.ccbd_maintenance_heartbeat_status_path
+    before = status_path.read_bytes()
+    monkeypatch.setattr(
+        maintenance_service,
+        'connect_mounted_daemon',
+        lambda context, *, allow_restart_stale: SimpleNamespace(
+            client=_ProjectViewClient(_project_view_payload())
+        ),
+    )
+
+    payload = maintenance_status(context, ParsedMaintenanceCommand(project=None, action='status'))
+
+    assert payload['composer_advisory_freshness'] == 'current'
+    assert payload['composer_advisories'] == []
+    assert status_path.read_bytes() == before
+    assert store.load_status().value.composer_advisories == previous.composer_advisories
+
+
+def test_maintenance_status_marks_composer_refresh_failure_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    project_root = tmp_path / 'repo-status-composer-failure'
+    _write(project_root / '.ccb' / 'ccb.config', _enabled_config())
+    context = CliContextBuilder().build(
+        ParsedMaintenanceCommand(project=None, action='status'),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+    store = MaintenanceHeartbeatStore(context.paths, project_id=context.project.project_id)
+    previous = MaintenanceHeartbeatStatus(
+        project_id=context.project.project_id,
+        composer_advisories=(
+            {
+                'agent_name': 'demo',
+                'job_id': 'job_old',
+                'composer_unavailable_reason': 'composer_missing',
+                'composer_unavailable_elapsed_seconds': 180.0,
+                'composer_unavailable_threshold_seconds': 180.0,
+                'composer_unavailable_attention': True,
+            },
+        ),
+    )
+    store.save_status(previous)
+    status_path = context.paths.ccbd_maintenance_heartbeat_status_path
+    before = status_path.read_bytes()
+    monkeypatch.setattr(
+        maintenance_service,
+        'connect_mounted_daemon',
+        lambda context, *, allow_restart_stale: (_ for _ in ()).throw(RuntimeError('offline')),
+    )
+
+    payload = maintenance_status(context, ParsedMaintenanceCommand(project=None, action='status'))
+
+    assert payload['composer_advisory_freshness'] == 'unavailable'
+    assert payload['composer_advisories'] == []
+    assert status_path.read_bytes() == before
+
+
 def test_phase2_maintenance_status_outputs_read_only_status(tmp_path: Path) -> None:
     project_root = tmp_path / 'repo-phase2-status'
     _write(project_root / '.ccb' / 'ccb.config', 'demo:codex\n')
@@ -591,6 +711,47 @@ def test_maintenance_tick_healthy_project_view_writes_status_and_schedule(tmp_pa
     assert schedule.value.reason == 'healthy_tick'
 
 
+def test_maintenance_tick_persists_composer_advisory_without_activation(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(maintenance_service, 'utc_now', lambda: NOW)
+    submitted: dict[str, object] = {}
+    _patch_submit(monkeypatch, submitted)
+    _patch_project_view(
+        monkeypatch,
+        _project_view_payload(
+            delivery_wait={
+                'job_id': 'job_queued',
+                'composer_unavailable_reason': 'composer_missing',
+                'composer_unavailable_elapsed_seconds': 180.0,
+                'composer_unavailable_threshold_seconds': 180.0,
+                'composer_unavailable_attention': True,
+                'pane_text': 'private task content',
+            }
+        ),
+    )
+    project_root = tmp_path / 'repo-tick-composer-advisory'
+    _write(project_root / '.ccb' / 'ccb.config', _enabled_config())
+    context = CliContextBuilder().build(
+        ParsedMaintenanceCommand(project=None, action='tick'),
+        cwd=project_root,
+        bootstrap_if_missing=False,
+    )
+
+    payload = maintenance_status(context, ParsedMaintenanceCommand(project=None, action='tick'))
+    store = MaintenanceHeartbeatStore(context.paths, project_id=context.project.project_id)
+    status = store.load_status().value
+
+    assert payload['tick_status'] == 'healthy'
+    assert payload['tick_activation_status'] is None
+    assert payload['activation_written'] is False
+    assert payload['composer_advisory_freshness'] == 'current'
+    assert payload['composer_advisories'][0]['job_id'] == 'job_queued'
+    assert 'pane_text' not in str(payload['composer_advisories'])
+    assert submitted == {}
+    assert status is not None
+    assert status.composer_advisories == tuple(payload['composer_advisories'])
+    assert store.load_activation_tail(1) == ()
+
+
 def test_maintenance_tick_concern_shortens_next_schedule(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(maintenance_service, 'utc_now', lambda: NOW)
     seen: dict[str, object] = {}
@@ -645,6 +806,13 @@ def test_maintenance_tick_sends_suspicion_envelope_to_assessor(tmp_path: Path, m
             current_job_id=None,
             runtime_state='idle',
             pane_id='%3',
+            delivery_wait={
+                'job_id': 'job_queued',
+                'composer_unavailable_reason': 'composer_layout_unknown',
+                'composer_unavailable_elapsed_seconds': 200.0,
+                'composer_unavailable_threshold_seconds': 180.0,
+                'composer_unavailable_attention': True,
+            },
         ),
     )
     project_root = tmp_path / 'repo-tick-suspicion'
@@ -676,6 +844,9 @@ def test_maintenance_tick_sends_suspicion_envelope_to_assessor(tmp_path: Path, m
     assert envelope['pane_ref']['pane_id'] == '%3'
     assert 'capture_pane_readonly' in diagnostic['allowed_actions']
     assert 'schedule_followup' in envelope['allowed_actions']
+    assert payload['composer_advisories'][0]['job_id'] == 'job_queued'
+    assert 'composer_advisories' not in diagnostic
+    assert 'composer_unavailable_reason' not in str(diagnostic)
 
 
 def test_maintenance_dedup_ignores_provider_runtime_timing_drift(tmp_path: Path, monkeypatch) -> None:
@@ -1222,6 +1393,34 @@ def test_stop_maintenance_runner_signals_live_pid(tmp_path: Path, monkeypatch) -
     assert runner is not None
     assert runner.state == 'stopped'
     assert runner.exit_reason == 'kill'
+
+
+def test_render_maintenance_includes_safe_composer_advisory_and_manual_guidance() -> None:
+    lines = render_maintenance(
+        {
+            'maintenance_status': 'ok',
+            'composer_advisory_freshness': 'current',
+            'composer_advisories': [
+                {
+                    'agent_name': 'demo',
+                    'job_id': 'job_queued',
+                    'composer_unavailable_reason': 'composer_layout_unknown',
+                    'composer_unavailable_elapsed_seconds': 180.0,
+                    'composer_unavailable_threshold_seconds': 180.0,
+                    'composer_unavailable_attention': True,
+                    'pane_text': 'private task content',
+                }
+            ],
+        }
+    )
+
+    rendered = '\n'.join(lines)
+    assert 'composer_advisory_freshness: current' in rendered
+    assert 'composer_advisory_count: 1' in rendered
+    assert 'reason=composer_layout_unknown' in rendered
+    assert 'elapsed_seconds=180.0 threshold_seconds=180.0 attention=true' in rendered
+    assert 'ccb screen demo' in rendered
+    assert 'private task content' not in rendered
 
 
 def test_render_maintenance_status_includes_config_and_state() -> None:

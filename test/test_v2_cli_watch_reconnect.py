@@ -115,6 +115,10 @@ class _StablePendClient:
             'generation': 2,
         }
 
+    def queue(self, target: str) -> dict:
+        assert target == 'codex'
+        return {'agent': {'delivery_wait': {'job_id': 'job_head', 'reason': 'composer_missing'}}}
+
 
 class _MailboxPendClient:
     def request(self, op: str, payload: dict) -> dict:
@@ -151,6 +155,10 @@ class _MailboxPendClient:
 
     def inbox(self, agent_name: str) -> dict:
         raise AssertionError('pend should use mailbox_head before inbox fallback')
+
+    def queue(self, target: str) -> dict:
+        assert target == 'claude'
+        return {'agent': {'delivery_wait': {'job_id': 'job_waiting', 'reason': 'composer_layout_unknown'}}}
 
 
 class _MailboxPendFallbackClient:
@@ -776,9 +784,123 @@ def test_pend_target_reconnects_after_socket_error(monkeypatch: pytest.MonkeyPat
     payload = pend_service.pend_target(context, ParsedPendCommand(project=None, target='job_demo'))
     assert payload['status'] == 'completed'
     assert payload['generation'] == 2
+    assert payload['delivery_wait']['job_id'] == 'job_head'
     assert flaky.calls == 1
     assert stable.calls == 1
     assert seen == [False, False]
+
+
+def test_watch_composer_wait_rejects_unrepresentable_numbers() -> None:
+    from cli.services.watch_runtime import _matching_composer_wait
+
+    wait = {
+        'job_id': 'job_demo',
+        'composer_unavailable_reason': 'composer_missing',
+        'composer_unavailable_elapsed_seconds': 10**10000,
+        'composer_unavailable_threshold_seconds': 180.0,
+    }
+
+    assert _matching_composer_wait(wait, SimpleNamespace(job_id='job_demo')) is None
+
+
+def test_pend_watch_emits_composer_attention_without_job_events(tmp_path: Path) -> None:
+    from cli.services.watch_runtime import watch_target
+
+    project_root = tmp_path / 'repo-pend-watch-composer'
+    project_root.mkdir()
+    context = _context(project_root)
+    now = [0.0]
+    waits = [
+        {
+            'job_id': 'job_demo',
+            'reason': 'composer_layout_unknown',
+            'composer_unavailable_reason': 'composer_layout_unknown',
+            'composer_unavailable_elapsed_seconds': 179.9,
+            'composer_unavailable_threshold_seconds': 180.0,
+            'composer_unavailable_attention': False,
+        },
+        {
+            'job_id': 'job_demo',
+            'reason': 'composer_layout_unknown',
+            'composer_unavailable_reason': 'composer_layout_unknown',
+            'composer_unavailable_elapsed_seconds': 180.0,
+            'composer_unavailable_threshold_seconds': 180.0,
+            'composer_unavailable_attention': True,
+        },
+    ]
+
+    class _Client:
+        def watch(self, target: str, *, cursor: int = 0) -> dict:
+            return {
+                'job_id': 'job_demo',
+                'agent_name': 'codex',
+                'cursor': cursor,
+                'generation': 1,
+                'terminal': False,
+                'status': 'running',
+                'events': [],
+            }
+
+        def queue(self, target: str) -> dict:
+            wait = waits[min(int(now[0] / 5), len(waits) - 1)]
+            return {
+                'agent': {
+                    'runtime_health': 'healthy',
+                    'runtime_state': 'idle',
+                    'pane_state': 'alive',
+                    'delivery_wait': wait,
+                }
+            }
+
+    handle = SimpleNamespace(client=_Client())
+    batches = []
+
+    def _connect(_context, *, allow_restart_stale):
+        return handle
+
+    def _sleep(seconds: float) -> None:
+        now[0] += seconds
+
+    with pytest.raises(RuntimeError, match='watch timed out'):
+        batches.extend(
+            watch_target(
+                context,
+                SimpleNamespace(target='job_demo'),
+                connect_mounted_daemon_fn=_connect,
+                reconnect_error_classes=(CcbdClientError,),
+                time_fn=lambda: now[0],
+                sleep_fn=_sleep,
+                timeout_seconds_fn=lambda: 12.0,
+                poll_interval_seconds_fn=lambda: 5.0,
+                auto_start_enabled=False,
+            )
+        )
+
+    attention_batches = [batch for batch in batches if batch.diagnostic_only]
+    assert len(attention_batches) == 2
+    assert attention_batches[-1].delivery_wait['composer_unavailable_attention'] is True
+    rendered = '\\n'.join(render_watch_batch(attention_batches[-1]))
+    assert 'attention=true' in rendered
+    assert 'manually' in rendered.lower()
+
+
+def test_pend_queue_lookup_failure_preserves_job_result() -> None:
+    queue_calls: list[str] = []
+    response = {'job_id': 'job_demo', 'agent_name': 'codex', 'status': 'running', 'reply': ''}
+
+    class _Client:
+        def get(self, job_id: str) -> dict:
+            assert job_id == 'job_demo'
+            return dict(response)
+
+        def queue(self, target: str) -> dict:
+            queue_calls.append(target)
+            raise RuntimeError('queue unavailable')
+
+    payload = pend_service._pend_target_with_client(_Client(), 'job_demo')
+
+    assert payload == response
+    assert queue_calls == ['codex']
 
 
 def test_pend_target_merges_mailbox_head_reply_for_agent_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -803,6 +925,7 @@ def test_pend_target_merges_mailbox_head_reply_for_agent_target(monkeypatch: pyt
     assert payload['mailbox_reply_notice'] is True
     assert payload['mailbox_reply_notice_kind'] == 'heartbeat'
     assert payload['mailbox_reply_job_id'] == 'job_demo'
+    assert payload['delivery_wait']['job_id'] == 'job_waiting'
     assert seen == [False]
 
 

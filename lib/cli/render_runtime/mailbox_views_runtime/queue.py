@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-from ..common import render_observer_notice
+from ..common import render_composer_unavailable, render_observer_notice
 
 
 def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
@@ -38,6 +38,7 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
                 f'summary_status={agent.get("summary_status")} '
                 f'delivery_wait={(agent.get("delivery_wait") or {}).get("reason")}'
             )
+            lines.extend(render_composer_unavailable(agent.get('delivery_wait'), agent_name=agent.get('agent_name')))
         return tuple(lines)
 
     agent = payload.get('agent') or {}
@@ -66,6 +67,7 @@ def render_queue(payload: Mapping[str, object]) -> tuple[str, ...]:
                      f'wait_seconds={wait.get("wait_seconds")} clear_attempted={wait.get("clear_attempted")}')
         lines.append('delivery_wait_notice: 180s applies only to observed nonempty idle input; '
                      'unknown/busy does not authorize clearing or sending')
+        lines.extend(render_composer_unavailable(wait, agent_name=agent.get('agent_name')))
     if agent.get('summary_error') is not None:
         lines.append(f'summary_error: {agent.get("summary_error")}')
     if agent.get('summary_status') == 'missing':
