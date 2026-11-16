@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show real delivery progress for a claimed job instead of a frozen `claim_started` / `provider_start_pending`. Queue, inbox and trace views now read the job's latest delivery event while the inbound is still `delivering`, so a running provider turn is visible as soon as the submission is created. The queue execution phase also reports `provider_identity_unavailable` (unproven) instead of `provider_identity_mismatch`, and reports `executing` only when a recorded `provider_submission_created` event exists with no later failed or unstarted stage. Dispatch, probing and validation behaviour are unchanged.
 - Diagnose queue heads blocked by `composer_missing` or `composer_layout_unknown` after 180 seconds in queue, ping, pend/watch, maintenance, and doctor views. Reports include only safe job/reason/timing metadata and manual guidance; dispatch remains fail-closed, and no prompt is typed, cleared, dismissed, or automatically retried. Maintenance stores this as a read-only advisory separate from health and assessor activation.
 - Fail a queued head job promptly with `provider_reconnect_failed` when the Codex pane reports `Automatic reconnect could not restore this session` / `Reconnect failed — check the endpoint, then relaunch`, instead of leaving it queued until the `ccb pend --watch` observer timeout. The terminal job is persisted through the normal completion path with guidance to copy any visible draft before repairing Codex and retrying; no prompt is typed, no draft is cleared, no provider start is fabricated, and the failure is never auto-retried. The failure row is also recognized when Codex wraps it as `… this session. Your draft` with the paired hint a few rows below, which is how the native failure box renders on ordinary terminal widths. Ordinary `Reconnecting…` and unknown composer layouts still wait and recover the same job.
 - Make `ccb restart <agent>` recreate a missing managed pane through the normal startup flow when the Provider session is still available, instead of silently skipping the restart.
@@ -9,6 +10,11 @@
 - Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
 - Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
 - Recognize the Codex v0.166.0 combined `← for agents · ? for shortcuts` footer hint, so an empty composer is no longer held back as `composer_layout_unknown`. Only the literal prefix, matching warning pluralization and a 0-100% context suffix are accepted; malformed hints and real drafts still fail closed.
+
+## v8.7.22 (2026-11-11)
+
+- Preserve Pi completion across main-session rotation (#404), restore the shared Claude envelope parser by reverting #403, and prevent OpenCode runtime snapshot growth and missed-reply starvation (#402). Restore MiMo compatibility with shared observation. See [bilingual release notes](docs/releases/v8.7.22.md).
+- 修复 Pi 主会话切换后的完成追踪（#404），撤销 #403 并恢复 Claude 共享解析，防止 OpenCode 运行快照膨胀与漏回复（#402），恢复 MiMo 共享读取兼容性。详见[中英双语版本说明](docs/releases/v8.7.22.md)。
 
 ## v8.7.21 (2026-11-02)
 

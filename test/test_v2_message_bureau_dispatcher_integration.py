@@ -3386,7 +3386,8 @@ def test_dispatcher_queue_summary_reflects_mailbox_state_and_pending_reply(tmp_p
     )
     queue_anchored = dispatcher.queue('codex', detail=True)['agent']
     assert queue_anchored['execution_phase'] == 'unknown'
-    assert queue_anchored['execution_phase_reason'] == 'provider_identity_mismatch'
+    # The queue view carries no provider evidence: unproven, not mismatched.
+    assert queue_anchored['execution_phase_reason'] == 'provider_identity_unavailable'
 
     dispatcher.complete(job_id, _decision(reply='reply for claude'))
 

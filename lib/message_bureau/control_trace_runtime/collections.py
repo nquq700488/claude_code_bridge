@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ccbd.api_models import TargetKind
 from jobs.store import JobEventStore
+from message_bureau.control_queue_runtime.common import delivery_events_for
 
 from .summaries import (
     attempt_summary,
@@ -62,7 +63,11 @@ def event_summaries_for_messages(service, messages: tuple | list) -> tuple[dict[
         key_fn=lambda record: record.inbound_event_id,
     )
     ordered = sorted(events, key=lambda item: (item.created_at, item.inbound_event_id))
-    return tuple(event_summary(service, item) for item in ordered)
+    cache: dict[str, tuple] = {}
+    return tuple(
+        event_summary(service, item, events=_agent_delivery_events(service, item, cache))
+        for item in ordered
+    )
 
 
 def event_summaries_for_attempt(service, attempt) -> tuple[dict[str, object], ...]:
@@ -84,6 +89,13 @@ def submission_summary_by_id(service, submission_id: str | None) -> dict[str, ob
     if submission is None:
         return None
     return submission_summary(submission)
+
+
+def _agent_delivery_events(service, event, cache: dict[str, tuple]) -> tuple:
+    agent_name = str(getattr(event, 'agent_name', '') or '')
+    if agent_name not in cache:
+        cache[agent_name] = delivery_events_for(service, agent_name)
+    return cache[agent_name]
 
 
 def delivery_event_summaries_for_job(
@@ -136,7 +148,13 @@ def trace_payload(
     message_items = _summary_items(messages, summary_fn=message_summary)
     attempt_items = _summary_items(attempts, summary_fn=attempt_summary)
     reply_items = _summary_items(replies, summary_fn=reply_summary)
-    event_items = _summary_items(events, summary_fn=lambda item: event_summary(service, item))
+    delivery_cache: dict[str, tuple] = {}
+    event_items = _summary_items(
+        events,
+        summary_fn=lambda item: event_summary(
+            service, item, events=_agent_delivery_events(service, item, delivery_cache)
+        ),
+    )
     job_items = [item for item in jobs if item is not None]
     message_id = _selected_message_id(message, message_items)
     selected_job = job or (job_items[0] if job_items else None)

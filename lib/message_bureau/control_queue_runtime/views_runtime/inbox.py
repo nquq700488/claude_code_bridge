@@ -10,7 +10,7 @@ from message_bureau.reply_metadata import (
 from message_bureau.reply_payloads import reply_id_from_payload
 
 from .agent import agent_queue_summary
-from ..common import require_mailbox_target
+from ..common import delivery_events_for, require_mailbox_target
 from ..events import inbox_item_summary, pending_event_records
 from mailbox_kernel.service_runtime.summary import mailbox_head_payload
 from .common import read_mailbox_summary
@@ -32,7 +32,11 @@ def inbox(service, agent_name: str, *, detail: bool | None = None) -> dict[str, 
             'items': [],
         }
     records = pending_event_records(service, normalized)
-    items = [inbox_item_summary(service, record, position=index) for index, record in enumerate(records, start=1)]
+    delivery_events = delivery_events_for(service, normalized)
+    items = [
+        inbox_item_summary(service, record, position=index, events=delivery_events)
+        for index, record in enumerate(records, start=1)
+    ]
     head = _enrich_mailbox_head(service, normalized, mailbox_head_payload(mailbox)) or (items[0] if items else None)
     return {
         'target': normalized,

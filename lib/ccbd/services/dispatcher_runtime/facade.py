@@ -5,6 +5,7 @@ from uuid import uuid4
 from agents.models import AgentState, AgentValidationError
 from completion.tracker import CompletionTrackerView
 from execution_phase import derive_execution_phase, execution_phase_evidence_from_records
+from message_bureau.control_queue_runtime.common import recorded_delivery_is_executing
 from message_bureau.reply_payloads import reply_id_from_payload
 
 from .completion import apply_tracker_view, merge_terminal_decision
@@ -209,10 +210,36 @@ class DispatcherFacadeMixin:
             lease=lease,
             completion=completion,
             provider_state=None,
-            provider_identity_current=False,
+            # This path has no provider evidence at all; unproven is not a mismatch.
+            provider_identity_current=None,
             reply_expected=_queue_reply_expected(self, job),
         )
-        return derive_execution_phase(evidence).to_record()
+        record = derive_execution_phase(evidence).to_record()
+        if record.get('execution_phase_reason') == 'provider_identity_unavailable':
+            recorded = _recorded_delivery_phase(self, job)
+            if recorded is not None:
+                return recorded
+        return record
+
+
+def _recorded_delivery_phase(dispatcher, job) -> dict[str, object] | None:
+    """Report an active provider turn from recorded delivery events.
+
+    Without in-memory execution evidence the queue view cannot prove provider
+    identity, but the delivery event stream still shows that a submission was
+    created -- which is exactly what "started" means here.
+    """
+    try:
+        _cursor, events = dispatcher._event_store.read_since_target(
+            job.target_kind,
+            job.target_name,
+            0,
+        )
+    except Exception:
+        return None
+    if not recorded_delivery_is_executing(events, job.job_id):
+        return None
+    return {'execution_phase': 'executing', 'execution_phase_reason': 'provider_submission_recorded'}
 
 
 def _safe_store_call(store, method_name: str, *args):

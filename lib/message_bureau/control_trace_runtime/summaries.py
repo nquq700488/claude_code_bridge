@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from message_bureau.control_queue_runtime.common import delivery_stage_for_inbound_status
+from message_bureau.control_queue_runtime.common import delivery_stage_for_inbound
 from message_bureau.reply_metadata import (
     reply_heartbeat_silence_seconds,
     reply_last_progress_at,
@@ -95,14 +95,21 @@ def reply_summary(reply) -> dict[str, object]:
     }
 
 
-def event_summary(service, event) -> dict[str, object]:
+def event_summary(service, event, *, events=None) -> dict[str, object]:
     mailbox = service._mailbox_store.load(event.agent_name)
+    attempt = service._attempt_store.get_latest(event.attempt_id) if event.attempt_id else None
+    delivery_stage, delivery_reason = delivery_stage_for_inbound(
+        service,
+        event,
+        attempt.job_id if attempt is not None else None,
+        events=events,
+    )
     return {
         'inbound_event_id': event.inbound_event_id,
         'agent_name': event.agent_name,
         'event_type': event.event_type.value,
-        'delivery_stage': delivery_stage_for_inbound_status(event.status)[0],
-        'delivery_reason': delivery_stage_for_inbound_status(event.status)[1],
+        'delivery_stage': delivery_stage,
+        'delivery_reason': delivery_reason,
         'message_id': event.message_id,
         'attempt_id': event.attempt_id,
         'payload_ref': event.payload_ref,

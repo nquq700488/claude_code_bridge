@@ -10,7 +10,7 @@ from message_bureau.reply_metadata import (
 )
 from message_bureau.reply_payloads import reply_id_from_payload
 
-from .common import delivery_stage_for_inbound_status, preview_text
+from .common import delivery_events_for, delivery_stage_for_inbound, preview_text
 
 TERMINAL_EVENT_STATES = frozenset(
     {
@@ -83,18 +83,25 @@ def _event_is_live(service, event) -> bool:
 
 def pending_events(service, agent_name: str) -> list[dict[str, object]]:
     events: list[dict[str, object]] = []
+    delivery_events = delivery_events_for(service, agent_name)
     for position, record in enumerate(pending_event_records(service, agent_name), start=1):
         attempt = service._attempt_store.get_latest(record.attempt_id) if record.attempt_id else None
         message = service._message_store.get_latest(record.message_id)
         replies = service._reply_store.list_message(record.message_id)
+        delivery_stage, delivery_reason = delivery_stage_for_inbound(
+            service,
+            record,
+            attempt.job_id if attempt is not None else None,
+            events=delivery_events,
+        )
         events.append(
             {
                 'position': position,
                 'inbound_event_id': record.inbound_event_id,
                 'event_type': record.event_type.value,
                 'status': record.status.value,
-                'delivery_stage': delivery_stage_for_inbound_status(record.status)[0],
-                'delivery_reason': delivery_stage_for_inbound_status(record.status)[1],
+                'delivery_stage': delivery_stage,
+                'delivery_reason': delivery_reason,
                 'priority': record.priority,
                 'message_id': record.message_id,
                 'message_state': message.message_state.value if message is not None else None,
@@ -110,17 +117,23 @@ def pending_events(service, agent_name: str) -> list[dict[str, object]]:
     return events
 
 
-def inbox_item_summary(service, event, *, position: int) -> dict[str, object]:
+def inbox_item_summary(service, event, *, position: int, events=None) -> dict[str, object]:
     attempt = service._attempt_store.get_latest(event.attempt_id) if event.attempt_id else None
     message = service._message_store.get_latest(event.message_id)
     reply = reply_for_event(service, event)
+    delivery_stage, delivery_reason = delivery_stage_for_inbound(
+        service,
+        event,
+        attempt.job_id if attempt is not None else None,
+        events=events,
+    )
     item = {
         'position': position,
         'inbound_event_id': event.inbound_event_id,
         'event_type': event.event_type.value,
         'status': event.status.value,
-        'delivery_stage': delivery_stage_for_inbound_status(event.status)[0],
-        'delivery_reason': delivery_stage_for_inbound_status(event.status)[1],
+        'delivery_stage': delivery_stage,
+        'delivery_reason': delivery_reason,
         'priority': event.priority,
         'message_id': event.message_id,
         'message_state': message.message_state.value if message is not None else None,
