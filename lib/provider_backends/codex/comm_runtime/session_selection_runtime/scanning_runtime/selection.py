@@ -1,9 +1,15 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 from ...debug import debug_log_reader
 from .candidates import bind_preferred_log, candidate_logs
+
+# Codex can fork a live session into a newer rollout file that keeps the same
+# session id. Re-scanning for that fork is a directory walk, so bound readers
+# check at most this often instead of once per poll.
+_BOUND_RESCAN_INTERVAL_S = 2.0
 
 
 def scan_latest(reader) -> Path | None:
@@ -40,7 +46,27 @@ def _preferred_is_bound(reader, preferred: Path | None) -> bool:
         return False
     from ..state import follow_workspace_sessions
 
-    return bool(reader._session_id_filter and not follow_workspace_sessions(reader))
+    if not (reader._session_id_filter and not follow_workspace_sessions(reader)):
+        return False
+    # A bound reader used to freeze on its first file, so a session Codex
+    # forked mid-turn stayed invisible: no anchor, no reply, job stuck running.
+    now = time.monotonic()
+    if now - float(getattr(reader, '_bound_scan_at', 0.0) or 0.0) < _BOUND_RESCAN_INTERVAL_S:
+        return True
+    reader._bound_scan_at = now
+    return not _has_newer_candidate(reader, preferred)
+
+
+def _has_newer_candidate(reader, preferred: Path) -> bool:
+    try:
+        preferred_mtime = preferred.stat().st_mtime
+    except OSError:
+        return False
+    for path, mtime in candidate_logs(reader):
+        if path != preferred and mtime > preferred_mtime:
+            debug_log_reader(f"Bound log has a newer session file: {path}")
+            return True
+    return False
 
 
 def _select_preferred_or_latest(reader, preferred: Path, latest: Path | None) -> Path | None:
