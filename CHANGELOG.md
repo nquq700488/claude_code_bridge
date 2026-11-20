@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recognize the Codex 0.171.0 stacked status footer, so an empty composer is no longer held back as `composer_layout_unknown`. 0.171.0 renders an extra native status row above the `? for shortcuts` hint and stops dimming those rows, which broke the "every row under the first status row must be a hint" rule: healthy panes reported `composer_layout_unknown`, and every dispatch to them stayed queued (`dispatcher_claim_pending`) until the pane was repaired by hand. The stacked block is only trusted for an untouched native placeholder, must stay indented, must still end on the native hint, and must contain a real field-separated status bar; a typed draft keeps failing closed, so no draft is ever cleared on this path.
+- Report a provider that dies right after its launch instead of calling the start successful. A start transaction finishing only proves every provider was launched, so a crashing CLI (for example a Codex pane running under an unsupported Node runtime) left `startup-report.json` at `status: ok` while the pane was already dead. `ccb start` now re-checks the affected runtime records over a short settle window (`CCB_START_AVAILABILITY_SETTLE_S`, default 2s), prints one `agent_unavailable:` line plus an stderr notice naming the agent, pane state and restart count, and appends the same finding to the timeout error so a start that never became ready names the provider that kept crashing instead of a bare `timed out`. Dispatch, probing and provider processes are untouched.
 - Follow a Codex session that forks into a newer rollout file mid-turn. A reader bound to a `codex_session_id` used to freeze on its first rollout file, so a session Codex forked while a job was running stayed invisible: the request anchor and the reply were never observed and the job stayed `running` long after the provider finished. Bound readers now re-check (at most every 2s) for a newer rollout of the same session and switch to it.
 - Show real delivery progress for a claimed job instead of a frozen `claim_started` / `provider_start_pending`. Queue, inbox and trace views now read the job's latest delivery event while the inbound is still `delivering`, so a running provider turn is visible as soon as the submission is created. The queue execution phase also reports `provider_identity_unavailable` (unproven) instead of `provider_identity_mismatch`, and reports `executing` only when a recorded `provider_submission_created` event exists with no later failed or unstarted stage. Dispatch, probing and validation behaviour are unchanged.
 - Diagnose queue heads blocked by `composer_missing` or `composer_layout_unknown` after 180 seconds in queue, ping, pend/watch, maintenance, and doctor views. Reports include only safe job/reason/timing metadata and manual guidance; dispatch remains fail-closed, and no prompt is typed, cleared, dismissed, or automatically retried. Maintenance stores this as a read-only advisory separate from health and assessor activation.
@@ -11,6 +13,20 @@
 - Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
 - Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
 - Recognize the Codex v0.166.0 combined `← for agents · ? for shortcuts` footer hint, so an empty composer is no longer held back as `composer_layout_unknown`. Only the literal prefix, matching warning pluralization and a 0-100% context suffix are accepted; malformed hints and real drafts still fail closed.
+
+## v8.7.24 (2026-11-19)
+
+- Forward terminal resize signals to Linux OMP Collab panes so they redraw when the tmux pane changes size.
+- 向 Linux OMP Collab 窗格转发终端缩放信号，使其随 tmux 窗格尺寸变化及时重绘。
+
+## v8.7.23 (2026-11-19)
+
+- Include the Bun runtime in explicit OMP update checks, preserve installation ownership and consent controls, and reject dependency-error version probes.
+- 显式 OMP 更新检查纳入 Bun 运行时，保留安装归属和确认机制，避免从依赖报错中误读版本。
+- Disable inline images by default in CCB-managed OMP panes to prevent graphics from crossing pane boundaries, and rebuild terminal scrollback on resize to avoid duplicate history. Existing panes pick up the setting on their next launch. Standalone OMP and tmux graphics passthrough are unchanged.
+- CCB 托管的 OMP 窗格默认关闭内联图片，防止图层越过分屏边界；缩放时重建终端回滚历史，避免重复追加。已有窗格在下次启动时生效；不影响独立 OMP 或 tmux 图形透传。
+- Streamline README introductions across all languages. See [bilingual release notes](docs/releases/v8.7.23.md).
+- 精简各语言 README 首页，移除置顶版本详情。详见[中英双语版本说明](docs/releases/v8.7.23.md)。
 
 ## v8.7.22 (2026-11-11)
 

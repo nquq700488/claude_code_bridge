@@ -189,6 +189,10 @@ def _codex_footer(lines, styled, cursor_x: int, cursor_y: int) -> int | None:
         footer -= 1
     if footer <= cursor_y+1 or lines[footer-1].strip():
         return None
+    if _codex_stacked_status_footer(lines, footer, bottom, cursor_x, cursor_y):
+        return footer
+    # _CODEX_SHORTCUT_HINT_RE already accepts the "← for agents · ? for
+    # shortcuts" form upstream added, plus the warning/context suffixes.
     if any(not _CODEX_SHORTCUT_HINT_RE.fullmatch(row)
            for row in lines[footer+1:bottom+1]):
         return None
@@ -228,6 +232,30 @@ def _codex_footer(lines, styled, cursor_x: int, cursor_y: int) -> int | None:
 
 
 _CODEX_PLACEHOLDERS = ('Ask Codex to do anything', 'Implement {feature}')
+
+
+def _codex_stacked_status_footer(lines, footer: int, bottom: int,
+                                 cursor_x: int, cursor_y: int) -> bool:
+    # Codex 0.171.0 stacks an extra native status row above the shortcut hint
+    # (and stopped dimming those rows), so the old "every row under the first
+    # status row is a hint" rule rejected a perfectly empty composer.
+    #
+    # Only an untouched native placeholder authorizes the stacked block: a typed
+    # draft's continuation lines are indented the same way, so they must keep
+    # failing closed. The block must also still end on the native hint, stay
+    # indented, and contain a real status bar with field separators.
+    if bottom <= footer:
+        return False
+    if not _codex_native_placeholder(lines, cursor_x, cursor_y):
+        return False
+    if any(line.strip() for line in lines[cursor_y+1:footer]):
+        return False
+    if not _CODEX_SHORTCUT_HINT_RE.fullmatch(lines[bottom]):
+        return False
+    block = lines[footer:bottom+1]
+    if any(len(row) - len(row.lstrip()) < 2 for row in block):
+        return False
+    return any(' · ' in row for row in block)
 
 
 def _codex_native_placeholder(lines, cursor_x: int, cursor_y: int) -> bool:

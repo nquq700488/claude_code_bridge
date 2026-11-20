@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 import sys
@@ -11,6 +12,14 @@ from ccbd.startup_policy import START_REPORT_GRACE_S
 from ccbd.system import utc_now
 
 from cli.phase2_runtime.start_failure_report import StartOutcome, resolve_start_outcome
+from cli.services.start_availability import (
+    describe_agents,
+    describe_unavailable,
+    format_unavailable_notice,
+    read_agent_availability,
+    unavailable_agents,
+    wait_for_settled_availability,
+)
 from cli.services.start_foreground import attach_started_project_namespace
 
 
@@ -117,14 +126,34 @@ def handle_start(context, command, out, services) -> int:
         # while the daemon is still working.  Give the daemon a bounded chance
         # to finish and publish its startup report, then report what it says.
         outcome = _resolve_failed_start(context, exc, attempt_started_at=attempt_started_at)
+        unavailable_reason = describe_unavailable(_failure_agent_availability(context, command))
         if outcome.status == 'ok':
             raise RuntimeError(
                 'the daemon reached its initial startup boundary, but the final start '
-                'response was not received; run `ccb ps` to verify agent readiness'
+                'response was not received; '
+                + (
+                    f'agents unavailable: {unavailable_reason}; run `ccb ps` for details'
+                    if unavailable_reason
+                    else 'run `ccb ps` to verify agent readiness'
+                )
             ) from exc
         if outcome.status == 'failed' and outcome.reason:
-            raise RuntimeError(outcome.reason) from exc
+            raise RuntimeError(
+                outcome.reason
+                + (f'; agents unavailable: {unavailable_reason}' if unavailable_reason else '')
+            ) from exc
+        if unavailable_reason:
+            # No report arrived, but the runtime records already name the
+            # provider that keeps crashing into the supervision backoff window,
+            # which is the real reason this start never became ready.
+            raise RuntimeError(f'{exc}; agents unavailable: {unavailable_reason}') from exc
         raise
+    unavailable = wait_for_settled_availability(
+        context, tuple(getattr(summary, 'started', ()) or ())
+    )
+    if unavailable:
+        print(format_unavailable_notice(unavailable), file=sys.stderr, flush=True)
+        summary = _with_agent_unavailable(summary, describe_agents(unavailable))
     if interactive_attach:
         attach_started_project_namespace(context)
         return 0
@@ -188,6 +217,41 @@ def _is_inflight_start_timeout(exc: BaseException) -> bool:
     # Keep direct test doubles and older clients compatible, while response
     # errors such as "kimi executable not found" do not enter the grace wait.
     return str(exc).strip().lower() in {'timed out', 'timeout'}
+
+
+def _failure_agent_availability(context, command):
+    return unavailable_agents(
+        read_agent_availability(context, _requested_agent_names(context, command))
+    )
+
+
+def _requested_agent_names(context, command) -> tuple[str, ...]:
+    names = tuple(
+        str(name).strip()
+        for name in (getattr(command, 'agent_names', None) or ())
+        if str(name).strip()
+    )
+    if names:
+        return names
+    try:
+        from agents.config_loader import load_project_config
+
+        loaded = load_project_config(
+            context.project.project_root,
+            include_loop_overlays=False,
+        )
+        return tuple(sorted(loaded.config.agents))
+    except Exception:
+        return ()
+
+
+def _with_agent_unavailable(summary, labels: tuple[str, ...]):
+    try:
+        return replace(summary, agent_unavailable=labels)
+    except (AttributeError, TypeError):
+        # Start doubles that are not a StartSummary simply cannot carry the
+        # extra field; the stderr notice above still reports the finding.
+        return summary
 
 
 def _ensure_project_commands_approved(context, out, services) -> None:

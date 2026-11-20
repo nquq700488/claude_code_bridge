@@ -16,6 +16,9 @@ class StartSummary:
     cleanup_summaries: tuple[object, ...] = ()
     worktree_warnings: tuple[object, ...] = ()
     worktree_retired: tuple[object, ...] = ()
+    # Providers that were launched but are not usable afterwards; the start
+    # transaction itself succeeded, so this is reported beside it, not instead.
+    agent_unavailable: tuple[str, ...] = ()
     maintenance_heartbeat: dict | None = None
     layout_summary: dict | None = None
     sidebar_helper_refresh: dict | None = None

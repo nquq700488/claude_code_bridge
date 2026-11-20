@@ -1103,6 +1103,29 @@ export CCB_PYTHON_BIN=/opt/homebrew/bin/python3.12
 ./install.sh install
 ```
 
+### Q18: `ccb start` 说成功但某个 Agent 立刻退出 / 首次启动总是 `timed out`
+
+`ccb start` 的启动事务完成只代表**每个 Provider 都被拉起过**，不代表它之后仍然可用。两种情况会让结果看起来矛盾：
+
+- **启动成功但面板已死**：Provider 在报告写出之后才崩（典型是 Codex 的 CLI 入口是 JS，落在 Node < 16 上会立刻退出）。现在 `ccb start` 会在启动后用一个短窗口复核运行记录（`CCB_START_AVAILABILITY_SETTLE_S`，默认 2 秒），发现不可用时输出 `agent_unavailable: planner(pane=dead, restarts=2)` 并在 stderr 给出提示。
+- **首次启动必定 `timed out`**：崩溃的面板会触发 supervision 退避重试（30s → 60s → 120s …），把 CLI 的 30 秒 start RPC 预算（`CCB_STARTUP_TRANSACTION_TIMEOUT_S`）+ 90 秒宽限（`CCB_START_REPORT_GRACE_S`）吃光。现在超时错误会直接点名一直崩溃的 Agent，而不是只报 `timed out`。
+
+处理步骤：
+
+```bash
+ccb ps            # 看哪个 agent 是 degraded / pane_state=dead
+ccb screen <agent> # 在面板里确认 Provider 自己的报错
+```
+
+常见根因与修法：Provider 需要的运行时版本（如 Codex 需要 Node ≥ 16）和项目 `.nvmrc` 冲突时，**不要**把整个 daemon 的 node 换掉（会让项目构建用错版本），而是只给 codex 的 Agent 指定 PATH：
+
+```toml
+[agents.planner]
+env = { PATH = "/Users/you/.nvm/versions/node/v22.21.1/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin" }
+```
+
+把面板修好后 `ccb` 重连即可，队列里的任务会自动恢复派发。
+
 ---
 
 ## 配置文件速查

@@ -93,6 +93,9 @@ def render_start(summary) -> tuple[str, ...]:
         f'socket_path: {summary.socket_path}',
         f'agents: {", ".join(summary.started)}',
     ]
+    agent_unavailable = tuple(getattr(summary, 'agent_unavailable', ()) or ())
+    if agent_unavailable:
+        lines.append(f'agent_unavailable: {", ".join(agent_unavailable)}')
     startup_run_id = str(getattr(summary, 'startup_run_id', None) or '').strip()
     if startup_run_id:
         lines.append(f'startup_run_id: {startup_run_id}')
