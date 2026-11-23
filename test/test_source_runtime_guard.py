@@ -60,8 +60,7 @@ def test_source_ccb_rejects_stateful_commands_outside_test_roots() -> None:
     assert proc.returncode == 1
     assert "Refusing to run the CCB source checkout outside an allowed test project" in proc.stderr
     assert (
-        "Use `/home/bfly/yunwei/ccb_source/ccb_test` from "
-        "`/home/bfly/yunwei/test_ccb2` for source-change validation"
+        f"Use `{REPO_ROOT / 'ccb_test'}` from an allowed source root for source-change validation"
     ) in proc.stderr
 
 
@@ -145,7 +144,7 @@ def test_ccb_test_rejects_source_checkout_cwd() -> None:
 
     assert proc.returncode == 1
     assert "Refusing to run `ccb_test` from the CCB source checkout" in proc.stderr
-    assert "cd /home/bfly/yunwei/test_ccb2 && /home/bfly/yunwei/ccb_source/ccb_test config validate" in proc.stderr
+    assert f"cd {REPO_ROOT.parent / 'test_ccb2'} && {CCB_TEST} config validate" in proc.stderr
 
 
 def test_ccb_test_rejects_external_project_without_allowed_root(tmp_path: Path) -> None:

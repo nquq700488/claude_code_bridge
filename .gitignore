@@ -9,6 +9,8 @@ docs/
 !docs/**/*.md
 docs/ppt_materials/
 tests/
+# tools/codex-reconnect/tests/ 是真实测试目录，不能被上面的 tests/ 规则吞掉
+!tools/codex-reconnect/tests/
 test/dir1/.ccb/
 .ccb_config/
 # .ccb — 默认全部忽略，仅放行需要版本控制的文件

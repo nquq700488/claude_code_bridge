@@ -147,12 +147,13 @@ def _preflight(argv: list[str], cwd: Path) -> tuple[bool, str, list[Path]]:
 
     project_paths = _project_arg_paths(argv, cwd)
     allowed_roots = _allowed_roots()
+    example_root = _default_test_roots()[0]
     if _path_is_under(cwd, SCRIPT_ROOT):
         return (
             False,
             "Refusing to run `ccb_test` from the CCB source checkout.\n"
             "Run source validation from an external test project, for example:\n"
-            "  cd /home/bfly/yunwei/test_ccb2 && /home/bfly/yunwei/ccb_source/ccb_test config validate",
+            f"  cd {example_root} && {SCRIPT_ROOT / 'ccb_test'} config validate",
             project_paths,
         )
     for project_path in project_paths:
@@ -160,7 +161,7 @@ def _preflight(argv: list[str], cwd: Path) -> tuple[bool, str, list[Path]]:
             return (
                 False,
                 "Refusing to run `ccb_test` against a project inside the CCB source checkout.\n"
-                "Use the dedicated external test project /home/bfly/yunwei/test_ccb2, "
+                f"Use a dedicated external test project (e.g. {example_root}), "
                 "or set CCB_TEST_ROOTS/CCB_SOURCE_ALLOWED_ROOTS for an explicit external test project.",
                 project_paths,
             )
@@ -171,8 +172,8 @@ def _preflight(argv: list[str], cwd: Path) -> tuple[bool, str, list[Path]]:
             return (
                 False,
                 "Refusing to run `ccb_test` outside an allowed source-test project.\n"
-                "Run source validation from the dedicated test project, for example:\n"
-                "  cd /home/bfly/yunwei/test_ccb2 && /home/bfly/yunwei/ccb_source/ccb_test config validate\n"
+                "Run source validation from a dedicated test project, for example:\n"
+                f"  cd {example_root} && {SCRIPT_ROOT / 'ccb_test'} config validate\n"
                 f"Current directory: {cwd}\n"
                 f"Checked project path: {path}\n"
                 f"Allowed source-test roots: {rendered}\n"

@@ -42,9 +42,9 @@ brew install bash
 ## 二、项目配置
 
 ### 2.1 项目目录结构
-当前项目根目录：
+当前项目根目录（下称 `<ccb 源码目录>`）：
 ```
-/Users/zhangtao/Documents/study/claude_code_bridge-6/
+<ccb 源码目录>/
 ├── .ccb/
 │   └── ccb.config          # agent 映射配置
 ├── lib/
@@ -198,7 +198,7 @@ if log_path:
 
 ### 6.1 启动 ccb
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd /path/to/claude_code_bridge-6
 ccb
 ```
 输出应包含：

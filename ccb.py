@@ -63,7 +63,7 @@ backend_env = get_backend_env()
 if backend_env and not os.environ.get("CCB_BACKEND_ENV"):
     os.environ["CCB_BACKEND_ENV"] = backend_env
 
-VERSION = "8.7.24"
+VERSION = "8.7.25"
 GIT_COMMIT = "release"
 GIT_DATE = "2026-11-02"
 
@@ -148,11 +148,12 @@ def _source_runtime_allowed(root: Path, cwd: Path, argv: list[str]) -> tuple[boo
         False,
         "Refusing to run the CCB source checkout outside an allowed test project.\n"
         "Use the installed release `ccb` for normal project/work-environment commands.\n"
-        "Use `/home/bfly/yunwei/ccb_source/ccb_test` from "
-        "`/home/bfly/yunwei/test_ccb2` for source-change validation.\n"
+        f"Use `{root / 'ccb_test'}` from an allowed source root"
+        " for source-change validation.\n"
         f"Current directory: {cwd}\n"
         f"Allowed source roots: {rendered}\n"
-        "Override only for explicit diagnostics with CCB_SOURCE_RUNTIME_OK=1.",
+        "Point CCB_SOURCE_ALLOWED_ROOTS at your own test project if the defaults do not fit,"
+        " and override only for explicit diagnostics with CCB_SOURCE_RUNTIME_OK=1.",
     )
 
 

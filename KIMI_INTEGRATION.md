@@ -136,7 +136,7 @@ cmd, claude:claude, codex:codex, kimi:kimi, creative:mmx
 
 launcher 生成的实际命令示例（v7.0.12+）：
 ```bash
-export KIMI_RUNTIME_DIR=/.../agents/kimi/provider-runtime/kimi; export PROMPT_TOOLKIT_NO_CPR=1; export TERM=xterm-256color; /Users/zhangtao/.local/bin/kimi
+export KIMI_RUNTIME_DIR=/.../agents/kimi/provider-runtime/kimi; export PROMPT_TOOLKIT_NO_CPR=1; export TERM=xterm-256color; "$HOME/.local/bin/kimi"
 ```
 
 **启动行为说明**：

@@ -30,10 +30,17 @@ metadata:
 ./sync-to-local.sh
 ```
 
-如果当前目录没有该脚本，先定位到源码目录再执行：
+如果当前目录没有该脚本，先定位到源码目录再执行（`CCB_SRC` 显式指定优先，否则从当前目录、git 根目录和常见位置自动查找）：
 
 ```bash
-CCB_SRC="/Users/zhangtao/Documents/study/claude_code_bridge-6"
+CCB_SRC="${CCB_SRC:-}"
+if [[ -z "$CCB_SRC" ]]; then
+  for d in "$PWD" "$(git rev-parse --show-toplevel 2>/dev/null)" \
+           "$HOME"/Documents/study/claude_code_bridge* "$HOME"/code/claude_code_bridge*; do
+    [[ -n "$d" && -x "$d/sync-to-local.sh" ]] && { CCB_SRC="$d"; break; }
+  done
+fi
+[[ -n "$CCB_SRC" && -x "$CCB_SRC/sync-to-local.sh" ]] || { echo "找不到 ccb 源码目录，请设置 CCB_SRC" >&2; exit 1; }
 cd "$CCB_SRC" && ./sync-to-local.sh
 ```
 

@@ -47,6 +47,7 @@ find "${TARGET_DIR}" -name '*.pyc' -delete 2>/dev/null || true
 
 # 同步核心代码目录和文件
 # 排除：运行时数据、git、测试、文档、资源等
+# 注意 .venv 不带尾斜杠：带斜杠只匹配目录，软链形式的 .venv 会漏网并尝试覆盖安装端 venv
 echo "正在同步代码..."
 rsync -a --delete \
     --exclude='.ccb/' \
@@ -65,7 +66,7 @@ rsync -a --delete \
     --exclude='__pycache__/' \
     --exclude='.DS_Store' \
     --exclude='sync-to-local.sh' \
-    --exclude='.venv/' \
+    --exclude='.venv' \
     "${SCRIPT_DIR}/" "${TARGET_DIR}/"
 
 # 补同步 config UI 前端原型(excluded by --exclude='docs/')

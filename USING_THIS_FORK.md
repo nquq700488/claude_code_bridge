@@ -23,7 +23,7 @@
 > - **"额外支持 MMX"目前名不副实** —— `lib/provider_backends/mmx/` 代码仍在，但 `OPTIONAL_PROVIDER_NAMES` / `MMX_RUNTIME_SPEC` / `MMX_CLIENT_SPEC` 自 v8.5.4 合并后缺失，config 校验与运行时注册表均不识别 `mmx`。
 
 - **安装目录**：`~/.local/share/ccb`
-- **源码位置**：`/Users/zhangtao/Documents/study/claude_code_bridge-6`
+- **源码位置**：`$HOME/Documents/study/claude_code_bridge-6`（按你的实际 clone 位置调整）
 
 ---
 
@@ -36,7 +36,7 @@
 ```bash
 # 检查
 which ccb
-# 预期输出: /Users/zhangtao/.local/bin/ccb
+# 预期输出: $HOME/.local/bin/ccb
 
 # 如果不在 PATH，添加到 ~/.zshrc 或 ~/.bashrc
 export PATH="$HOME/.local/bin:$PATH"
@@ -68,7 +68,7 @@ ccb
 
 ```bash
 # 进入当前项目（脚本模板所在位置）
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd "$HOME/Documents/study/claude_code_bridge-6"
 
 # 安装脚本到目标项目（复制 start.sh / stop.sh / restart.sh）
 ./.ccb/install.sh /path/to/your-project --links
@@ -358,7 +358,7 @@ ccb reload
 ### 3.1 首次安装
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd "$HOME/Documents/study/claude_code_bridge-6"
 bash install.sh install
 ```
 
@@ -367,7 +367,7 @@ bash install.sh install
 修改源码后同步到安装目录：
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd "$HOME/Documents/study/claude_code_bridge-6"
 bash install.sh install
 ```
 
@@ -376,7 +376,7 @@ bash install.sh install
 ### 3.3 完全重装
 
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd "$HOME/Documents/study/claude_code_bridge-6"
 bash install.sh uninstall
 CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 ```
@@ -453,7 +453,7 @@ mmx text chat --message "hello" --output json
 
 说明安装被官方版本覆盖了。重新安装此 Fork：
 ```bash
-cd /Users/zhangtao/Documents/study/claude_code_bridge-6
+cd "$HOME/Documents/study/claude_code_bridge-6"
 bash install.sh uninstall
 CODEX_INSTALL_PREFIX="$HOME/.local/share/ccb" bash install.sh install
 ```

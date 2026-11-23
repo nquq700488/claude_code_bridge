@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Stop shipping one developer's machine-specific paths. The source-runtime refusal messages in `ccb.py`/`ccb_test` now render the checkout's own `ccb_test` and the real allowed-root list instead of a hardcoded `/home/bfly/...` layout; the guard logic and every accept/refuse decision are unchanged. The sync-local skill and the fork/MMX/Kimi docs use `$HOME`-relative or `/path/to` paths, the project-local `.gemini/settings.json` is no longer tracked (it is CLI state that `.gitignore` already excluded), `.gitignore` no longer swallows new files under `tools/codex-reconnect/tests/`, and `sync-to-local.sh` excludes `.venv` without a trailing slash so a symlinked or real source `.venv` can no longer clobber the installed venv.
 - Recognize the Codex 0.171.0 stacked status footer, so an empty composer is no longer held back as `composer_layout_unknown`. 0.171.0 renders an extra native status row above the `? for shortcuts` hint and stops dimming those rows, which broke the "every row under the first status row must be a hint" rule: healthy panes reported `composer_layout_unknown`, and every dispatch to them stayed queued (`dispatcher_claim_pending`) until the pane was repaired by hand. The stacked block is only trusted for an untouched native placeholder, must stay indented, must still end on the native hint, and must contain a real field-separated status bar; a typed draft keeps failing closed, so no draft is ever cleared on this path.
 - Report a provider that dies right after its launch instead of calling the start successful. A start transaction finishing only proves every provider was launched, so a crashing CLI (for example a Codex pane running under an unsupported Node runtime) left `startup-report.json` at `status: ok` while the pane was already dead. `ccb start` now re-checks the affected runtime records over a short settle window (`CCB_START_AVAILABILITY_SETTLE_S`, default 2s), prints one `agent_unavailable:` line plus an stderr notice naming the agent, pane state and restart count, and appends the same finding to the timeout error so a start that never became ready names the provider that kept crashing instead of a bare `timed out`. Dispatch, probing and provider processes are untouched.
 - Follow a Codex session that forks into a newer rollout file mid-turn. A reader bound to a `codex_session_id` used to freeze on its first rollout file, so a session Codex forked while a job was running stayed invisible: the request anchor and the reply were never observed and the job stayed `running` long after the provider finished. Bound readers now re-check (at most every 2s) for a newer rollout of the same session and switch to it.
@@ -13,7 +14,10 @@
 - Pass the project tmux socket into the Codex bridge and expose delivery stages/reasons in queue and trace views, including bridge receipt and pane-send failures.
 - Recognize Codex v0.158.0 two-row status footers so an empty composer is not incorrectly classified as `composer_layout_unknown`.
 - Recognize the Codex v0.166.0 combined `← for agents · ? for shortcuts` footer hint, so an empty composer is no longer held back as `composer_layout_unknown`. Only the literal prefix, matching warning pluralization and a 0-100% context suffix are accepted; malformed hints and real drafts still fail closed.
+## v8.7.25 (2026-11-23)
 
+- Recognize the Codex footer with the agent navigation hint so automatic messages can reach an empty composer again (#405). See the [bilingual release notes](docs/releases/v8.7.25.md).
+- 识别带 Agent 导航提示的 Codex 底栏，恢复向空输入框自动投递消息（#405）。详见[中英双语版本说明](docs/releases/v8.7.25.md)。
 ## v8.7.24 (2026-11-19)
 
 - Forward terminal resize signals to Linux OMP Collab panes so they redraw when the tmux pane changes size.
